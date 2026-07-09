@@ -37,6 +37,7 @@ public class SpritePackService {
     private final Gson gson = new Gson();
     private String cachedVersion;
     private String cachedPackJson;
+    private boolean clothDumped = false; // TEMP one-shot guard for [cloth-bazaar]
 
     /** True once real object assets are loaded and the character atlas exists on disk. */
     public synchronized boolean ready() {
@@ -167,6 +168,15 @@ public class SpritePackService {
         System.out.println("[sprite-pack] built " + v + ": table=" + table.size()
             + " maskTable=" + maskTable.size() + " dyeTable=" + dyeTable.size()
             + " animTable=" + animTable.size());
+
+        // TEMP [cloth-bazaar] One-shot dump of the cloth_bazaar asset (discarded
+        // by normal extraction) to reverse-engineer per-cloth scroll/rotate data.
+        // Off the pack-build path (re-parses the large resources.assets).
+        if (!clothDumped) {
+            clothDumped = true;
+            new Thread(() -> assets.resextractor.UnityExtractor.dumpClothBazaar(
+                assets.AssetExtractor.assetFile()), "cloth-bazaar-dump").start();
+        }
 
         // TEMP [dye-anim] Scan character (player/skin) and textile groups for
         // indices that actually animate (>1 frame), regardless of what's

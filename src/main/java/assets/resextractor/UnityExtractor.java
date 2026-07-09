@@ -129,4 +129,39 @@ public class UnityExtractor {
             }
         }
     }
+
+    // TEMP [cloth-bazaar] Dump the raw cloth_bazaar TextAsset (which the normal
+    // extraction discards - it's in NON_XML_FILES) so we can reverse-engineer
+    // the per-cloth animation (scroll direction / rotate) format. Prints its
+    // size, a printable-ASCII preview, and a hex preview of the start.
+    public static void dumpClothBazaar(File resourcesAssets) {
+        if (resourcesAssets == null || !resourcesAssets.exists()) {
+            System.out.println("[cloth-bazaar] resources.assets not found");
+            return;
+        }
+        try {
+            Resources res = new Resources(resourcesAssets);
+            for (TextAsset t : res.assetTextAsset) {
+                if (!"cloth_bazaar".equals(t.name)) continue;
+                byte[] b = t.m_Script;
+                System.out.println("[cloth-bazaar] size=" + b.length + " bytes");
+                int n = Math.min(b.length, 1500);
+                StringBuilder ascii = new StringBuilder();
+                for (int i = 0; i < n; i++) {
+                    int c = b[i] & 0xFF;
+                    ascii.append(c >= 32 && c < 127 ? (char) c : '.');
+                }
+                System.out.println("[cloth-bazaar] ascii[0.." + n + "]=" + ascii);
+                int hn = Math.min(b.length, 384);
+                StringBuilder hex = new StringBuilder();
+                for (int i = 0; i < hn; i++) hex.append(String.format("%02x", b[i]));
+                System.out.println("[cloth-bazaar] hex[0.." + hn + "]=" + hex);
+                return;
+            }
+            System.out.println("[cloth-bazaar] not found among "
+                + res.assetTextAsset.size() + " text assets");
+        } catch (Throwable t) {
+            System.out.println("[cloth-bazaar] dump failed: " + t);
+        }
+    }
 }

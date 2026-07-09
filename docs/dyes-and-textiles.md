@@ -186,6 +186,47 @@ textile) — a consumer must branch on `entry[0]` before reading the rest. A
 textile entry is variable length (`[10, atlasId, …4 numbers per frame]`), so its
 frame count is `(entry.length − 2) / 4`.
 
+## ⏳ IN PROGRESS: textile scroll animation (resume here)
+
+**Status (overlay 0.9.25-alpha).** Character idle animation and static textile
+rendering work. Animated textiles do **not** yet animate. Confirmed live:
+
+- **Character skins/classes animate** — the frames are in the flatbuffer's
+  `animatedSprites` section; `animTable` + the per-`<Sprite>` clock cycle them.
+  (`[dye-anim]` shows `players`/`playerskins*` with `animatedIndices` = all,
+  17–95 frames each.) Idle loop looks clean.
+- **Textiles have NO animation frames** — `[dye-anim]` reports
+  `textile4x4/5x5/9x9/10x10: <no frames>`. They're single static sprites.
+- **In-game, animated textiles SCROLL** (user observation): the tiled pattern
+  translates in **one of the 4 cardinal directions**, and **some rotate** — and
+  this is **per-cloth** (different cloths scroll different ways).
+
+**Where the scroll direction is (and isn't).** Ruled out: the sprite flatbuffer
+(no animation field), the dye object XML (`Class`/`Texture`/`Mask`/`Tex1` only),
+and `Tex1` itself (`[size byte][24-bit index]`, no spare field). The remaining
+candidate is **`cloth_bazaar`** — an embedded TextAsset the extractor reads and
+**discards** (it's in `TextAsset.NON_XML_FILES`, so `UnityExtractor.extractXml`
+skips it). A per-cloth animation table is exactly what a cloth-definition file
+would hold.
+
+**Next step (do this first next session).** 0.9.25-alpha added a one-shot
+`UnityExtractor.dumpClothBazaar()` (called from `SpritePackService`, guarded by
+`clothDumped`, on a background thread) that re-reads `resources.assets` and
+prints `cloth_bazaar`'s **size + ASCII preview + hex preview** as `[cloth-bazaar]`
+log lines. **Get those lines from a live run**, then:
+1. If it's text (JSON/XML/CSV-ish) → parse `clothId → animationType` directly.
+   If binary → work out the record layout from the hex.
+2. Emit a per-cloth `animType` (e.g. scroll-N/E/S/W / rotate) in `dyeTable` (or a
+   new table).
+3. In `getDyedSprite`, offset the pattern tiling by `time × speed` in the cloth's
+   direction (or rotate the sample) — reuse the per-`<Sprite>` tick.
+
+If `cloth_bazaar` turns out **not** to hold it, the last candidate is exhausted
+and we decide whether it's worth chasing (a global fixed scroll is the fallback).
+
+**Temporary diagnostics to remove once done** (grep `[dye-anim]`, `[cloth-bazaar]`,
+`dumpClothBazaar`, `clothDumped`, `describeAnimatedIndices`).
+
 ## Gotchas / history
 
 - The old Flash `0x01RRGGBB` "solid colour" encoding **is** used — in the dye
@@ -195,3 +236,6 @@ frame count is `(entry.length − 2) / 4`.
   `mapObjects.png` (atlas 4).
 - The mask is the same 8×8 as the body sprite; textile fineness comes from
   sub-pixel tiling (`TEXTILE_SUB`), not from higher-res source art.
+- Animated textiles are **not** frame sequences (no `animatedSprites` entries) —
+  they scroll/rotate procedurally, per-cloth; the direction data is not in
+  anything we currently parse (see "IN PROGRESS" above).
