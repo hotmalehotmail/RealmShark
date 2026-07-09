@@ -331,7 +331,7 @@ A ref-backed store built from the packet stream. On mount it subscribes to
 | --- | --- | --- |
 | `SKIN_ID_STAT` | 25 | equipped skin objectType |
 | `INVENTORY_0_STAT` (+0..3) | 8-11 | the 4 equipped slots (weapon/ability/armor/ring) |
-| `NAME_STAT` | 31 | username string |
+| `NAME_STAT` | 31 | username string — comma-separated on the wire (`"PlayerName,a0ca,…"`); only the part before the first comma is kept, dropping the trailing title/label cosmetic codes (matches the bridge's `Entity.name()`) |
 | `CLOTHING_DYE_STAT` | 32 | Tex1 clothing dye objectType |
 | `ACCESSORY_DYE_STAT` | 33 | Tex2 accessory dye objectType |
 
@@ -351,7 +351,10 @@ emitted on every one of our hits, so it re-establishes identity continuously).
 Both guard on an actual id change, since `EnemyHitPacket` arrives every hit but
 should only count as a display change the first time it resolves. The registry
 **clears** on `MapInfoPacket` (instance change) and on `onOverlayDetach`
-(`EntityRegistry.tsx:77-81`).
+(`EntityRegistry.tsx:77-81`). Individual records are **removed** when their
+objectId appears in `UpdatePacket.drops` (the entity left view / the instance),
+so the roster reflects players *leaving* as well as joining — if the local
+player's own id drops, `localPlayerRef` is forgotten too.
 
 **`subscribe(cb)`** (`EntityRegistry.tsx:59-64`) lets a panel register a
 callback instead of polling. Any batch that contains a display-relevant change

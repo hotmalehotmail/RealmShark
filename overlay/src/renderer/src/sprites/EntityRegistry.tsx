@@ -20,6 +20,8 @@ interface UpdateData {
     objectType: number
     status?: { objectId: number; stats?: StatEntry[] }
   }>
+  /** objectIds that have left the map (become invisible). See UpdatePacket.drops. */
+  drops?: number[]
 }
 
 /** Merged, per-objectId record built up from packet stat deltas. */
@@ -43,8 +45,11 @@ interface EntityRecord {
  * record rather than overwriting it. Also resolves the local player's objectId
  * from CreateSuccessPacket (one-shot, at map load) and EnemyHitPacket.mainID
  * (emitted on every one of our hits, so it re-establishes identity mid-instance).
- * Kept in refs (no re-render per packet); consumers read it during their own
- * render cycle (e.g. a polling interval). Cleared on map change / overlay detach.
+ * Records are removed when their objectId appears in UpdatePacket.drops (the
+ * entity left view / the instance), so the roster tracks players leaving as well
+ * as joining. Kept in refs (no re-render per packet); consumers read it during
+ * their own render cycle (e.g. a polling interval). Cleared on map change /
+ * overlay detach.
  */
 export function EntityRegistryProvider({
   children
@@ -118,7 +123,11 @@ export function EntityRegistryProvider({
           rec.accessoryDye = s.statValue
           changed = true
         } else if (s.statTypeNum === NAME_STAT && s.stringStatValue) {
-          rec.name = s.stringStatValue
+          // The NAME_STAT wire value is comma-separated: the username followed by
+          // title/label cosmetic codes (e.g. "PlayerName,a0ca"). Show only the
+          // username - the part before the first comma (matches the bridge's
+          // Entity.name(), which strips it the same way).
+          rec.name = s.stringStatValue.split(',')[0]
           changed = true
         }
       }
@@ -134,6 +143,15 @@ export function EntityRegistryProvider({
           for (const obj of data?.newObjects ?? []) {
             if (obj?.status)
               changed = mergeStats(obj.status.objectId, obj.objectType, obj.status.stats) || changed
+          }
+          // Objects that have left view/the instance: drop their records so the
+          // roster (e.g. the Instance panel) reflects players leaving, not just
+          // joining. If the local player themselves drops, forget their id too.
+          for (const droppedId of data?.drops ?? []) {
+            if (recordsRef.current.delete(droppedId)) {
+              if (localPlayerRef.current === droppedId) localPlayerRef.current = null
+              changed = true
+            }
           }
         } else if (env.type === 'NewTickPacket') {
           const nt = env.data as {

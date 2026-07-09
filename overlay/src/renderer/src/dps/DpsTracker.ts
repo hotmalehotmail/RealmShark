@@ -139,7 +139,10 @@ export class DpsTracker {
     for (const obj of data.newObjects ?? []) {
       const nameStat = obj.status?.stats?.find((s) => s.statTypeNum === NAME_STAT_TYPE_NUM)
       if (nameStat?.stringStatValue) {
-        this.entityNames.set(obj.status.objectId, nameStat.stringStatValue)
+        // NAME_STAT is "username,titleCode,...": keep only the username. This
+        // entityNames entry overrides the bridge's p.name below, so it must be
+        // stripped here too (the bridge already strips its own copy).
+        this.entityNames.set(obj.status.objectId, nameStat.stringStatValue.split(',')[0])
       }
     }
   }
