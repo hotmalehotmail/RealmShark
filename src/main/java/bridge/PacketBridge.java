@@ -133,6 +133,13 @@ public class PacketBridge {
             () -> System.out.println("[dps-engine] " + dps.debugState()),
             3000, 3000, TimeUnit.MILLISECONDS);
 
+        // Assets extract/load on a background thread, so they usually aren't
+        // ready when a client first connects and requests the sprite pack.
+        // Watch for readiness and broadcast the pack once, so clients that got
+        // an early not-ready reply still receive the real sprites.
+        flusher.scheduleAtFixedRate(
+            this::maybeBroadcastSpritePack, 2000, 2000, TimeUnit.MILLISECONDS);
+
         // 4. Start the packet source.
         if (fake) {
             System.out.println("[bridge] running in FAKE mode (no sniffing)");
@@ -140,6 +147,27 @@ public class PacketBridge {
         } else {
             System.out.println("[bridge] starting sniffer (requires Npcap + running game)");
             new PacketProcessor().start();
+        }
+    }
+
+    private boolean spritePackSent = false;
+    private int spriteNotReadyLogs = 0;
+
+    /**
+     * Once assets finish loading, broadcast the full sprite pack to every client
+     * (a one-shot). Until then, log the not-ready state a few times so the
+     * Console panel shows whether assets extracted at all.
+     */
+    private void maybeBroadcastSpritePack() {
+        if (spritePackSent) return;
+        if (sprites.ready()) {
+            spritePackSent = true;
+            server.send(sprites.responseFor(null));
+            System.out.println("[bridge] sprite pack ready " + sprites.version()
+                + " - broadcast to clients");
+        } else if (spriteNotReadyLogs < 6) {
+            spriteNotReadyLogs++;
+            System.out.println("[bridge] sprite pack not ready yet (" + sprites.diagnostic() + ")");
         }
     }
 

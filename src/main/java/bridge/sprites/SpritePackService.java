@@ -43,6 +43,12 @@ public class SpritePackService {
         return IdToAsset.loadedObjectCount() > 1 && new File(ATLASES[1]).exists();
     }
 
+    /** Human-readable readiness state, for diagnosing why sprites aren't showing. */
+    public synchronized String diagnostic() {
+        return "objects=" + IdToAsset.loadedObjectCount()
+            + " charactersPng=" + new File(ATLASES[1]).exists();
+    }
+
     /**
      * Version key for the current pack - changes whenever the atlas is
      * re-extracted (a game update), so the overlay knows to refetch.
