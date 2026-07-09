@@ -14,6 +14,13 @@ import { loadPanelLayout, persistPanelLayout } from './panelLayout'
 import { getSpritePack, initSpritePack, onSpritePackMessage, requestSpritePack } from './spritePack'
 import { loadSettings, persistSettings } from './settings'
 import { createTray, setTrayStatus } from './tray'
+import {
+  checkForUpdate,
+  downloadInstaller,
+  getCachedUpdate,
+  installAndRestart,
+  startUpdatePolling
+} from './updater'
 
 // Installed before anything else logs, so bridge-supervisor/bridge-client
 // output (only otherwise visible in a terminal) is captured from process
@@ -255,6 +262,27 @@ app.whenReady().then(() => {
   ipcMain.handle(IPC.getAppVersion, (): string => app.getVersion())
 
   ipcMain.handle(IPC.getSpritePack, () => getSpritePack())
+
+  startUpdatePolling((info) => {
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.webContents.send(IPC.updateAvailable, info)
+    }
+  })
+
+  ipcMain.handle(IPC.getUpdateStatus, () => getCachedUpdate())
+
+  ipcMain.handle(IPC.checkForUpdate, () => checkForUpdate())
+
+  ipcMain.handle(IPC.downloadUpdate, async () => {
+    const info = getCachedUpdate() ?? (await checkForUpdate())
+    if (!info) return
+    const exe = await downloadInstaller(info, (received, total) => {
+      if (overlayWindow && !overlayWindow.isDestroyed()) {
+        overlayWindow.webContents.send(IPC.updateProgress, { received, total })
+      }
+    })
+    installAndRestart(exe)
+  })
 
   ipcMain.handle(IPC.saveSettings, (_event, next: OverlaySettings): SaveSettingsResult => {
     const titleChanged = next.gameWindowTitle !== settings.gameWindowTitle

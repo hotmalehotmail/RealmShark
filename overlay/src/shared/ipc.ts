@@ -15,8 +15,28 @@ export const IPC = {
   mainLogEntry: 'main-log-entry',
   getBufferedMainLogs: 'get-buffered-main-logs',
   getSpritePack: 'get-sprite-pack',
-  spritePack: 'sprite-pack'
+  spritePack: 'sprite-pack',
+  getUpdateStatus: 'get-update-status',
+  checkForUpdate: 'check-for-update',
+  downloadUpdate: 'download-update',
+  updateAvailable: 'update-available',
+  updateProgress: 'update-progress'
 } as const
+
+/** A newer overlay release found on GitHub. */
+export interface UpdateInfo {
+  version: string
+  tag: string
+  notes: string
+  downloadUrl: string
+  size: number
+}
+
+/** Download progress while fetching an update installer. */
+export interface UpdateProgress {
+  received: number
+  total: number
+}
 
 /** Result of an IPC.saveSettings call. */
 export interface SaveSettingsResult {

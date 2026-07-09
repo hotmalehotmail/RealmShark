@@ -5,7 +5,9 @@ import {
   type MainLogEntry,
   type PacketEnvelope,
   type SaveSettingsResult,
-  type SpritePack
+  type SpritePack,
+  type UpdateInfo,
+  type UpdateProgress
 } from '../shared/ipc'
 import type { PanelInstance } from '../shared/panels'
 import type { OverlaySettings } from '../shared/settings'
@@ -56,6 +58,19 @@ const overlayApi = {
     const listener = (_: unknown, pack: SpritePack): void => cb(pack)
     ipcRenderer.on(IPC.spritePack, listener)
     return () => ipcRenderer.removeListener(IPC.spritePack, listener)
+  },
+  getUpdateStatus: (): Promise<UpdateInfo | null> => ipcRenderer.invoke(IPC.getUpdateStatus),
+  checkForUpdate: (): Promise<UpdateInfo | null> => ipcRenderer.invoke(IPC.checkForUpdate),
+  downloadUpdate: (): Promise<void> => ipcRenderer.invoke(IPC.downloadUpdate),
+  onUpdateAvailable: (cb: (info: UpdateInfo) => void) => {
+    const listener = (_: unknown, info: UpdateInfo): void => cb(info)
+    ipcRenderer.on(IPC.updateAvailable, listener)
+    return () => ipcRenderer.removeListener(IPC.updateAvailable, listener)
+  },
+  onUpdateProgress: (cb: (progress: UpdateProgress) => void) => {
+    const listener = (_: unknown, progress: UpdateProgress): void => cb(progress)
+    ipcRenderer.on(IPC.updateProgress, listener)
+    return () => ipcRenderer.removeListener(IPC.updateProgress, listener)
   }
 }
 

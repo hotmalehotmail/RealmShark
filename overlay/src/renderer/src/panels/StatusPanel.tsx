@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { BridgeStatus, PacketEnvelope } from '../../../shared/ipc'
+import type { BridgeStatus, PacketEnvelope, UpdateInfo } from '../../../shared/ipc'
 import { DEFAULT_SETTINGS } from '../../../shared/settings'
 import type { PanelContentProps } from './registry'
 
@@ -28,23 +28,48 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
   const [toggleHotkey, setToggleHotkey] = useState(DEFAULT_SETTINGS.toggleHotkey)
   const [heapMb, setHeapMb] = useState<number | null>(() => usedJsHeapMb())
   const [version, setVersion] = useState('')
+  const [update, setUpdate] = useState<UpdateInfo | null>(null)
+  const [checking, setChecking] = useState(false)
+  const [downloadPct, setDownloadPct] = useState<number | null>(null)
+  const [checkMsg, setCheckMsg] = useState('')
 
   useEffect(() => {
     window.overlay.getSettings().then((settings) => setToggleHotkey(settings.toggleHotkey))
     window.overlay.getAppVersion().then(setVersion)
     window.overlay.getBridgeStatus().then(setStatus)
+    window.overlay.getUpdateStatus().then(setUpdate)
     const offStatus = window.overlay.onBridgeStatus(setStatus)
     const offBatch = window.overlay.onPacketBatch((packets) => {
       setPacketCount((n) => n + packets.length)
       if (packets.length > 0) setLastPacket(packets[packets.length - 1])
     })
+    const offUpdate = window.overlay.onUpdateAvailable(setUpdate)
+    const offProgress = window.overlay.onUpdateProgress(({ received, total }) =>
+      setDownloadPct(total > 0 ? Math.round((received / total) * 100) : 0)
+    )
     const memoryInterval = setInterval(() => setHeapMb(usedJsHeapMb()), MEMORY_POLL_MS)
     return () => {
       offStatus()
       offBatch()
+      offUpdate()
+      offProgress()
       clearInterval(memoryInterval)
     }
   }, [])
+
+  const checkUpdates = async (): Promise<void> => {
+    setChecking(true)
+    setCheckMsg('')
+    const info = await window.overlay.checkForUpdate()
+    setUpdate(info)
+    if (!info) setCheckMsg('Up to date')
+    setChecking(false)
+  }
+
+  const installUpdate = (): void => {
+    setDownloadPct(0)
+    void window.overlay.downloadUpdate() // app restarts itself when the installer runs
+  }
 
   return (
     <div className="flex h-full w-full flex-col text-sm text-white">
@@ -76,6 +101,39 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
           <span className="font-mono text-base">
             {heapMb === null ? 'n/a' : `${heapMb.toFixed(1)} MB`}
           </span>
+        </div>
+      )}
+
+      {size !== 'sm' && (
+        <div className="mt-3 border-t border-white/10 pt-2">
+          {update ? (
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate text-xs text-emerald-400">
+                Update available → v{update.version}
+              </span>
+              {downloadPct == null ? (
+                <button
+                  onClick={installUpdate}
+                  className="shrink-0 rounded bg-emerald-600 px-2 py-0.5 text-xs font-medium hover:bg-emerald-500"
+                >
+                  Update &amp; restart
+                </button>
+              ) : (
+                <span className="shrink-0 text-xs text-white/60">Downloading {downloadPct}%…</span>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-2">
+              <button
+                onClick={checkUpdates}
+                disabled={checking}
+                className="shrink-0 rounded bg-white/10 px-2 py-0.5 text-xs hover:bg-white/20 disabled:opacity-50"
+              >
+                {checking ? 'Checking…' : 'Check for updates'}
+              </button>
+              {checkMsg && <span className="text-xs text-white/40">{checkMsg}</span>}
+            </div>
+          )}
         </div>
       )}
 
