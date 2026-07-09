@@ -18,7 +18,7 @@ const WINDOW_MS = 8000
  * periodic state summary emitted from useDpsTracker). On while we're chasing
  * "no DPS data with real game traffic" - the logs surface in the Console panel.
  */
-export const DPS_DEBUG = true
+export const DPS_DEBUG = false
 
 /** Packet types the tracker actually consumes - the summary reports these explicitly. */
 const RELEVANT_TYPES = [

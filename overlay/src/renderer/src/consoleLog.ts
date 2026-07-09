@@ -7,7 +7,7 @@ export interface LogEntry {
   message: string
 }
 
-const MAX_ENTRIES = 300
+const MAX_ENTRIES = 2000
 const LEVELS: LogLevel[] = ['log', 'info', 'warn', 'error']
 
 const entries: LogEntry[] = []
