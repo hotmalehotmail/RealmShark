@@ -23,6 +23,7 @@
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
     "electron-overlay-window": "^4.1.0",
+    "koffi": "^2.16.2",
     "ws": "^8.21.0"
   },
   "devDependencies": {

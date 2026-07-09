@@ -14,6 +14,7 @@ import { loadPanelLayout, persistPanelLayout } from './panelLayout'
 import { getSpritePack, initSpritePack, onSpritePackMessage, requestSpritePack } from './spritePack'
 import { loadSettings, persistSettings } from './settings'
 import { createTray, setTrayStatus } from './tray'
+import { disableWindowAnimations } from './windowAnimations'
 
 // Installed before anything else logs, so bridge-supervisor/bridge-client
 // output (only otherwise visible in a terminal) is captured from process
@@ -67,6 +68,11 @@ function createOverlayWindow(): void {
   // can't hold OS keyboard focus from the outset, not just after the first
   // toggle. See the setFocusable() call in toggleInteractive() for why.
   overlayWindow.setFocusable(false)
+
+  // Stop Windows animating the overlay's show/hide, so alt-tabbing back into
+  // the game doesn't make the panels "flash into place" (electron-overlay-window
+  // hides/re-shows the window on the game's focus changes). No-op off Windows.
+  disableWindowAnimations(overlayWindow)
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     overlayWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
