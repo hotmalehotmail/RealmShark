@@ -1,0 +1,77 @@
+# RealmShark overlay — developer docs (`bridge` branch)
+
+This directory documents the **overlay project** built on the `bridge` branch: a
+Realm of the Mad God game overlay fed by decoded network packets. It has three
+moving parts, each with its own doc below.
+
+```
+   RotMG client traffic
+          │  (pcap / Npcap, Windows)
+          ▼
+  ┌──────────────────────┐   subscribes to every decoded Packet
+  │ RealmShark (Java)    │   via Register.registerAll
+  │ packet sniffer/decode│
+  └──────────┬───────────┘
+             ▼
+  ┌──────────────────────┐   serializes packets to JSON, computes DPS,
+  │ bridge/ (Java)       │   builds sprite packs, serves them over a
+  │ WebSocket bridge     │   loopback WebSocket on 127.0.0.1:47474
+  └──────────┬───────────┘
+             ▼  ws://127.0.0.1:47474  (JSON batches)
+  ┌──────────────────────┐   Electron + React + TypeScript.
+  │ overlay/ (TypeScript)│   Attaches to the game window, draws
+  │ Electron overlay UI  │   draggable panels (DPS, character, …).
+  └──────────────────────┘
+```
+
+## Start here
+
+- **[architecture.md](architecture.md)** — the end-to-end system: how a packet
+  travels from the wire to a pixel on the overlay, the WebSocket wire protocol
+  (envelopes, batches, hello frame, sprite-pack request), the port/process
+  model, and how the pieces are launched and supervised. Read this first.
+
+## Java side (`src/main/java/`)
+
+- **[bridge-server.md](bridge-server.md)** — the WebSocket bridge: `PacketBridge`
+  (entry point + flush/broadcast loop), `BridgeServer`, `PacketSerializer` (the
+  Gson wire-format contract and its gotchas), `DpsBroadcaster`, `ObjectNames`,
+  and `FakePacketSource` (`--fake` dev mode).
+- **[dps-engine.md](dps-engine.md)** — the real DPS engine ported from `tomato`
+  (`bridge/dps/**`): how per-player damage is reconstructed from the packet
+  stream, weapon/ability/crucible/enchant scaling, character-stat decoding, and
+  why self-damage has to be rebuilt.
+- **[asset-pipeline.md](asset-pipeline.md)** — extracting sprites and object data
+  from the game's Unity assets (`assets/**`), the flatbuffer sprite-sheet model,
+  and how `SpritePackService` packages sprites (+ the dye table) for the overlay.
+  See also **[dyes-and-textiles.md](dyes-and-textiles.md)**.
+
+## Overlay side (`overlay/`)
+
+- **[overlay-main-process.md](overlay-main-process.md)** — the Electron main
+  process: the overlay window + game-window attach, the bridge supervisor/client,
+  tray, global hotkey, settings & panel-layout IPC, preload, and the
+  `shared/` contracts.
+- **[overlay-renderer.md](overlay-renderer.md)** — the React renderer: the
+  draggable/resizable panel system, the individual panels, the sprite-rendering
+  subsystem, and the framework-agnostic `DpsTracker`.
+
+## Build, run & release
+
+- **[build-and-release.md](build-and-release.md)** — Gradle tasks for the bridge
+  jar (and the Gradle 7.4.2 constraint), the overlay's npm/electron-vite/
+  electron-builder toolchain, how `bridge.jar` is bundled, versioning, and the
+  auto-updater + release process.
+
+## Reference
+
+- **[dyes-and-textiles.md](dyes-and-textiles.md)** — how equipped dyes (solid
+  colours and woven textiles) are decoded and composited onto character sprites.
+
+---
+
+> These docs describe the shipped implementation. They are written for both human
+> contributors and AI coding agents — every non-obvious claim should be traceable
+> to a `path:line` reference in the source. The authoritative quick-reference for
+> commands and gotchas is the repo-root **`CLAUDE.md`**; these docs go deeper on
+> how each subsystem actually works.
