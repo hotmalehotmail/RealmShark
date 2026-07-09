@@ -190,6 +190,39 @@ public class SpritePackService {
             System.out.println("[dye-info] failed: " + e);
         }
 
+        // TEMP [dye-xml] Dump the raw <Object> XML block for a couple of dyes so
+        // we can see whether the actual dye color/pattern is defined in a
+        // <Cloth> element the extractor never parses (moderate fix) or isn't in
+        // the object XML at all (meaning it lives in cloth_bazaar - a bigger
+        // extraction job). Reads the extracted assets/xml/*.xml on disk.
+        try {
+            String[] types = {"0x1026", "0x122f"}; // Deep Pink Clothing Dye, Large Lemon-Lime Cloth
+            java.io.File xmlDir = new java.io.File("assets/xml");
+            java.io.File[] files = xmlDir.listFiles((d, n) -> n.endsWith("xml"));
+            if (files == null) {
+                System.out.println("[dye-xml] no assets/xml dir at " + xmlDir.getAbsolutePath());
+            } else {
+                for (String type : types) {
+                    String found = null;
+                    for (java.io.File f : files) {
+                        String txt = new String(Files.readAllBytes(f.toPath()));
+                        int i = txt.indexOf("type=\"" + type + "\"");
+                        if (i < 0) continue;
+                        int start = txt.lastIndexOf("<Object", i);
+                        int end = txt.indexOf("</Object>", i);
+                        if (start >= 0 && end >= 0) {
+                            found = txt.substring(start, end + 9).replaceAll("\\s+", " ");
+                            break;
+                        }
+                    }
+                    System.out.println("[dye-xml] " + type + " => "
+                        + (found == null ? "<not found>" : found));
+                }
+            }
+        } catch (Exception e) {
+            System.out.println("[dye-xml] failed: " + e);
+        }
+
         cachedVersion = v;
         cachedPackJson = gson.toJson(root);
         return cachedPackJson;
