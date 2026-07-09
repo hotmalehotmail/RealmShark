@@ -4,6 +4,7 @@ import {
   type CreateSuccessPacketData,
   type DamagePacketData,
   type PlayerDps,
+  type ServerPlayerShootPacketData,
   type UpdatePacketData
 } from './types'
 
@@ -36,6 +37,8 @@ export class DpsTracker {
   private targets = new Map<number, Map<number, HitEvent[]>>()
   private focusTargetId: number | null = null
   private localPlayerId: number | null = null
+  /** Summoned entity id -> owning player id, from ServerPlayerShootPacket. */
+  private minionOwners = new Map<number, number>()
 
   ingest(packets: PacketEnvelope[]): void {
     for (const envelope of packets) {
@@ -48,6 +51,9 @@ export class DpsTracker {
           break
         case 'UpdatePacket':
           this.ingestUpdate(envelope.data as UpdatePacketData)
+          break
+        case 'ServerPlayerShootPacket':
+          this.ingestShoot(envelope.data as ServerPlayerShootPacketData)
           break
         case 'DamagePacket':
           this.ingestDamage(envelope.data as DamagePacketData, envelope.time)
@@ -67,20 +73,32 @@ export class DpsTracker {
     }
   }
 
+  private ingestShoot(data: ServerPlayerShootPacketData): void {
+    // summonerId is 0 for a direct player shot (no summon involved) - only
+    // pets/minions/traps acting on a player's behalf carry a nonzero owner.
+    if (data.summonerId !== 0) {
+      this.minionOwners.set(data.ownerId, data.summonerId)
+    }
+  }
+
   private ingestDamage(data: DamagePacketData, time: number): void {
+    // Redirect a pet/minion/trap's hit to the player who owns it, so their
+    // damage isn't attributed to an anonymous entity id.
+    const attackerId = this.minionOwners.get(data.objectId) ?? data.objectId
+
     let byAttacker = this.targets.get(data.targetId)
     if (!byAttacker) {
       byAttacker = new Map()
       this.targets.set(data.targetId, byAttacker)
     }
-    let buffer = byAttacker.get(data.objectId)
+    let buffer = byAttacker.get(attackerId)
     if (!buffer) {
       buffer = []
-      byAttacker.set(data.objectId, buffer)
+      byAttacker.set(attackerId, buffer)
     }
     buffer.push({ time, damage: data.damageAmount })
 
-    if (this.localPlayerId !== null && data.objectId === this.localPlayerId) {
+    if (this.localPlayerId !== null && attackerId === this.localPlayerId) {
       this.focusTargetId = data.targetId
     }
   }
@@ -91,6 +109,7 @@ export class DpsTracker {
     this.targets.clear()
     this.focusTargetId = null
     this.localPlayerId = null
+    this.minionOwners.clear()
   }
 
   snapshot(nowMs: number, windowMs: number = WINDOW_MS): DpsSnapshot {

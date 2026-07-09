@@ -41,6 +41,19 @@ export interface CreateSuccessPacketData {
   objectId: number
 }
 
+/**
+ * packets/incoming/ServerPlayerShootPacket.java: fired whenever any entity
+ * (a real player, or a summoned pet/minion/trap acting on a player's behalf)
+ * shoots. ownerId is the entity actually doing the shooting; summonerId (0 if
+ * absent) is the player who owns it, when it's a summon rather than a direct
+ * player shot. This is how DamagePacket.objectId for a pet/minion hit gets
+ * redirected to the owning player instead of showing up as an unknown id.
+ */
+export interface ServerPlayerShootPacketData {
+  ownerId: number
+  summonerId: number
+}
+
 export interface PlayerDps {
   objectId: number
   name: string
