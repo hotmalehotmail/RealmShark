@@ -30,13 +30,16 @@ export interface SpriteContextValue {
   ) => string | null
   /** TEMP (dye-probe): report whether an objectType resolves in the sprite pack. */
   describeSprite: (objectType: number) => SpriteLookup
+  /** TEMP (dye-probe): whether an objectType has a dye mask in the pack. */
+  hasMask: (objectType: number) => boolean
 }
 
 export const SpriteContext = createContext<SpriteContextValue>({
   ready: false,
   getSprite: () => null,
   getDyedSprite: () => null,
-  describeSprite: () => ({ inTable: false, atlasId: null, drawable: false })
+  describeSprite: () => ({ inTable: false, atlasId: null, drawable: false }),
+  hasMask: () => false
 })
 
 export function useSprites(): SpriteContextValue {

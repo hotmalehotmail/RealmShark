@@ -220,8 +220,15 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
     [pack, getSprite]
   )
 
+  const hasMask = useCallback(
+    (objectType: number): boolean => !!pack.maskTable?.[String(objectType)],
+    [pack]
+  )
+
   return (
-    <SpriteContext.Provider value={{ ready: pack.ready, getSprite, describeSprite, getDyedSprite }}>
+    <SpriteContext.Provider
+      value={{ ready: pack.ready, getSprite, describeSprite, getDyedSprite, hasMask }}
+    >
       {children}
     </SpriteContext.Provider>
   )
