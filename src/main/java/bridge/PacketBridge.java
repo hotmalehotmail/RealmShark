@@ -38,7 +38,7 @@ public class PacketBridge {
     private static final int DEFAULT_PORT = 47474;
     private static final int QUEUE_CAPACITY = 5000;   // drop-oldest guard so capture never blocks
     private static final long FLUSH_INTERVAL_MS = 33; // ~30 flushes/sec batch cadence
-    private static final long DPS_INTERVAL_MS = 500;  // computed-DPS snapshot cadence
+    private static final long DPS_INTERVAL_MS = 250;  // computed-DPS snapshot cadence
 
     private final BridgeServer server;
     private final PacketSerializer serializer = new PacketSerializer();

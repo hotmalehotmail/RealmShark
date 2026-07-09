@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import { DPS_DEBUG, DpsTracker, EMPTY_SNAPSHOT, type DpsSnapshot } from './DpsTracker'
 
-const RECOMPUTE_INTERVAL_MS = 500
+const RECOMPUTE_INTERVAL_MS = 200
 /** Emit the [dps] state summary once every this many recomputes (~5s), to keep the log readable. */
-const DEBUG_SUMMARY_EVERY = 10
+const DEBUG_SUMMARY_EVERY = 25
 
 export function useDpsTracker(): DpsSnapshot {
   const [tracker] = useState(() => new DpsTracker())
