@@ -102,17 +102,18 @@ Tracing one incoming packet (say a `DamagePacket`) from wire to render:
    │   fan-out to every registerAll listener
  ── TIER 2: Java, still capture thread ──────────────────────────────────────
    ▼
- PacketBridge's registerAll lambda                   PacketBridge.java:101
+ PacketBridge's registerAll lambda                   PacketBridge.java:106
    ├─ serializer.toJson(packet)  → {type,direction,time,data}  → enqueue()
    ├─ if UpdatePacket: objectNames.envelopeFor(p)   → enqueue() (may be null)
-   └─ dps.feed(packet)           (updates the DPS engine; no enqueue here)
+   └─ dps.feed(packet)   (updates the DPS engine; sets dpsDirty; no enqueue here)
    ▼
- BlockingQueue<String>  (cap 5000, drop-oldest)      PacketBridge.java:48
+ BlockingQueue<String>  (cap 5000, drop-oldest)      PacketBridge.java:49
  ── TIER 2: Java, bridge-flusher thread (every 33 ms) ───────────────────────
    ▼
  flush(): drainTo(list) → join into {"batch":[ … ]} → server.send(...)
-   │                                                  PacketBridge.java:183
-   ▼   (separate 250 ms timer also enqueues the `dps` snapshot envelope)
+   │                                                  PacketBridge.java:197
+   ▼   (a 50 ms-polling timer also enqueues a `dps` snapshot when dpsDirty,
+   ▼    else on a 250 ms heartbeat — see bridge-server.md)
  BridgeServer.broadcast(json)  ──►  WebSocket 127.0.0.1:47474
  ── TIER 3: Electron main process ───────────────────────────────────────────
    ▼
@@ -125,7 +126,7 @@ Tracing one incoming packet (say a `DamagePacket`) from wire to render:
  ── TIER 3: renderer (React) ────────────────────────────────────────────────
    ▼
  DpsTracker.ingest(batch)   switch(env.type){ … }     DpsTracker.ts:82
- EntityRegistry              switch(env.type){ … }     EntityRegistry.tsx:102
+ EntityRegistry              switch(env.type){ … }     EntityRegistry.tsx:129
    ▼
  panels re-render (DPS list, character sprites, …)
 ```
@@ -134,7 +135,7 @@ Three facts that trip people up:
 
 - **Serialization runs on the capture thread; sending runs on a timer thread.**
   The queue between them means a slow/dead client can never stall capture; on
-  overflow the *oldest* message is dropped, not the newest (`PacketBridge.java:175`).
+  overflow the *oldest* message is dropped, not the newest (`PacketBridge.java:189`).
 - **A batch mixes envelope kinds.** The `objectNames` and `dps` envelopes are
   enqueued into the *same* queue as packet envelopes, so they arrive **inside**
   the `{"batch":[…]}` array, interleaved with real packets. Renderer consumers
@@ -199,7 +200,7 @@ only on a breaking envelope/handshake change.
 ```
 
 The **only** framing for the packet stream. `flush()` drains the queue and joins
-already-serialized envelope strings into one array (`PacketBridge.java:183`). An
+already-serialized envelope strings into one array (`PacketBridge.java:202-209`). An
 empty tick sends nothing. Each element is one of the three envelope shapes below.
 The client reads `msg.batch` (`bridgeClient.ts:89`) and forwards the raw array to
 the renderer as `IPC.packetBatch`.
@@ -239,7 +240,7 @@ Produced by `PacketSerializer.toJson` (`PacketSerializer.java:52`):
 ### 4d. `objectNames` envelope (inside a batch) — synthetic
 
 Emitted alongside every `UpdatePacket` whose new objects resolve to names
-(`ObjectNames.envelopeFor`, `PacketBridge.java:104`):
+(`ObjectNames.envelopeFor`, `PacketBridge.java:109`):
 
 ```json
 {
@@ -259,10 +260,12 @@ envelope (`type/direction/time/data`) so clients treat it uniformly; `direction`
 is the sentinel `"internal"` (`ObjectNames.java:98`). Consumed at
 `DpsTracker.ts:98`.
 
-### 4e. `dps` envelope (inside a batch) — synthetic, ~4×/sec
+### 4e. `dps` envelope (inside a batch) — synthetic, event-driven
 
-The bridge computes real damage attribution itself and ships a snapshot every
-250 ms (`PacketBridge.java:125`, `DpsBroadcaster.snapshotJson`):
+The bridge computes real damage attribution itself and ships a snapshot within
+~50 ms of any damage packet (coalesced), or every 250 ms as a heartbeat when
+idle (`PacketBridge.java:134-142`, `DpsBroadcaster.snapshotJson`) — see
+`bridge-server.md` for the coalescing mechanics:
 
 ```json
 {
@@ -288,7 +291,7 @@ Only enemies the local player has hit are listed; per enemy, each attacking
 player's total `damage` and average `dps` (= `damage / fightSec`). Pet/minion
 damage is already folded into the owning player by the engine. `null` is returned
 (nothing enqueued) when there is no fight to report. Field names in
-`DpsBroadcaster.java:121-144` are the protocol; consumed at `DpsTracker.ts:101`.
+`DpsBroadcaster.java:130-153` are the protocol; consumed at `DpsTracker.ts:101`.
 The engine internals are [dps-engine.md](dps-engine.md).
 
 ### 4f. Sprite pack — request/response + one-shot broadcast (NOT batched)
@@ -301,7 +304,7 @@ The only **client → server** message today:
 
 `haveVersion` is the version the client already cached, or `null` to force a full
 send (`spritePack.ts:55`). Routed by `PacketBridge.handleClientMessage`
-(`PacketBridge.java:60`), which replies **directly to that one client**
+(`PacketBridge.java:65`), which replies **directly to that one client**
 (`conn.send`) with one of three `spritePack` shapes from
 `SpritePackService.responseFor` (`SpritePackService.java:71`):
 
@@ -321,7 +324,7 @@ The full pack keys: `atlases` = `atlasId("1".."4") → data:image/png;base64,…
 
 **One-shot broadcast.** Assets load on a background thread, so early requests
 often get `ready:false`. A 2 s watchdog (`PacketBridge.maybeBroadcastSpritePack`,
-`PacketBridge.java:161`) fires once when assets become ready and
+`PacketBridge.java:175`) fires once when assets become ready and
 **broadcasts** the full pack (`server.send(responseFor(null))`) to every client,
 so clients that got an early not-ready reply still receive real sprites without
 re-asking. The client handles a top-level `spritePack` message

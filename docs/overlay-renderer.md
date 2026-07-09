@@ -31,7 +31,7 @@ for the Java DPS engine that feeds this UI see `dps-engine.md`.
 | `overlay/src/renderer/src/sprites/EntityRegistry.tsx` | objectId → name/skin/equipment/dyes, built from the packet stream. |
 | `overlay/src/renderer/src/sprites/context.ts` | The two React contexts + `useSprites` / `useEntityRegistry` hooks. |
 | `overlay/src/renderer/src/dps/DpsTracker.ts` | Framework-agnostic class ingesting packets → `DpsSnapshot`. |
-| `overlay/src/renderer/src/dps/useDpsTracker.ts` | React hook wrapping `DpsTracker` (subscribe + 200 ms recompute). |
+| `overlay/src/renderer/src/dps/useDpsTracker.ts` | React hook wrapping `DpsTracker` (event-driven on bridge `dps` packets + 1 s fallback recompute). |
 | `overlay/src/renderer/src/dps/types.ts` | Packet-field shapes the tracker reads. |
 
 ---
@@ -237,12 +237,15 @@ and the last-packet line only on `size === 'lg'`.
 `panels/InstancePanel.tsx`) render through the entity registry + sprite path
 (§4). Both share a subtle pattern:
 
-> **Non-obvious fact — panels poll the registry instead of re-rendering on
-> packets.** `EntityRegistry` is ref-backed and does **not** re-render on every
-> packet. So these panels run a `setInterval(() => setTick(n+1), 500)` purely to
-> re-read the registry during their own render cycle (`CharacterPanel.tsx:13-30`,
-> `InstancePanel.tsx:13-39`). 500 ms is fine because rosters/gear/dyes change
-> slowly; the DPS panel recomputes faster (200 ms) because damage moves fast.
+> **Non-obvious fact — panels re-render via a registry subscription, not a
+> poll.** `EntityRegistry` is ref-backed and does **not** re-render on every
+> packet by itself, so these panels call `entities.subscribe(() => setTick(n+1))`
+> in a mount effect purely to force a re-read of the registry on the next render
+> (`CharacterPanel.tsx:24-25`, `InstancePanel.tsx:24-26`). The registry only
+> notifies on a *display-relevant* change (skin/equipment/dye/name, local-player
+> id, instance reset), coalesced to one notification per animation frame (§4),
+> so there's no idle re-render churn even though rosters/gear/dyes now update
+> near-instantly, same as the DPS panel (§5).
 
 CharacterPanel resolves the local player via `entities.localPlayerId()` and shows
 its `CharacterSprite`, the 4 `equipment` slots (empty slots render as bordered
@@ -313,7 +316,7 @@ set, else the class `objectType`; dyes come from `clothingDye`/`accessoryDye`
 ### `EntityRegistry` (`sprites/EntityRegistry.tsx`)
 
 A ref-backed store built from the packet stream. On mount it subscribes to
-`onPacketBatch` and `onOverlayDetach` (`EntityRegistry.tsx:100-123`). Per
+`onPacketBatch` and `onOverlayDetach` (`EntityRegistry.tsx:129-164`). Per
 `objectId` it merges an `EntityRecord` of `objectType`, `skin`, `equipment[4]`,
 `clothingDye`, `accessoryDye`, `name`. The stat ids it reads
 (`EntityRegistry.tsx:6-10`):
@@ -327,22 +330,33 @@ A ref-backed store built from the packet stream. On mount it subscribes to
 | `ACCESSORY_DYE_STAT` | 33 | Tex2 accessory dye objectType |
 
 > **Non-obvious fact — stats are deltas, so records are merged, never replaced.**
-> `mergeStats` (`EntityRegistry.tsx:67-98`) reads stats from **both**
+> `mergeStats` (`EntityRegistry.tsx:89-127`) reads stats from **both**
 > `UpdatePacket.newObjects` (which carries the `objectType`) and
 > `NewTickPacket.status` (ongoing deltas, no objectType). A `NewTick` for an
 > object never seen in an `UpdatePacket` is skipped, because `objectType` is
-> unknown (`EntityRegistry.tsx:73-75`).
+> unknown (`EntityRegistry.tsx:95-97`). `mergeStats` returns `true` when a
+> display-relevant field (skin/equipment/dye/name) actually changed, which is
+> how the registry decides whether to notify subscribers (below).
 
-The **local player** id is resolved from two packets (`EntityRegistry.tsx:112-117`):
+The **local player** id is resolved from two packets (`EntityRegistry.tsx:144-157`):
 `CreateSuccessPacket.objectId` (authoritative but one-shot, at map load — missed
 if the sniffer attaches mid-instance) and `EnemyHitPacket.mainID` (outgoing,
 emitted on every one of our hits, so it re-establishes identity continuously).
-The registry **clears** on `MapInfoPacket` (instance change) and on
-`onOverlayDetach` (`EntityRegistry.tsx:118-123`).
+Both guard on an actual id change, since `EnemyHitPacket` arrives every hit but
+should only count as a display change the first time it resolves. The registry
+**clears** on `MapInfoPacket` (instance change) and on `onOverlayDetach`
+(`EntityRegistry.tsx:77-81`).
+
+**`subscribe(cb)`** (`EntityRegistry.tsx:59-64`) lets a panel register a
+callback instead of polling. Any batch that contains a display-relevant change
+sets a local `changed` flag and calls `scheduleNotify()`
+(`EntityRegistry.tsx:66-75`), which coalesces a burst of packets into a single
+`requestAnimationFrame` call to every subscriber — see the `CharacterPanel`/
+`InstancePanel` callout in §3.
 
 Accessors (`objectType`, `skin`, `equipment`, `name`, `clothingDye`,
 `accessoryDye`, `characters`, `localPlayerId`) are `useCallback`-stable and read
-the ref synchronously (`EntityRegistry.tsx:130-167`). `characters()` returns every
+the ref synchronously (`EntityRegistry.tsx:171-211`). `characters()` returns every
 objectId with a non-empty `name` — i.e. the instance's players.
 
 ---
@@ -429,16 +443,21 @@ Two things the renderer **always** owns regardless of source:
 
 The React wrapper: one `DpsTracker` per hook instance (`useState(() => new
 DpsTracker())`), a mount effect that pipes `onPacketBatch` into `tracker.ingest`
-and `onOverlayDetach` into `tracker.reset()` + empty snapshot, and a
-**200 ms** `setInterval` recomputing `snapshot(Date.now())` into React state
-(`useDpsTracker.ts:8-33`). Recompute is decoupled from packet arrival so the
-rolling window keeps decaying even when no packets flow.
+and immediately re-snapshots whenever a batch contains a `dps` envelope
+(`useDpsTracker.ts:17-26`) — the bridge pushes one within ~50 ms of any damage
+packet (coalesced) plus a 250 ms heartbeat (see `bridge-server.md`), so the
+panel is effectively event-driven, not polled — `onOverlayDetach` into
+`tracker.reset()` + empty snapshot, and a slow **1000 ms** `FALLBACK_INTERVAL_MS`
+`setInterval` recomputing `snapshot(Date.now())` (`useDpsTracker.ts:31-34`) that
+exists only so the client-side rolling-window fallback (used when the bridge
+has no data for the focused enemy) still decays when packets go quiet.
 
 `DPS_DEBUG` (`DpsTracker.ts:21`, currently `false`) gates a `[dps]` diagnostic
 channel — per-type counts, one-time field-key dumps, focus transitions, and a
-periodic `debugSummary()` (`useDpsTracker.ts:20-23`) — that surfaces in the
-Console panel; the fastest way to diagnose "rows show up but read 0" (a wire-field
-mismatch). `types.ts` documents the exact Java field names Gson serializes.
+`debugSummary()` logged on every fallback tick (`useDpsTracker.ts:33`) — that
+surfaces in the Console panel; the fastest way to diagnose "rows show up but
+read 0" (a wire-field mismatch). `types.ts` documents the exact Java field
+names Gson serializes.
 
 ---
 

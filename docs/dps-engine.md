@@ -57,9 +57,12 @@ everything else is taken as given.
 
 ## Entry boundary & inputs
 
-`DpsBroadcaster.feed(Packet)` (`bridge/DpsBroadcaster.java:43-70`) is the only way
+`DpsBroadcaster.feed(Packet)` (`bridge/DpsBroadcaster.java:48-79`) is the only way
 in. It is a `synchronized(engine)` type-switch; a `Throwable` guard ensures an
-engine bug can never stall packet capture. Consumed packets:
+engine bug can never stall packet capture. It returns whether the packet was a
+damage event (`EnemyHitPacket`/`DamagePacket`), which `PacketBridge` uses to
+push a DPS snapshot promptly instead of waiting for the periodic cadence — see
+`bridge-server.md`. Consumed packets:
 
 | Packet (direction) | Engine method | Contribution |
 | --- | --- | --- |

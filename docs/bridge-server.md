@@ -62,7 +62,7 @@ the flusher thread is the only writer to the socket.
 
 ## 1. `PacketBridge` — the composition root
 
-`PacketBridge` constructs and owns every collaborator (`PacketBridge.java:43-48`):
+`PacketBridge` constructs and owns every collaborator (`PacketBridge.java:44-49`):
 
 - `BridgeServer server` (the WebSocket server),
 - `PacketSerializer serializer`,
@@ -72,7 +72,7 @@ the flusher thread is the only writer to the socket.
 - `BlockingQueue<String> queue = new LinkedBlockingQueue<>(QUEUE_CAPACITY)`.
 
 The constructor also registers the inbound message handler:
-`server.setMessageHandler(this::handleClientMessage)` (`PacketBridge.java:52`).
+`server.setMessageHandler(this::handleClientMessage)` (`PacketBridge.java:57`).
 
 ### Constants (read them here, not from memory)
 
@@ -81,12 +81,13 @@ The constructor also registers the inbound message handler:
 | `DEFAULT_PORT` | `47474` | listen port unless `--port` overrides | `PacketBridge.java:38` |
 | `QUEUE_CAPACITY` | `5000` | bounded queue; drop-oldest guard | `PacketBridge.java:39` |
 | `FLUSH_INTERVAL_MS` | `33` | batch flush cadence (~30/sec) | `PacketBridge.java:40` |
-| `DPS_INTERVAL_MS` | `250` | DPS snapshot cadence | `PacketBridge.java:41` |
+| `DPS_INTERVAL_MS` | `250` | DPS heartbeat cadence (sent when nothing's dirty) | `PacketBridge.java:41` |
+| `DPS_COALESCE_MS` | `50` | poll/coalesce gap for damage-triggered DPS snapshots | `PacketBridge.java:42` |
 
 ### The `registerAll` subscription
 
 `start(fake)` subscribes one lambda to *every* decoded packet
-(`PacketBridge.java:101-110`):
+(`PacketBridge.java:106-116`):
 
 ```java
 Register.INSTANCE.registerAll(packet -> {
@@ -95,9 +96,13 @@ Register.INSTANCE.registerAll(packet -> {
         String names = objectNames.envelopeFor((UpdatePacket) packet);
         if (names != null) enqueue(names);
     }
-    dps.feed(packet);
+    if (dps.feed(packet)) dpsDirty = true;
 });
 ```
+
+`dps.feed` returns whether the packet was a damage event (`EnemyHitPacket` /
+`DamagePacket`); setting `dpsDirty` here is what lets the DPS scheduler below
+push a snapshot promptly instead of waiting for its heartbeat.
 
 `registerAll` installs the listener under the `Packet.class` key
 (`packets/packetcapture/register/Register.java:66-68`), so it fires for *all*
@@ -111,7 +116,7 @@ then a synthetic `objectNames` envelope (when any new object resolves to a name)
 
 ### The bounded, drop-oldest queue
 
-`enqueue` never blocks and never throws (`PacketBridge.java:175-180`):
+`enqueue` never blocks and never throws (`PacketBridge.java:189-194`):
 
 ```java
 private void enqueue(String json) {
@@ -130,7 +135,7 @@ a stuck client — the overlay is a nicety; capture is not.
 ### `flush` — batching
 
 Every flush drains the whole queue into one `{"batch":[...]}` message
-(`PacketBridge.java:183-196`). Each drained item is already a complete JSON
+(`PacketBridge.java:197-210`). Each drained item is already a complete JSON
 object, so the batch is assembled by string concatenation (not re-serialized).
 Empty queue → no message. One WebSocket frame per flush (not per packet) keeps
 frame counts low during dungeon bursts and lines up with a UI render frame.
@@ -142,24 +147,27 @@ frame counts low during dungeon bursts and lines up with a UI render frame.
 ### The scheduled flushers
 
 All four periodic jobs run on **one** single-thread daemon scheduler named
-`bridge-flusher` (`PacketBridge.java:116-141`):
+`bridge-flusher` (`PacketBridge.java:122-155`):
 
 | Job | Cadence | What it does | Ref |
 | --- | --- | --- | --- |
-| `flush()` | 33 ms | drain queue → broadcast one `{"batch":[…]}` | `:121` |
-| DPS snapshot | 250 ms | `dps.snapshotJson()`, enqueue if non-null | `:125-128` |
-| engine diagnostic | 3000 ms | `System.out.println("[dps-engine] " + dps.debugState())` | `:132-134` |
-| sprite-pack readiness | 2000 ms | `maybeBroadcastSpritePack()` (one-shot) | `:140-141` |
+| `flush()` | 33 ms | drain queue → broadcast one `{"batch":[…]}` | `:127` |
+| DPS snapshot | polls every 50 ms; sends on damage or a 250 ms heartbeat | `dps.snapshotJson()`, enqueue if non-null | `:134-142` |
+| engine diagnostic | 3000 ms | `System.out.println("[dps-engine] " + dps.debugState())` | `:146-148` |
+| sprite-pack readiness | 2000 ms | `maybeBroadcastSpritePack()` (one-shot) | `:154-155` |
 
 The DPS snapshot is *enqueued*, so it flows out with the next 33 ms flush like
 any other message. The diagnostic writes to stdout only (it surfaces in the
 overlay's Console panel; it is **not** sent to clients).
 
-> **Comment vs. code.** The inline comment at `PacketBridge.java:122-124` says
-> "500ms is plenty," but the actual snapshot cadence is `DPS_INTERVAL_MS = 250`
-> (`:41`, scheduled at `:128`). The code is authoritative: 250 ms.
+> **DPS snapshot cadence — coalesced, not fixed.** The scheduler runs every
+> `DPS_COALESCE_MS` (50 ms, `:42`) but only enqueues a snapshot when `dpsDirty`
+> is set (a damage packet landed since the last send) or the `DPS_INTERVAL_MS`
+> heartbeat (250 ms, `:41`) has elapsed (`:134-142`). So a hit gets a snapshot
+> out within ~50 ms, a quiet fight still gets one every 250 ms, and a burst of
+> hits within one 50 ms tick is coalesced into a single send.
 
-`maybeBroadcastSpritePack` (`PacketBridge.java:161-172`) exists because assets
+`maybeBroadcastSpritePack` (`PacketBridge.java:175-186`) exists because assets
 extract/load on a background thread (see `ObjectNames.init` below) and usually
 aren't ready when a client first connects. It polls `sprites.ready()`; once
 ready it **broadcasts** the full pack to every client exactly once
@@ -168,13 +176,13 @@ real sprites. Until then it logs the not-ready diagnostic up to 6 times.
 
 ### CLI args & startup order
 
-`main` parses two flags (`PacketBridge.java:75-91`):
+`main` parses two flags (`PacketBridge.java:80-96`):
 
 - `--port <n>` — override the listen port (`Integer.parseInt(args[++i])`).
 - `--fake` — emit synthetic packets instead of sniffing.
 
 Unknown args print a warning and are ignored. `start(fake)` then runs in order
-(`PacketBridge.java:93-151`):
+(`PacketBridge.java:98-165`):
 
 1. `objectNames.init(fake)` — kick off background asset load.
 2. `Register.INSTANCE.registerAll(...)` — subscribe.
@@ -185,7 +193,7 @@ Unknown args print a warning and are ignored. `start(fake)` then runs in order
 
 ### Client-message handling
 
-`handleClientMessage` (`PacketBridge.java:60-73`) is the only inbound path.
+`handleClientMessage` (`PacketBridge.java:65-78`) is the only inbound path.
 It parses the message as JSON, ignores anything that isn't a JSON object or
 whose `type` isn't `"spritePackRequest"`, reads the optional `haveVersion`
 string, and replies **directly to the requesting connection**:
