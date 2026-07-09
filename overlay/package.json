@@ -1,6 +1,6 @@
 {
   "name": "realmshark-overlay",
-  "version": "0.9.18-alpha",
+  "version": "0.9.19-alpha",
   "description": "Game overlay UI for RealmShark, fed by the WebSocket packet bridge",
   "main": "./out/main/index.js",
   "private": true,

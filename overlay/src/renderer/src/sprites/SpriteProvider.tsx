@@ -196,22 +196,37 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       const [, bx, by, w, h] = baseRect
       const [, mx, my, mw, mh] = maskRect
       const base = regionImageData(baseImg, bx, by, w, h)
-      const mask = regionImageData(maskImg, mx, my, Math.min(mw, w), Math.min(mh, h))
+      const mask = regionImageData(maskImg, mx, my, mw, mh)
       if (!base || !mask) return null
 
-      const out = new ImageData(w, h)
-      const mStride = mask.width
-      const maskH = mask.height
-      for (let py = 0; py < h; py++) {
-        for (let px = 0; px < w; px++) {
-          const i = (py * w + px) * 4
-          const baseA = base.data[i + 3]
+      // The dye mask is often higher resolution than the low-res body sprite,
+      // and the game renders the cloth at that finer resolution. So composite at
+      // the larger of the two, sampling the base (nearest) and mask each at their
+      // own scale, rather than collapsing everything to the base's resolution.
+      const ow = Math.max(w, mw)
+      const oh = Math.max(h, mh)
+      if (!dyeDiagRef.current.has('dim:' + baseType)) {
+        dyeDiagRef.current.add('dim:' + baseType)
+        console.log(
+          `[dye-dim] base=${baseType} baseSprite=${w}x${h} mask=${mw}x${mh} out=${ow}x${oh}`
+        )
+      }
+      const out = new ImageData(ow, oh)
+      for (let py = 0; py < oh; py++) {
+        const byp = Math.min(h - 1, Math.floor((py * h) / oh))
+        const myp = Math.min(mh - 1, Math.floor((py * mh) / oh))
+        for (let px = 0; px < ow; px++) {
+          const oi = (py * ow + px) * 4
+          const bxp = Math.min(w - 1, Math.floor((px * w) / ow))
+          const bi = (byp * w + bxp) * 4
+          const baseA = base.data[bi + 3]
           // Mask channels: red = clothing region, green = accessory region; the
           // channel value is the shade level. Recolor to the dye, scaled by it.
           let src: DyeSrc | null = null
           let shade = 0
-          if (baseA > 0 && px < mStride && py < maskH) {
-            const mi = (py * mStride + px) * 4
+          if (baseA > 0) {
+            const mxp = Math.min(mw - 1, Math.floor((px * mw) / ow))
+            const mi = (myp * mw + mxp) * 4
             const mr = mask.data[mi]
             const mg = mask.data[mi + 1]
             if (clothing && mr > 0 && mr >= mg) {
@@ -231,7 +246,7 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
             if (src.kind === 'solid') {
               ;[r, g, b] = src.rgb
             } else {
-              // Tile the pattern across the region, aligned to the sprite origin.
+              // Tile the pattern across the region at the output (mask) scale.
               const j = ((py % src.ph) * src.pw + (px % src.pw)) * 4
               r = src.pixels.data[j]
               g = src.pixels.data[j + 1]
@@ -239,25 +254,25 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
               a = src.pixels.data[j + 3]
             }
             if (a > 0) {
-              out.data[i] = Math.round(r * shade)
-              out.data[i + 1] = Math.round(g * shade)
-              out.data[i + 2] = Math.round(b * shade)
-              out.data[i + 3] = baseA // keep the character silhouette's alpha
+              out.data[oi] = Math.round(r * shade)
+              out.data[oi + 1] = Math.round(g * shade)
+              out.data[oi + 2] = Math.round(b * shade)
+              out.data[oi + 3] = baseA // keep the character silhouette's alpha
               dyed = true
             }
           }
           if (!dyed) {
-            out.data[i] = base.data[i]
-            out.data[i + 1] = base.data[i + 1]
-            out.data[i + 2] = base.data[i + 2]
-            out.data[i + 3] = baseA
+            out.data[oi] = base.data[bi]
+            out.data[oi + 1] = base.data[bi + 1]
+            out.data[oi + 2] = base.data[bi + 2]
+            out.data[oi + 3] = baseA
           }
         }
       }
 
       const composed = document.createElement('canvas')
-      composed.width = w
-      composed.height = h
+      composed.width = ow
+      composed.height = oh
       const cctx = composed.getContext('2d')
       if (!cctx) return null
       cctx.putImageData(out, 0, 0)
@@ -268,7 +283,7 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       const sctx = scaled.getContext('2d')
       if (!sctx) return null
       sctx.imageSmoothingEnabled = false
-      sctx.drawImage(composed, 0, 0, w, h, 0, 0, size, size)
+      sctx.drawImage(composed, 0, 0, ow, oh, 0, 0, size, size)
       const url = scaled.toDataURL()
       cacheRef.current.set(key, url)
       return url
