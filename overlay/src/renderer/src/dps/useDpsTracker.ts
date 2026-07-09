@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
-import { DpsTracker, EMPTY_SNAPSHOT, type DpsSnapshot } from './DpsTracker'
+import { DPS_DEBUG, DpsTracker, EMPTY_SNAPSHOT, type DpsSnapshot } from './DpsTracker'
 
 const RECOMPUTE_INTERVAL_MS = 500
+/** Emit the [dps] state summary once every this many recomputes (~5s), to keep the log readable. */
+const DEBUG_SUMMARY_EVERY = 10
 
 export function useDpsTracker(): DpsSnapshot {
   const [tracker] = useState(() => new DpsTracker())
@@ -13,8 +15,12 @@ export function useDpsTracker(): DpsSnapshot {
       tracker.reset()
       setSnapshot(EMPTY_SNAPSHOT)
     })
+    let ticks = 0
     const interval = setInterval(() => {
       setSnapshot(tracker.snapshot(Date.now()))
+      if (DPS_DEBUG && ++ticks % DEBUG_SUMMARY_EVERY === 0) {
+        console.log('[dps]', tracker.debugSummary())
+      }
     }, RECOMPUTE_INTERVAL_MS)
     return () => {
       offBatch()

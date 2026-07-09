@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { BridgeStatus } from '../../shared/ipc'
+import { ingestMainEntry } from './consoleLog'
 import PanelCanvas from './panels/PanelCanvas'
 
 const STATUS_STYLES: Record<BridgeStatus, string> = {
@@ -25,10 +26,17 @@ function App(): React.JSX.Element {
       clearTimeout(attachToastTimer.current)
       attachToastTimer.current = setTimeout(() => setShowAttachToast(false), ATTACH_TOAST_MS)
     })
+
+    // Backfill anything the main process logged before this window existed
+    // (e.g. the bridge-supervisor spawn line), then keep streaming.
+    window.overlay.getBufferedMainLogs().then((entries) => entries.forEach(ingestMainEntry))
+    const offMainLog = window.overlay.onMainLogEntry(ingestMainEntry)
+
     return () => {
       offStatus()
       offInteractive()
       offAttach()
+      offMainLog()
       clearTimeout(attachToastTimer.current)
     }
   }, [])
@@ -44,7 +52,14 @@ function App(): React.JSX.Element {
         </div>
       )}
 
-      {interactive && <PanelCanvas />}
+      {/* Always mounted (never conditionally rendered) - panels hold live
+          state (packet counter, the DPS tracker's whole session) that must
+          survive toggling interactive mode on and off. Only visually hidden
+          when not interactive; the OS-level click-through already prevents
+          any input from reaching it while hidden. */}
+      <div style={{ display: interactive ? 'contents' : 'none' }}>
+        <PanelCanvas />
+      </div>
     </div>
   )
 }

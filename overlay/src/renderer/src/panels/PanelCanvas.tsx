@@ -6,10 +6,15 @@ import { PANEL_REGISTRY } from './registry'
 
 const SAVE_DEBOUNCE_MS = 500
 
+// Positions are chosen so the default 'md'-size panels don't overlap: status
+// sits top-left, dps below it with enough vertical clearance, and console
+// off to the side entirely - see registry.ts for the md dimensions this
+// assumes.
 function defaultLayout(): PanelInstance[] {
   return [
     { id: 'status', type: 'status', anchor: { pos: 'tl', x: 2, y: 2 }, size: 'md', zIndex: 1 },
-    { id: 'dps', type: 'dps', anchor: { pos: 'tl', x: 2, y: 20 }, size: 'md', zIndex: 2 }
+    { id: 'dps', type: 'dps', anchor: { pos: 'tl', x: 2, y: 30 }, size: 'md', zIndex: 2 },
+    { id: 'console', type: 'console', anchor: { pos: 'tl', x: 35, y: 2 }, size: 'md', zIndex: 3 }
   ]
 }
 

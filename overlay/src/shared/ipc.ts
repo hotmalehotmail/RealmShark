@@ -10,7 +10,9 @@ export const IPC = {
   saveSettings: 'save-settings',
   relaunch: 'relaunch-app',
   getPanelLayout: 'get-panel-layout',
-  savePanelLayout: 'save-panel-layout'
+  savePanelLayout: 'save-panel-layout',
+  mainLogEntry: 'main-log-entry',
+  getBufferedMainLogs: 'get-buffered-main-logs'
 } as const
 
 /** Result of an IPC.saveSettings call. */
@@ -22,6 +24,15 @@ export interface SaveSettingsResult {
 }
 
 export type BridgeStatus = 'connecting' | 'connected' | 'disconnected'
+
+export type LogLevel = 'log' | 'info' | 'warn' | 'error'
+
+/** A single main-process console.* call, forwarded to the renderer's console panel. */
+export interface MainLogEntry {
+  level: LogLevel
+  time: number
+  message: string
+}
 
 /** One decoded packet as serialized by PacketSerializer on the Java side. */
 export interface PacketEnvelope {

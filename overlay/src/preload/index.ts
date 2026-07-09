@@ -1,5 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { IPC, type BridgeStatus, type PacketEnvelope, type SaveSettingsResult } from '../shared/ipc'
+import {
+  IPC,
+  type BridgeStatus,
+  type MainLogEntry,
+  type PacketEnvelope,
+  type SaveSettingsResult
+} from '../shared/ipc'
 import type { PanelInstance } from '../shared/panels'
 import type { OverlaySettings } from '../shared/settings'
 
@@ -36,7 +42,13 @@ const overlayApi = {
   relaunch: (): Promise<void> => ipcRenderer.invoke(IPC.relaunch),
   getPanelLayout: (): Promise<PanelInstance[] | null> => ipcRenderer.invoke(IPC.getPanelLayout),
   savePanelLayout: (panels: PanelInstance[]): Promise<void> =>
-    ipcRenderer.invoke(IPC.savePanelLayout, panels)
+    ipcRenderer.invoke(IPC.savePanelLayout, panels),
+  onMainLogEntry: (cb: (entry: MainLogEntry) => void) => {
+    const listener = (_: unknown, entry: MainLogEntry): void => cb(entry)
+    ipcRenderer.on(IPC.mainLogEntry, listener)
+    return () => ipcRenderer.removeListener(IPC.mainLogEntry, listener)
+  },
+  getBufferedMainLogs: (): Promise<MainLogEntry[]> => ipcRenderer.invoke(IPC.getBufferedMainLogs)
 }
 
 export type OverlayApi = typeof overlayApi

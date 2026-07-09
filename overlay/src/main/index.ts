@@ -9,9 +9,15 @@ import type { OverlaySettings } from '../shared/settings'
 import { startBridgeClient } from './bridgeClient'
 import { ensureBridgeRunning, stopBridge } from './bridgeSupervisor'
 import { openConfigWindow } from './configWindow'
+import { getBufferedMainLogs, installMainConsoleCapture, setMainLogSink } from './consoleCapture'
 import { loadPanelLayout, persistPanelLayout } from './panelLayout'
 import { loadSettings, persistSettings } from './settings'
 import { createTray, setTrayStatus } from './tray'
+
+// Installed before anything else logs, so bridge-supervisor/bridge-client
+// output (only otherwise visible in a terminal) is captured from process
+// start and can backfill the renderer's console panel once it mounts.
+installMainConsoleCapture()
 
 // electron-overlay-window relies on native window compositing; hardware
 // acceleration can break overlay transparency. https://github.com/electron/electron/issues/25153
@@ -51,6 +57,11 @@ function createOverlayWindow(): void {
       sandbox: false
     }
   })
+
+  // Starts non-interactive (isInteractive = false) - make sure the window
+  // can't hold OS keyboard focus from the outset, not just after the first
+  // toggle. See the setFocusable() call in toggleInteractive() for why.
+  overlayWindow.setFocusable(false)
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     overlayWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
@@ -98,6 +109,11 @@ function toggleInteractive(): void {
     overlayWindow.setIgnoreMouseEvents(!isInteractive)
     if (isInteractive) overlayWindow.focus()
   }
+  // A focusable window can end up holding OS keyboard focus (e.g. right after
+  // activateOverlay()'s own .focus() call above) even once mouse events are
+  // passed through again - without this, keystrokes meant for the game can
+  // keep going to the (invisible) overlay after toggling back to click-through.
+  overlayWindow.setFocusable(isInteractive)
   overlayWindow.webContents.send(IPC.interactiveChange, isInteractive)
 }
 
@@ -115,6 +131,8 @@ app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.realmshark.overlay')
 
   createOverlayWindow()
+
+  setMainLogSink((entry) => overlayWindow.webContents.send(IPC.mainLogEntry, entry))
 
   registerHotkey(settings.toggleHotkey)
 
@@ -137,6 +155,8 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle(IPC.getBridgeStatus, (): BridgeStatus => currentBridgeStatus)
+
+  ipcMain.handle(IPC.getBufferedMainLogs, () => getBufferedMainLogs())
 
   ipcMain.handle(IPC.getSettings, (): OverlaySettings => settings)
 
