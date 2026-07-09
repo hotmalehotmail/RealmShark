@@ -50,6 +50,25 @@ function ConfigWindow(): React.JSX.Element {
         <p className="mt-1 text-xs text-white/40">Electron accelerator format, e.g. Alt+Shift+R</p>
       </div>
 
+      <div>
+        <label className="mb-1 block text-white/70">
+          Textile weave fineness: <span className="font-mono">{settings.textileResolution}</span>
+        </label>
+        <input
+          type="range"
+          min={2}
+          max={32}
+          step={1}
+          className="w-full"
+          value={settings.textileResolution}
+          onChange={(e) => setSettings({ ...settings, textileResolution: Number(e.target.value) })}
+        />
+        <p className="mt-1 text-xs text-white/40">
+          How finely a cloth (textile) dye&apos;s pattern is tiled onto a character. Higher =
+          smaller weave. ~10 matches the game. Applies on Save.
+        </p>
+      </div>
+
       <div className="mt-auto flex items-center gap-3">
         <button
           className="rounded bg-sky-600 px-3 py-1.5 font-medium hover:bg-sky-500"

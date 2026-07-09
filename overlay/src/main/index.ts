@@ -300,9 +300,17 @@ app.whenReady().then(() => {
 
     settings = {
       ...next,
-      toggleHotkey: hotkeyRegistered ? next.toggleHotkey : settings.toggleHotkey
+      toggleHotkey: hotkeyRegistered ? next.toggleHotkey : settings.toggleHotkey,
+      // Clamp to a sane range so a bad value can't wreck dye compositing.
+      textileResolution: Math.min(64, Math.max(1, Math.round(next.textileResolution))) || 10
     }
     persistSettings(settings)
+
+    // Push live so the overlay renderer (dye compositing) picks up e.g. the
+    // textile resolution without a restart.
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.webContents.send(IPC.settingsChanged, settings)
+    }
 
     return { needsRestart: titleChanged, hotkeyRegistered }
   })

@@ -1,13 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { SpritePack } from '../../../shared/ipc'
+import { DEFAULT_SETTINGS } from '../../../shared/settings'
 import { SpriteContext } from './context'
-
-// Cloth textiles render finer than the low-res body sprite (their weave is
-// smaller than a body pixel), so for textile dyes we subdivide each body pixel
-// this many times and tile the pattern in that finer space. Tuning knob: larger
-// = finer/smaller pattern pixels. ~16 matches the in-game weave (roughly one
-// 10x10 pattern tile per body pixel).
-const TEXTILE_SUB = 16
 
 /** Crop an atlas region into an ImageData, for pixel-level dye compositing. */
 function regionImageData(
@@ -42,6 +36,16 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
   // Bumped when an atlas finishes decoding so consumers re-request (a sprite
   // that returned null because its atlas wasn't loaded yet can now be cropped).
   const [, setGen] = useState(0)
+  // Textile weave fineness (Settings). Higher = finer/smaller pattern pixels.
+  const [textileSub, setTextileSub] = useState(DEFAULT_SETTINGS.textileResolution)
+
+  useEffect(() => {
+    window.overlay.getSettings().then((s) => setTextileSub(s.textileResolution))
+    const off = window.overlay.onSettingsChanged((s) => setTextileSub(s.textileResolution))
+    return () => {
+      off()
+    }
+  }, [])
 
   const applyPack = useCallback((p: SpritePack): void => {
     cacheRef.current.clear()
@@ -192,7 +196,7 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
 
       const key = `dye:${baseType}:${size}:${clothing ? clothingDye : 0}:${
         accessory ? accessoryDye : 0
-      }`
+      }:${textileSub}`
       const cached = cacheRef.current.get(key)
       if (cached) return cached
 
@@ -210,7 +214,7 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       // we subdivide each body pixel (SUB) and tile the pattern in that finer
       // output space; the body / region outline stays blocky (base + mask are
       // sampled at their own low resolution). Solids are unaffected (SUB=1).
-      const SUB = clothing?.kind === 'textile' || accessory?.kind === 'textile' ? TEXTILE_SUB : 1
+      const SUB = clothing?.kind === 'textile' || accessory?.kind === 'textile' ? textileSub : 1
       const ow = Math.max(w, mw) * SUB
       const oh = Math.max(h, mh) * SUB
       if (!dyeDiagRef.current.has('dim:' + baseType)) {
@@ -296,7 +300,7 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       cacheRef.current.set(key, url)
       return url
     },
-    [pack, getSprite]
+    [pack, getSprite, textileSub]
   )
 
   const hasMask = useCallback(
