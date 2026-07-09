@@ -54,20 +54,19 @@ function App(): React.JSX.Element {
 
       {/* Dim backdrop: rendered only in interactive mode to visibly darken the
           game behind the overlay and signal that input is being captured. It's
-          a real positioned box (not inside the display:contents subtree below),
-          so it appears/disappears together with interactive mode. Rendered
-          before the panel canvas with no positive z-index, so the positioned
-          panels paint on top and stay crisp -- only the game behind is dimmed. */}
+          gated on interactive alone (never shown just because a pinned panel is
+          visible), and rendered before the panel canvas with no positive
+          z-index, so the positioned panels paint on top and stay crisp -- only
+          the game behind is dimmed. */}
       {interactive && <div className="absolute inset-0 bg-black/40" />}
 
       {/* Always mounted (never conditionally rendered) - panels hold live
           state (packet counter, the DPS tracker's whole session) that must
-          survive toggling interactive mode on and off. Only visually hidden
-          when not interactive; the OS-level click-through already prevents
-          any input from reaching it while hidden. */}
-      <div style={{ display: interactive ? 'contents' : 'none' }}>
-        <PanelCanvas />
-      </div>
+          survive toggling interactive mode on and off. Visibility is now
+          per-panel: in interactive mode every panel shows and is draggable;
+          when hidden, only pinned panels remain (as display-only,
+          pointer-events-none boxes). See PanelFrame. */}
+      <PanelCanvas interactive={interactive} />
     </div>
   )
 }

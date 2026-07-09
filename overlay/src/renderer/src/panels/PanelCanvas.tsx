@@ -36,7 +36,11 @@ function windowSize(): SizePx {
   return { width: window.innerWidth, height: window.innerHeight }
 }
 
-function PanelCanvas(): React.JSX.Element {
+interface PanelCanvasProps {
+  interactive: boolean
+}
+
+function PanelCanvas({ interactive }: PanelCanvasProps): React.JSX.Element {
   const [panels, setPanels] = useState<PanelInstance[]>([])
   const [canvasSize, setCanvasSize] = useState<SizePx>(windowSize)
   const loadedRef = useRef(false)
@@ -86,10 +90,15 @@ function PanelCanvas(): React.JSX.Element {
             panel={panel}
             spec={spec}
             canvasSize={canvasSize}
+            interactive={interactive}
             onDrag={(id, x, y) => updatePanel(id, { anchor: { pos: 'tl', x, y } })}
             onCycleSize={(id) => {
               const current = panels.find((p) => p.id === id)
               if (current) updatePanel(id, { size: SIZE_CYCLE[current.size] })
+            }}
+            onTogglePin={(id) => {
+              const current = panels.find((p) => p.id === id)
+              if (current) updatePanel(id, { pinned: !current.pinned })
             }}
             onBringToTop={bringToTop}
           />

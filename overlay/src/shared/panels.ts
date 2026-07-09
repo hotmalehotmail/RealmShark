@@ -23,4 +23,12 @@ export interface PanelInstance {
   anchor: Anchor
   size: PanelSize
   zIndex: number
+  /**
+   * A pinned panel stays visible even when the overlay is in invisible
+   * (click-through) mode - useful for keeping a DPS meter on screen while
+   * playing. Optional so layouts saved before pinning existed stay valid
+   * (undefined = not pinned). Pinned panels are still non-interactive and
+   * non-focusable while the overlay is hidden; they're display-only.
+   */
+  pinned?: boolean
 }
