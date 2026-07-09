@@ -14,18 +14,41 @@ interface BridgeClientHandlers {
   onSpritePack?: (pack: SpritePack & { upToDate?: boolean }) => void
 }
 
+// Once true (set by stopBridgeClient on quit), no further connects or
+// reconnects happen. Reset on each startBridgeClient call.
+let stopped = false
+// The live socket, tracked so stopBridgeClient can tear it down on quit.
+let activeSocket: WebSocket | null = null
+
 /**
  * Connects to the RealmShark Java bridge and reconnects on drop. Validates the
  * hello frame so a stray process squatting on the port is treated as "disconnected"
  * rather than silently accepted.
  */
 export function startBridgeClient(handlers: BridgeClientHandlers): void {
+  stopped = false
   connect(handlers)
 }
 
+/**
+ * Permanently stops the client (on app quit). Closes the active socket with its
+ * listeners removed so its `close` event can't fire another onStatus/reconnect
+ * into an already-destroyed overlay window.
+ */
+export function stopBridgeClient(): void {
+  stopped = true
+  if (activeSocket) {
+    activeSocket.removeAllListeners()
+    activeSocket.close()
+    activeSocket = null
+  }
+}
+
 function connect(handlers: BridgeClientHandlers): void {
+  if (stopped) return
   handlers.onStatus('connecting')
   const ws = new WebSocket(BRIDGE_URL)
+  activeSocket = ws
   let verified = false
 
   ws.on('open', () => {
@@ -69,6 +92,7 @@ function connect(handlers: BridgeClientHandlers): void {
   })
 
   const scheduleReconnect = (): void => {
+    if (stopped) return
     handlers.onStatus('disconnected')
     setTimeout(() => connect(handlers), RECONNECT_DELAY_MS)
   }

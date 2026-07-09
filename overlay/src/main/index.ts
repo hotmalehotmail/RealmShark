@@ -6,7 +6,7 @@ import icon from '../../resources/icon.png?asset'
 import { IPC, type BridgeStatus, type SaveSettingsResult } from '../shared/ipc'
 import type { PanelInstance } from '../shared/panels'
 import type { OverlaySettings } from '../shared/settings'
-import { startBridgeClient } from './bridgeClient'
+import { startBridgeClient, stopBridgeClient } from './bridgeClient'
 import { ensureBridgeRunning, stopBridge } from './bridgeSupervisor'
 import { openConfigWindow } from './configWindow'
 import { getBufferedMainLogs, installMainConsoleCapture, setMainLogSink } from './consoleCapture'
@@ -165,11 +165,15 @@ app.whenReady().then(() => {
   startBridgeClient({
     onStatus: (status) => {
       currentBridgeStatus = status
-      overlayWindow.webContents.send(IPC.bridgeStatus, status)
+      if (overlayWindow && !overlayWindow.isDestroyed()) {
+        overlayWindow.webContents.send(IPC.bridgeStatus, status)
+      }
       setTrayStatus(status)
     },
     onBatch: (packets) => {
-      overlayWindow.webContents.send(IPC.packetBatch, packets)
+      if (overlayWindow && !overlayWindow.isDestroyed()) {
+        overlayWindow.webContents.send(IPC.packetBatch, packets)
+      }
     },
     onConnected: requestSpritePack,
     onSpritePack: onSpritePackMessage
@@ -222,6 +226,10 @@ app.whenReady().then(() => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
+  // Sever the bridge client BEFORE killing the bridge: stopBridge() drops the
+  // socket, whose close event would otherwise fire onStatus back into the
+  // already-destroyed overlay window.
+  stopBridgeClient()
   // Never stop the bridge from a losing second instance - it isn't ours; it
   // belongs to the still-running first instance.
   if (gotSingleInstanceLock) stopBridge()
