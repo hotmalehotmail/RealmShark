@@ -8,6 +8,7 @@ export const IPC = {
   overlayDetach: 'overlay-detach',
   getSettings: 'get-settings',
   saveSettings: 'save-settings',
+  settingsChanged: 'settings-changed',
   getAppVersion: 'get-app-version',
   relaunch: 'relaunch-app',
   getPanelLayout: 'get-panel-layout',
@@ -89,7 +90,8 @@ export interface SpritePack {
    * dyeId -> the cloth a dye applies (its color/pattern, parsed from the dye
    * object's XML - the dye's own sprite is only a generic icon). Encoding:
    *   solid:   [1, r, g, b]
-   *   textile: [10, atlasId, x, y, w, h]  (the pattern's rect to tile)
+   *   textile: [10, atlasId, x0,y0,w0,h0, x1,y1,w1,h1, ...]  (one 4-tuple per
+   *            animation frame to tile; a static cloth is a single frame)
    */
   dyeTable?: Record<string, number[]>
 }

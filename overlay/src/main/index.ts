@@ -300,9 +300,17 @@ app.whenReady().then(() => {
 
     settings = {
       ...next,
-      toggleHotkey: hotkeyRegistered ? next.toggleHotkey : settings.toggleHotkey
+      toggleHotkey: hotkeyRegistered ? next.toggleHotkey : settings.toggleHotkey,
+      // Clamp to a sane range so a bad value can't stall or thrash the render loop.
+      textileAnimMs: Math.min(2000, Math.max(50, Math.round(next.textileAnimMs))) || 200
     }
     persistSettings(settings)
+
+    // Push live so the overlay renderer picks up e.g. the textile animation
+    // rate without a restart.
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.webContents.send(IPC.settingsChanged, settings)
+    }
 
     return { needsRestart: titleChanged, hotkeyRegistered }
   })

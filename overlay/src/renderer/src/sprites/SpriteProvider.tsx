@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SpritePack } from '../../../shared/ipc'
+import { DEFAULT_SETTINGS } from '../../../shared/settings'
 import { SpriteContext } from './context'
 
 // A textile (cloth) dye's woven pattern renders finer than the low-res body
@@ -39,6 +40,31 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
   // Bumped when an atlas finishes decoding so consumers re-request (a sprite
   // that returned null because its atlas wasn't loaded yet can now be cropped).
   const [, setGen] = useState(0)
+  // Textile animation frame duration (Settings). Bumping the tick re-renders
+  // consumers so animated textiles advance a frame (see getDyedSprite).
+  const [frameMs, setFrameMs] = useState(DEFAULT_SETTINGS.textileAnimMs)
+  const [, setAnimTick] = useState(0)
+
+  useEffect(() => {
+    window.overlay.getSettings().then((s) => setFrameMs(s.textileAnimMs))
+    const off = window.overlay.onSettingsChanged((s) => setFrameMs(s.textileAnimMs))
+    return () => {
+      off()
+    }
+  }, [])
+
+  // Only run the animation clock if some dye is a multi-frame textile.
+  const hasAnimatedTextile = useMemo(
+    () =>
+      !!pack.dyeTable &&
+      Object.values(pack.dyeTable).some((e) => e[0] === 10 && (e.length - 2) / 4 > 1),
+    [pack.dyeTable]
+  )
+  useEffect(() => {
+    if (!hasAnimatedTextile) return
+    const id = setInterval(() => setAnimTick((t) => t + 1), Math.max(50, frameMs))
+    return () => clearInterval(id)
+  }, [hasAnimatedTextile, frameMs])
 
   const applyPack = useCallback((p: SpritePack): void => {
     cacheRef.current.clear()
@@ -115,7 +141,8 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
   // shading is preserved: the undyed sprite is itself referenceColor x
   // (maskValue/255), so dyeColor x (maskValue/255) reproduces the same shading.
   // Textile dyes are the same but the region is filled with the tiled cloth
-  // pattern (cropped from its atlas rect) instead of a flat color. Falls back to
+  // pattern (cropped from its atlas rect) instead of a flat color; an animated
+  // textile has several frames and cycles through them over time. Falls back to
   // the plain sprite when there's no dye or no mask.
   const getDyedSprite = useCallback(
     (
@@ -124,40 +151,55 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       clothingDye?: number | null,
       accessoryDye?: number | null
     ): string | null => {
-      // A resolved dye is either a solid RGB or a tileable textile pattern
-      // (cropped from its atlas rect). Both get scaled by the mask shade below.
-      type DyeSrc =
-        | { kind: 'solid'; rgb: [number, number, number] }
-        | { kind: 'textile'; pixels: ImageData; pw: number; ph: number }
-      const resolveDye = (dyeId?: number | null): DyeSrc | null => {
-        if (dyeId == null || dyeId <= 0) return null
-        const e = pack.dyeTable?.[String(dyeId)]
-        if (!e) return null
-        if (e[0] === 1) return { kind: 'solid', rgb: [e[1], e[2], e[3]] }
-        if (e[0] === 10) {
-          const [, atlasId, x, y, pw, ph] = e
-          const img = atlasesRef.current[String(atlasId)]
-          if (!img) return null // atlas not decoded yet
-          const d = regionImageData(img, x, y, pw, ph)
-          return d ? { kind: 'textile', pixels: d, pw, ph } : null
-        }
-        return null
-      }
-      const clothing = resolveDye(clothingDye)
-      const accessory = resolveDye(accessoryDye)
+      const clothingEntry =
+        clothingDye != null && clothingDye > 0 ? pack.dyeTable?.[String(clothingDye)] : undefined
+      const accessoryEntry =
+        accessoryDye != null && accessoryDye > 0 ? pack.dyeTable?.[String(accessoryDye)] : undefined
       const baseRect = pack.table?.[String(baseType)]
       const maskRect = pack.maskTable?.[String(baseType)]
 
-      if (!pack.ready || !pack.table || (!clothing && !accessory)) {
+      if (!pack.ready || !pack.table || (!clothingEntry && !accessoryEntry)) {
         return getSprite(baseType, size)
       }
       if (!baseRect || !maskRect) return getSprite(baseType, size)
 
-      const key = `dye:${baseType}:${size}:${clothing ? clothingDye : 0}:${
-        accessory ? accessoryDye : 0
-      }`
+      // For a textile entry, the frame count is (len-2)/4; the current frame is
+      // driven by the animation clock. Solids (or single-frame textiles) => 0.
+      const frameOf = (e: number[] | undefined): number => {
+        if (!e || e[0] !== 10) return 0
+        const count = (e.length - 2) / 4
+        return count > 1 ? Math.floor(Date.now() / Math.max(50, frameMs)) % count : 0
+      }
+      const clothingFrame = frameOf(clothingEntry)
+      const accessoryFrame = frameOf(accessoryEntry)
+
+      const key = `dye:${baseType}:${size}:${clothingEntry ? clothingDye : 0}:${
+        accessoryEntry ? accessoryDye : 0
+      }:${clothingFrame}:${accessoryFrame}`
       const cached = cacheRef.current.get(key)
       if (cached) return cached
+
+      // A resolved dye is either a solid RGB or a tileable textile pattern (the
+      // current frame cropped from its atlas rect). Both get mask-shaded below.
+      type DyeSrc =
+        | { kind: 'solid'; rgb: [number, number, number] }
+        | { kind: 'textile'; pixels: ImageData; pw: number; ph: number }
+      const resolveDye = (e: number[] | undefined, frame: number): DyeSrc | null => {
+        if (!e) return null
+        if (e[0] === 1) return { kind: 'solid', rgb: [e[1], e[2], e[3]] }
+        if (e[0] === 10) {
+          const atlasId = e[1]
+          const o = 2 + frame * 4
+          const img = atlasesRef.current[String(atlasId)]
+          if (!img) return null // atlas not decoded yet
+          const d = regionImageData(img, e[o], e[o + 1], e[o + 2], e[o + 3])
+          return d ? { kind: 'textile', pixels: d, pw: e[o + 2], ph: e[o + 3] } : null
+        }
+        return null
+      }
+      const clothing = resolveDye(clothingEntry, clothingFrame)
+      const accessory = resolveDye(accessoryEntry, accessoryFrame)
+      if (!clothing && !accessory) return getSprite(baseType, size) // atlases not ready
 
       const baseImg = atlasesRef.current[String(baseRect[0])]
       const maskImg = atlasesRef.current[String(maskRect[0])]
@@ -253,7 +295,7 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       cacheRef.current.set(key, url)
       return url
     },
-    [pack, getSprite]
+    [pack, getSprite, frameMs]
   )
 
   return (

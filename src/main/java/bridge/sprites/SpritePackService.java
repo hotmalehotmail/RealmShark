@@ -154,6 +154,18 @@ public class SpritePackService {
         System.out.println("[sprite-pack] built " + v + ": table=" + table.size()
             + " maskTable=" + maskTable.size() + " dyeTable=" + dyeTable.size());
 
+        // TEMP [dye-anim] Confirm whether textiles carry multiple animation
+        // frames (frames > 1) in the sheet, per textile size group.
+        try {
+            for (String g : new String[]{"textile4x4", "textile5x5", "textile9x9", "textile10x10"}) {
+                for (int idx : new int[]{0, 25}) {
+                    System.out.println("[dye-anim] " + sfb.describeTextileFrames(g, idx));
+                }
+            }
+        } catch (Exception e) {
+            System.out.println("[dye-anim] failed: " + e);
+        }
+
         cachedVersion = v;
         cachedPackJson = gson.toJson(root);
         return cachedPackJson;
@@ -170,7 +182,9 @@ public class SpritePackService {
      * solid RGB in the low 24 bits (emitted as {@code [1, r, g, b]}); otherwise
      * a textile - the high byte is the tile-size group ({@code 0x0A} ->
      * {@code textile10x10}) and the low 24 bits the in-group index; resolved to
-     * the pattern's atlas rect and emitted as {@code [10, atlasId, x, y, w, h]}.
+     * its animation frames' atlas rects and emitted as
+     * {@code [10, atlasId, x0,y0,w0,h0, x1,y1,w1,h1, ...]} (one 4-tuple per
+     * frame; a static cloth is a single frame).
      */
     private synchronized JsonObject buildDyeTable(SpriteFlatBuffer sfb) {
         if (cachedDyeTable != null) return cachedDyeTable;
@@ -216,24 +230,28 @@ public class SpritePackService {
                     arr.add((int) (tex & 0xFF));
                 } else {
                     // textile: high byte = tile-size group (0x0A -> textile10x10),
-                    // low 24 bits = in-group index. Resolve the pattern's atlas
-                    // rect so the renderer can tile it (the sheet is atlas 4,
-                    // already shipped). Emitted as [10, atlasId, x, y, w, h].
+                    // low 24 bits = in-group index. Resolve ALL animation frames'
+                    // atlas rects so the renderer can tile and animate the cloth
+                    // (the sheet is atlas 4, already shipped). Emitted as
+                    // [10, atlasId, x0,y0,w0,h0, x1,y1,w1,h1, ...] - one 4-tuple
+                    // per frame (a static cloth is just a single frame).
                     int size = (int) high;
                     int idx = (int) (tex & 0xFFFFFF);
-                    int[] d = null;
+                    int[][] frames = null;
                     try {
-                        d = sfb.getSpriteData("textile" + size + "x" + size, idx);
+                        frames = sfb.getSpriteFrames("textile" + size + "x" + size, idx);
                     } catch (Exception ex) {
-                        d = null;
+                        frames = null;
                     }
-                    if (d == null) continue; // unresolved textile -> renders undyed
+                    if (frames == null || frames.length == 0) continue; // renders undyed
                     arr.add(10);
-                    arr.add(d[4]); // atlasId
-                    arr.add(d[0]); // x
-                    arr.add(d[1]); // y
-                    arr.add(d[2]); // w
-                    arr.add(d[3]); // h
+                    arr.add(frames[0][4]); // atlasId (same across frames)
+                    for (int[] fr : frames) {
+                        arr.add(fr[0]); // x
+                        arr.add(fr[1]); // y
+                        arr.add(fr[2]); // w
+                        arr.add(fr[3]); // h
+                    }
                 }
                 dyeTable.add(String.valueOf(id), arr);
             }

@@ -40,6 +40,11 @@ const overlayApi = {
   },
   getBridgeStatus: (): Promise<BridgeStatus> => ipcRenderer.invoke(IPC.getBridgeStatus),
   getSettings: (): Promise<OverlaySettings> => ipcRenderer.invoke(IPC.getSettings),
+  onSettingsChanged: (cb: (settings: OverlaySettings) => void) => {
+    const listener = (_: unknown, settings: OverlaySettings): void => cb(settings)
+    ipcRenderer.on(IPC.settingsChanged, listener)
+    return () => ipcRenderer.removeListener(IPC.settingsChanged, listener)
+  },
   getAppVersion: (): Promise<string> => ipcRenderer.invoke(IPC.getAppVersion),
   saveSettings: (settings: OverlaySettings): Promise<SaveSettingsResult> =>
     ipcRenderer.invoke(IPC.saveSettings, settings),

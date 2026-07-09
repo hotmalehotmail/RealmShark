@@ -16,6 +16,14 @@ public class SpriteFlatBuffer {
     private static final HashMap<String, HashMap<Integer, Sprite>> sprites;
 //    private static final HashMap<String, HashMap<Integer, Sprite>> animatedSprites;
 
+    // All animation frames per (group, index), kept only for textile groups so
+    // animated textiles can cycle every frame. The main `sprites` map collapses
+    // animated sprites to one representative frame (needed for character facing);
+    // textiles need them all. Initialized before the static block below, which
+    // populates it during class init.
+    private static final HashMap<String, HashMap<Integer, java.util.List<Sprite>>> textileFrames =
+        new HashMap<>();
+
     /**
      * Static class used to load the flat buffer file.
      */
@@ -88,6 +96,13 @@ public class SpriteFlatBuffer {
             int direction = (int) animatedSheet.direction();
             int action = (int) animatedSheet.action();
             sprite.setAnimationVars(sprite.index, direction, action, animatedSheet.set());
+
+            // Keep every frame for textile groups so animated cloths can cycle.
+            if (name != null && name.startsWith("textile")) {
+                textileFrames.computeIfAbsent(name, k -> new HashMap<>())
+                    .computeIfAbsent(sprite.index(), k -> new java.util.ArrayList<>())
+                    .add(sprite);
+            }
 
             // A character skin stores one frame per (action, direction, set); we
             // expose a single representative frame per index. Keep the frame that
@@ -168,6 +183,45 @@ public class SpriteFlatBuffer {
 //        }
         Sprite sprite = list.get(index);
         return new int[]{sprite.positionX, sprite.positionY, sprite.positionW, sprite.positionH, sprite.aId};
+    }
+
+    /**
+     * All animation frames for a (textile group, index), each as
+     * {@code {x, y, w, h, aId}}, ordered by animation {@code set}. Falls back to
+     * the single (collapsed) sprite as a 1-frame list when the group/index isn't
+     * an animated textile. Null only when the sprite doesn't resolve at all.
+     *
+     * @param name  Name of the sprite group.
+     * @param index Index of the sprite in the group.
+     * @return frame coordinate arrays, or null when nothing resolves.
+     */
+    public int[][] getSpriteFrames(String name, int index) {
+        if (notLoaded) return null;
+        HashMap<Integer, java.util.List<Sprite>> group = textileFrames.get(name);
+        java.util.List<Sprite> frames = group == null ? null : group.get(index);
+        if (frames != null && !frames.isEmpty()) {
+            java.util.List<Sprite> sorted = new java.util.ArrayList<>(frames);
+            sorted.sort(java.util.Comparator.comparingInt(s -> s.animatedSet));
+            int[][] out = new int[sorted.size()][];
+            for (int i = 0; i < sorted.size(); i++) {
+                Sprite s = sorted.get(i);
+                out[i] = new int[]{s.positionX, s.positionY, s.positionW, s.positionH, s.aId};
+            }
+            return out;
+        }
+        int[] single = getSpriteData(name, index);
+        return single == null ? null : new int[][]{single};
+    }
+
+    // TEMP [dye-anim] Raw animation-frame count and set values for a textile
+    // (group, index), to confirm textiles actually animate (frames > 1).
+    public String describeTextileFrames(String name, int index) {
+        HashMap<Integer, java.util.List<Sprite>> group = textileFrames.get(name);
+        java.util.List<Sprite> frames = group == null ? null : group.get(index);
+        if (frames == null || frames.isEmpty()) return name + "[" + index + "] animFrames=0";
+        java.util.TreeSet<Integer> sets = new java.util.TreeSet<>();
+        for (Sprite s : frames) sets.add(s.animatedSet);
+        return name + "[" + index + "] animFrames=" + frames.size() + " sets=" + sets;
     }
 
     /**

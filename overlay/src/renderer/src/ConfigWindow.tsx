@@ -50,6 +50,26 @@ function ConfigWindow(): React.JSX.Element {
         <p className="mt-1 text-xs text-white/40">Electron accelerator format, e.g. Alt+Shift+R</p>
       </div>
 
+      <div>
+        <label className="mb-1 block text-white/70">
+          Textile animation speed: <span className="font-mono">{settings.textileAnimMs}ms</span>
+          /frame
+        </label>
+        <input
+          type="range"
+          min={50}
+          max={1000}
+          step={10}
+          className="w-full"
+          value={settings.textileAnimMs}
+          onChange={(e) => setSettings({ ...settings, textileAnimMs: Number(e.target.value) })}
+        />
+        <p className="mt-1 text-xs text-white/40">
+          Milliseconds per frame for animated cloth (textile) dyes. Higher = slower. Applies on
+          Save.
+        </p>
+      </div>
+
       <div className="mt-auto flex items-center gap-3">
         <button
           className="rounded bg-sky-600 px-3 py-1.5 font-medium hover:bg-sky-500"

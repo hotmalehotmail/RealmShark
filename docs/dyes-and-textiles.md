@@ -62,8 +62,11 @@ For a **textile**, the high byte is the **tile-size group**: `0x0A`(10) →
 `buildDyeTable` emits, per dye id:
 
 - **solid:** `[1, r, g, b]`
-- **textile:** `[10, atlasId, x, y, w, h]` (the pattern's atlas rect, resolved
-  via `SpriteFlatBuffer.getSpriteData("textile"+size+"x"+size, index)`)
+- **textile:** `[10, atlasId, x0,y0,w0,h0, x1,y1,w1,h1, …]` — one 4-tuple **per
+  animation frame**, resolved via
+  `SpriteFlatBuffer.getSpriteFrames("textile"+size+"x"+size, index)`. A static
+  cloth is a single frame; an animated cloth has several (see "Animated
+  textiles" below).
 
 This `dyeTable` is added to the sprite-pack JSON alongside `table`
 (objectType → rect), `maskTable` (objectType → dye-mask rect), and `atlases`.
@@ -92,8 +95,9 @@ sampling the dye's icon. The mask and base sprite are the **same 8×8 resolution
 ### `getDyedSprite` (`renderer/src/sprites/SpriteProvider.tsx`)
 
 1. Resolve `clothingDye`/`accessoryDye` via `dyeTable` into a `DyeSrc`:
-   `{ kind:'solid', rgb }` or `{ kind:'textile', pixels, pw, ph }` (the pattern
-   cropped from its atlas rect). Unknown/absent → `null` (renders undyed).
+   `{ kind:'solid', rgb }` or `{ kind:'textile', pixels, pw, ph }` (the current
+   frame's pattern cropped from its atlas rect). Unknown/absent → `null`
+   (renders undyed).
 2. Crop the base sprite and its mask.
 3. For each output pixel, pick the region by mask channel
    (`mr > 0 && mr >= mg` → clothing; else `mg > 0` → accessory), take
@@ -101,7 +105,7 @@ sampling the dye's icon. The mask and base sprite are the **same 8×8 resolution
    alpha (silhouette). Non-region pixels pass the base sprite through.
 4. Scale the composite to the requested display size with **nearest-neighbour**
    (`imageSmoothingEnabled = false`) to keep the pixel-art look; memoise by
-   `dye:${baseType}:${size}:${clothingDye}:${accessoryDye}`.
+   `dye:${baseType}:${size}:${clothingDye}:${accessoryDye}:${clothingFrame}:${accessoryFrame}`.
 
 ### Textile sub-pixel tiling
 
@@ -116,6 +120,27 @@ than a body pixel, matching the game.
 
 `TEXTILE_SUB` (top of `SpriteProvider.tsx`) is the single tuning knob;
 **`5`** matches the in-game weave. Solids use `SUB = 1` (unaffected).
+
+### Animated textiles
+
+Some cloths animate. The flatbuffer's `animatedSprites` section stores one entry
+per `(name, index, set, direction, action)`; for a `textile*` group the entries
+sharing an index (differing by `set`) are the animation frames.
+`SpriteFlatBuffer` keeps them all in a `textileFrames` map (character groups
+still collapse to one representative frame — see `getSpriteFrames`, ordered by
+`set`), so `dyeTable` carries every frame's rect.
+
+The renderer drives animation from a clock in `SpriteProvider`: a `setInterval`
+bumps a tick every `frameMs` (only while some dye is a multi-frame textile), and
+`getDyedSprite` picks `frame = floor(now / frameMs) % frameCount` for each
+textile, crops that frame, and includes it in the memo key — so each tick
+re-composites the next frame. Solids and single-frame textiles compute frame `0`
+and stay cached (no re-work).
+
+The frame rate is **`textileAnimMs`** in Settings (default **200 ms/frame**),
+pushed live to the renderer via the `settingsChanged` IPC — RotMG's own rate
+isn't in the assets, so it's tunable. Confirm frame counts with the temporary
+`[dye-anim]` bridge log.
 
 ## Colour fidelity: raw atlas decode
 
@@ -132,18 +157,21 @@ pixels exact, which matters both for the dye colour and the base sprite.
 | --- | --- |
 | `src/main/java/assets/AssetExtractor.java` | Extracts object XML (`assets/xml`) + atlases; only parses `<Texture>` (not `<Tex1>`). |
 | `src/main/java/bridge/sprites/SpritePackService.java` | `buildDyeTable()` parses `<Tex1>` from `assets/xml`; emits `table`/`maskTable`/`dyeTable`/`atlases`. |
-| `src/main/java/assets/SpriteFlatBuffer.java` | Sprite/mask rects from the flatbuffer; representative facing-frame selection for animated character sprites. |
+| `src/main/java/assets/SpriteFlatBuffer.java` | Sprite/mask rects from the flatbuffer; `getSpriteFrames` (all textile animation frames); representative facing-frame selection for character sprites. |
 | `overlay/src/shared/ipc.ts` | `SpritePack` type incl. `dyeTable` / `maskTable`. |
 | `overlay/src/main/spritePack.ts` | Caches the pack; persists `dyeTable`/`maskTable`; forces a refetch when a cache predates them. |
 | `overlay/src/renderer/src/sprites/EntityRegistry.tsx` | Tracks `clothingDye`(32)/`accessoryDye`(33) per objectId from the packet stream. |
-| `overlay/src/renderer/src/sprites/SpriteProvider.tsx` | `getDyedSprite` — the compositor (`TEXTILE_SUB` lives here). |
+| `overlay/src/renderer/src/sprites/SpriteProvider.tsx` | `getDyedSprite` — the compositor (`TEXTILE_SUB` + the textile animation clock live here). |
 | `overlay/src/renderer/src/sprites/CharacterSprite.tsx` | `<CharacterSprite objectId>` — resolves skin/class + dyes and renders via `<Sprite>`. |
+| `overlay/src/shared/settings.ts` | `textileAnimMs` — textile animation frame duration. |
 
 ## Wire-format note
 
 `maskTable` and `dyeTable` are keyed by string ids in JSON. `dyeTable` values are
 plain number arrays whose **first element is the kind tag** (`1` solid / `10`
-textile) — a consumer must branch on `entry[0]` before reading the rest.
+textile) — a consumer must branch on `entry[0]` before reading the rest. A
+textile entry is variable length (`[10, atlasId, …4 numbers per frame]`), so its
+frame count is `(entry.length − 2) / 4`.
 
 ## Gotchas / history
 
