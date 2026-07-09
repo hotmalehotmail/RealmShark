@@ -161,6 +161,35 @@ public class SpritePackService {
             System.out.println("[dye-diag] failed: " + e);
         }
 
+        // TEMP [dye-info] For each observed dye id, dump its object Class/Group
+        // and EVERY texture pair (not just pair 0) with the atlas rect each
+        // resolves to. Reveals whether a dye carries a separate cloth texture
+        // beyond its inventory icon, and what class dyes actually are.
+        try {
+            for (int id : new int[]{4134, 4149, 4352, 4655, 4741, 4967}) {
+                if (IdToAsset.getClazz(id) == null && IdToAsset.objectName(id) == null) continue;
+                StringBuilder sb = new StringBuilder();
+                for (int num = 0; num < 8; num++) {
+                    String tn = IdToAsset.getObjectTextureName(id, num);
+                    if (tn == null) break;
+                    int ti = IdToAsset.getObjectTextureIndex(id, num);
+                    int[] d = sfb.getSpriteData(tn, ti);
+                    sb.append(" #").append(num).append("=").append(tn).append(":").append(ti);
+                    if (d != null) {
+                        sb.append("(atlas").append(d[4]).append(" ").append(d[0]).append(",")
+                            .append(d[1]).append(" ").append(d[2]).append("x").append(d[3]).append(")");
+                    } else {
+                        sb.append("(norect)");
+                    }
+                }
+                System.out.println("[dye-info] id=" + id + " name=" + IdToAsset.objectName(id)
+                    + " clazz=" + IdToAsset.getClazz(id) + " group=" + IdToAsset.getIdGroup(id)
+                    + " textures:" + sb);
+            }
+        } catch (Exception e) {
+            System.out.println("[dye-info] failed: " + e);
+        }
+
         cachedVersion = v;
         cachedPackJson = gson.toJson(root);
         return cachedPackJson;

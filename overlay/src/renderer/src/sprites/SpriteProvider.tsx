@@ -4,7 +4,7 @@ import { SpriteContext } from './context'
 
 /** Crop an atlas region into an ImageData, for pixel-level dye compositing. */
 function regionImageData(
-  img: HTMLImageElement,
+  img: ImageBitmap | HTMLImageElement,
   x: number,
   y: number,
   w: number,
@@ -28,7 +28,7 @@ function regionImageData(
  */
 export function SpriteProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
   const [pack, setPack] = useState<SpritePack>({ ready: false })
-  const atlasesRef = useRef<Record<string, HTMLImageElement>>({})
+  const atlasesRef = useRef<Record<string, ImageBitmap | HTMLImageElement>>({})
   const cacheRef = useRef<Map<string, string>>(new Map())
   // TEMP dye diagnostic: dedup the [dye] decision log per base+dye combo.
   const dyeDiagRef = useRef<Set<string>>(new Set())
@@ -44,12 +44,28 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
     setPack(p)
     if (p.ready && p.atlases) {
       for (const [atlasId, url] of Object.entries(p.atlases)) {
-        const img = new Image()
-        img.onload = (): void => {
-          atlasesRef.current[atlasId] = img
+        // Decode with color-management and alpha-premultiplication disabled so
+        // sampled pixels are the atlas's raw RGBA - matching the in-game colors
+        // exactly. `new Image()` decode applies ICC/gamma conversion and premul
+        // rounding, which shifts colors and makes identical pixels diverge.
+        void (async (): Promise<void> => {
+          try {
+            const blob = await (await fetch(url)).blob()
+            atlasesRef.current[atlasId] = await createImageBitmap(blob, {
+              colorSpaceConversion: 'none',
+              premultiplyAlpha: 'none'
+            })
+          } catch {
+            // Fallback to plain Image decode if createImageBitmap is unavailable.
+            const img = new Image()
+            await new Promise<void>((res) => {
+              img.onload = (): void => res()
+              img.src = url
+            })
+            atlasesRef.current[atlasId] = img
+          }
           setGen((g) => g + 1)
-        }
-        img.src = url
+        })()
       }
     }
   }, [])
@@ -156,6 +172,35 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       const base = regionImageData(baseImg, bx, by, w, h)
       const mask = regionImageData(maskImg, mx, my, Math.min(mw, w), Math.min(mh, h))
       if (!base || !mask) return null
+
+      // TEMP [dye-mask] One-shot: is the mask a binary region flag or a graded
+      // shade-index, and are base clothing-region pixels grayscale (multiply
+      // model) or already colored (replace model)? Dumps distinct R/G mask
+      // values and sample base pixels where the mask marks clothing.
+      if (!dyeColorRef.current.has('mask:' + baseType)) {
+        dyeColorRef.current.add('mask:' + baseType)
+        const rVals = new Set<number>()
+        const gVals = new Set<number>()
+        const baseClothSamples: string[] = []
+        for (let p = 0; p < w * h; p++) {
+          const mi = p * 4
+          if (mask.data[mi + 3] > 0) {
+            rVals.add(mask.data[mi])
+            gVals.add(mask.data[mi + 1])
+          }
+          if (mask.data[mi] >= 128 && baseClothSamples.length < 6 && base.data[mi + 3] > 0) {
+            baseClothSamples.push(
+              `(${base.data[mi]},${base.data[mi + 1]},${base.data[mi + 2]})`
+            )
+          }
+        }
+        const brief = (s: Set<number>): string =>
+          [...s].sort((a, b) => a - b).slice(0, 12).join(',') + (s.size > 12 ? '…' : '')
+        console.log(
+          `[dye-mask] base=${baseType} maskR{${rVals.size}}=[${brief(rVals)}] ` +
+            `maskG{${gVals.size}}=[${brief(gVals)}] baseClothPix=${baseClothSamples.join(' ')}`
+        )
+      }
 
       // Each dye is just an objectType in the pack; grab its swatch/pattern
       // pixels. The swatch has transparent padding around the actual color, so
