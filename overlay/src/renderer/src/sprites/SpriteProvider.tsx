@@ -32,6 +32,8 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
   const cacheRef = useRef<Map<string, string>>(new Map())
   // TEMP dye diagnostic: dedup the [dye] decision log per base+dye combo.
   const dyeDiagRef = useRef<Set<string>>(new Set())
+  // TEMP dye-color diagnostic: dedup the sampled-swatch-pixel log.
+  const dyeColorRef = useRef<Set<string>>(new Set())
   // Bumped when an atlas finishes decoding so consumers re-request (a sprite
   // that returned null because its atlas wasn't loaded yet can now be cropped).
   const [, setGen] = useState(0)
@@ -166,6 +168,36 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       }
       const clothing = hasClothing ? dyeRegion(clothingDye as number) : null
       const accessory = hasAccessory ? dyeRegion(accessoryDye as number) : null
+
+      // TEMP [dye-color] Log the actual sampled swatch pixels so we can tell
+      // whether the wrong colors are an inversion, a wrong region, or alpha.
+      const sample = (
+        label: string,
+        id: number | null | undefined,
+        d: { pixels: ImageData; w: number; h: number } | null
+      ): void => {
+        const r = id ? pack.table?.[String(id)] : undefined
+        if (!d || !r) {
+          console.log(`[dye-color] ${label}=${id ?? 0} region=${r ? 'yes' : 'MISSING'} pixels=none`)
+          return
+        }
+        const px = (fx: number, fy: number): string => {
+          const sx = Math.min(d.w - 1, Math.floor(d.w * fx))
+          const sy = Math.min(d.h - 1, Math.floor(d.h * fy))
+          const j = (sy * d.w + sx) * 4
+          return `(${d.pixels.data[j]},${d.pixels.data[j + 1]},${d.pixels.data[j + 2]},${d.pixels.data[j + 3]})`
+        }
+        console.log(
+          `[dye-color] ${label}=${id} rect=[atlas${r[0]},${r[1]},${r[2]},${r[3]}x${r[4]}] ` +
+            `center=${px(0.5, 0.5)} topleft=${px(0.1, 0.1)}`
+        )
+      }
+      const ck = `${baseType}:${clothingDye ?? 0}:${accessoryDye ?? 0}`
+      if (!dyeColorRef.current.has(ck)) {
+        dyeColorRef.current.add(ck)
+        sample('clothing', clothingDye, clothing)
+        sample('accessory', accessoryDye, accessory)
+      }
 
       const out = new ImageData(w, h)
       const mStride = mask.width
