@@ -55,6 +55,26 @@ export function EntityRegistryProvider({
       localPlayerRef.current = null
     }
 
+    // TEMP dye-probe: log the local player's Tex1/Tex2 (clothing/accessory dye)
+    // raw values so we can decode the dye packing, then remove once dyes ship.
+    const lastDye: { t1?: number; t2?: number } = {}
+    const probeDye = (objectId: number, stats?: StatEntry[]): void => {
+      if (objectId !== localPlayerRef.current || !stats) return
+      for (const s of stats) {
+        if (s.statTypeNum === 32 && s.statValue != null && s.statValue !== lastDye.t1) {
+          lastDye.t1 = s.statValue
+          console.log(
+            `[dye-probe] Tex1 clothing = 0x${(s.statValue >>> 0).toString(16)} (${s.statValue})`
+          )
+        } else if (s.statTypeNum === 33 && s.statValue != null && s.statValue !== lastDye.t2) {
+          lastDye.t2 = s.statValue
+          console.log(
+            `[dye-probe] Tex2 accessory = 0x${(s.statValue >>> 0).toString(16)} (${s.statValue})`
+          )
+        }
+      }
+    }
+
     const offBatch = window.overlay.onPacketBatch((packets: PacketEnvelope[]) => {
       for (const env of packets) {
         if (env.type === 'UpdatePacket') {
@@ -80,7 +100,13 @@ export function EntityRegistryProvider({
               }
             }
             recordsRef.current.set(status.objectId, rec)
+            probeDye(status.objectId, status.stats)
           }
+        } else if (env.type === 'NewTickPacket') {
+          const nt = env.data as {
+            status?: Array<{ objectId: number; stats?: StatEntry[] }>
+          } | null
+          for (const st of nt?.status ?? []) probeDye(st.objectId, st.stats)
         } else if (env.type === 'CreateSuccessPacket') {
           const id = (env.data as { objectId?: number } | null)?.objectId
           if (typeof id === 'number' && id > 0) localPlayerRef.current = id
