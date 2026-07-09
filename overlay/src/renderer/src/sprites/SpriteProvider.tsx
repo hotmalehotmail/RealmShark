@@ -67,8 +67,23 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
     [pack]
   )
 
+  // TEMP (dye-probe): report where an objectType resolves in the pack, so we can
+  // tell whether dye sprites (their ids come over the wire as Tex1/Tex2) ship in
+  // one of our atlases or need a separate sheet.
+  const describeSprite = useCallback(
+    (objectType: number): { inTable: boolean; atlasId: number | null; drawable: boolean } => {
+      const rect = pack.table?.[String(objectType)]
+      return {
+        inTable: !!rect,
+        atlasId: rect ? rect[0] : null,
+        drawable: getSprite(objectType, 40) !== null
+      }
+    },
+    [pack, getSprite]
+  )
+
   return (
-    <SpriteContext.Provider value={{ ready: pack.ready, getSprite }}>
+    <SpriteContext.Provider value={{ ready: pack.ready, getSprite, describeSprite }}>
       {children}
     </SpriteContext.Provider>
   )

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 import type { PacketEnvelope } from '../../../shared/ipc'
-import { EntityContext } from './context'
+import { EntityContext, useSprites } from './context'
 
 /** StatType numeric ids we consume here (packets/data/enums/StatType.java). */
 const SKIN_ID_STAT = 25
@@ -48,6 +48,13 @@ export function EntityRegistryProvider({
 }): React.JSX.Element {
   const recordsRef = useRef<Map<number, EntityRecord>>(new Map())
   const localPlayerRef = useRef<number | null>(null)
+  // TEMP dye-probe: keep the latest sprite lookup reachable inside the packet
+  // handler (set up once) so it sees the pack once it has loaded.
+  const sprites = useSprites()
+  const spritesRef = useRef(sprites)
+  useEffect(() => {
+    spritesRef.current = sprites
+  }, [sprites])
 
   useEffect(() => {
     const clear = (): void => {
@@ -61,17 +68,18 @@ export function EntityRegistryProvider({
     const probeDye = (objectId: number, stats?: StatEntry[]): void => {
       if (objectId !== localPlayerRef.current || !stats) return
       for (const s of stats) {
-        if (s.statTypeNum === 32 && s.statValue != null && s.statValue !== lastDye.t1) {
-          lastDye.t1 = s.statValue
-          console.log(
-            `[dye-probe] Tex1 clothing = 0x${(s.statValue >>> 0).toString(16)} (${s.statValue})`
-          )
-        } else if (s.statTypeNum === 33 && s.statValue != null && s.statValue !== lastDye.t2) {
-          lastDye.t2 = s.statValue
-          console.log(
-            `[dye-probe] Tex2 accessory = 0x${(s.statValue >>> 0).toString(16)} (${s.statValue})`
-          )
-        }
+        if ((s.statTypeNum !== 32 && s.statTypeNum !== 33) || s.statValue == null) continue
+        const isClothing = s.statTypeNum === 32
+        if (s.statValue === (isClothing ? lastDye.t1 : lastDye.t2)) continue
+        if (isClothing) lastDye.t1 = s.statValue
+        else lastDye.t2 = s.statValue
+        // Does this dye id resolve to a sprite in the pack we already ship?
+        const d = spritesRef.current.describeSprite(s.statValue)
+        console.log(
+          `[dye-probe] ${isClothing ? 'Tex1 clothing' : 'Tex2 accessory'} = ` +
+            `0x${(s.statValue >>> 0).toString(16)} (${s.statValue}) → ` +
+            `inPack=${d.inTable} atlas=${d.atlasId} drawable=${d.drawable}`
+        )
       }
     }
 
