@@ -50,8 +50,9 @@ export interface EntityContextValue {
   /** The NAME_STAT username for a live objectId, or null if unknown. */
   name: (objectId: number | null | undefined) => string | null
   /**
-   * objectIds of every named character (player) currently tracked. Players carry
-   * NAME_STAT; enemies/monsters don't, so this filters to the instance's players.
+   * objectIds of every player currently tracked. Players carry a NAME_STAT
+   * username and broadcast equipment (INVENTORY_0..3); named-but-equipmentless
+   * entities (portals, NPCs, pets) are excluded.
    */
   characters: () => number[]
   /** The local player's objectId (CreateSuccessPacket / EnemyHitPacket.mainID), or null if not yet resolved. */

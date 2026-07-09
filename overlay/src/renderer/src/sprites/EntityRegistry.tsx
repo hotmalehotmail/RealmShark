@@ -160,7 +160,10 @@ export function EntityRegistryProvider({
   const characters = useCallback((): number[] => {
     const ids: number[] = []
     for (const [id, rec] of recordsRef.current) {
-      if (rec.name != null && rec.name !== '') ids.push(id)
+      // Players carry a username AND broadcast their equipment (INVENTORY_0..3).
+      // Portals / NPCs / pets can have a NAME_STAT but no equipment, so requiring
+      // both filters the roster down to actual players.
+      if (rec.name != null && rec.name !== '' && rec.equipment != null) ids.push(id)
     }
     return ids
   }, [])

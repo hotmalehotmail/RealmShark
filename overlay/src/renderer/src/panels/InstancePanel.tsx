@@ -11,9 +11,8 @@ const CHAR_SIZE: Record<PanelSize, number> = { sm: 40, md: 52, lg: 64 }
 const SLOT_SIZE: Record<PanelSize, number> = { sm: 16, md: 20, lg: 24 }
 
 // Re-read cadence. The EntityRegistry is ref-backed (no re-render on packets),
-// so we poll it. The roster / gear / dyes change slowly, so 500ms is plenty
-// (unlike the DPS panel's 200ms, which tracks fast-moving damage numbers).
-const REFRESH_MS = 500
+// so we poll it, matching the DPS panel's 200ms.
+const REFRESH_MS = 200
 
 /**
  * Lists every character (player) in the current instance - their dyed sprite,
