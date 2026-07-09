@@ -94,4 +94,12 @@ export interface SpritePack {
    *            animation frame to tile; a static cloth is a single frame)
    */
   dyeTable?: Record<string, number[]>
+  /**
+   * objectType -> flat animation-frame list for animated (idle) character
+   * sprites: 9 ints per frame `[x, y, w, h, spriteAtlasId, mx, my, mw, mh]`
+   * (mask on atlas 3; mask entries 0 when the frame has no dye mask). Only
+   * present for objectTypes whose sprite has more than one frame. Static sprites
+   * use `table`/`maskTable` instead.
+   */
+  animTable?: Record<string, number[]>
 }

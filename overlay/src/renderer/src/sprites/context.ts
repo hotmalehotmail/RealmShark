@@ -21,12 +21,27 @@ export interface SpriteContextValue {
     clothingDye?: number | null,
     accessoryDye?: number | null
   ) => string | null
+  /**
+   * Whether the given sprite animates - the base sprite has >1 idle frame, or a
+   * clothing/accessory dye is a multi-frame textile. Lets a <Sprite> tick only
+   * when there's actually something to animate. getSprite/getDyedSprite read the
+   * current frame from the clock internally.
+   */
+  isAnimated: (
+    objectType: number | null | undefined,
+    clothingDye?: number | null,
+    accessoryDye?: number | null
+  ) => boolean
+  /** Milliseconds per animation frame (from Settings). */
+  frameMs: number
 }
 
 export const SpriteContext = createContext<SpriteContextValue>({
   ready: false,
   getSprite: () => null,
-  getDyedSprite: () => null
+  getDyedSprite: () => null,
+  isAnimated: () => false,
+  frameMs: 200
 })
 
 export function useSprites(): SpriteContextValue {

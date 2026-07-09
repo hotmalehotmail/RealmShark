@@ -121,25 +121,37 @@ than a body pixel, matching the game.
 `TEXTILE_SUB` (top of `SpriteProvider.tsx`) is the single tuning knob;
 **`5`** matches the in-game weave. Solids use `SUB = 1` (unaffected).
 
-### Animated textiles
+### Sprite animation (character idle + textiles)
 
-Some cloths animate. The flatbuffer's `animatedSprites` section stores one entry
-per `(name, index, set, direction, action)`; for a `textile*` group the entries
-sharing an index (differing by `set`) are the animation frames.
-`SpriteFlatBuffer` keeps them all in a `textileFrames` map (character groups
-still collapse to one representative frame — see `getSpriteFrames`, ordered by
-`set`), so `dyeTable` carries every frame's rect.
+Both a character's **idle animation** and animated **cloth textiles** are frame
+sequences in the flatbuffer's `animatedSprites` section, which stores one entry
+per `(name, index, set, direction, action)`. Entries sharing a `(name, index)`
+are the frames. `SpriteFlatBuffer.animFrames` keeps them all for `player*` and
+`textile*` groups (the main `sprites` map still collapses to one representative
+frame as a fallback). `getAnimationFrames(name, index)` returns the frames for
+the **representative `(action, direction)`** — the same one `framePreference`
+picks, i.e. the *idle, right-facing* sequence for characters — ordered by `set`.
+Each frame row is `[x,y,w,h, spriteAtlasId, mx,my,mw,mh]` (per-frame mask, so a
+dyed animated character's dye tracks the animation).
 
-The renderer drives animation from a clock in `SpriteProvider`: a `setInterval`
-bumps a tick every `frameMs` (only while some dye is a multi-frame textile), and
-`getDyedSprite` picks `frame = floor(now / frameMs) % frameCount` for each
-textile, crops that frame, and includes it in the memo key — so each tick
-re-composites the next frame. Solids and single-frame textiles compute frame `0`
-and stay cached (no re-work).
+The pack ships two frame sources:
+
+- **`animTable[objectType]`** — flat `9 ints/frame` for base character sprites
+  with >1 idle frame (static sprites use `table`/`maskTable`).
+- **`dyeTable[dyeId]`** textile entries — the cloth's frame rects (see above).
+
+The renderer computes the current frame from a clock: `frame = floor(now /
+frameMs) % frameCount`, per base sprite and per textile dye independently, all
+folded into the memo key so each tick re-composites the next frame. Rather than a
+global clock, **each `<Sprite>` ticks itself** (a `setInterval` at `frameMs`)
+*only when* `isAnimated()` says it has something to animate — so static sprites
+never re-render and the event-driven panels stay idle.
 
 The frame rate is **`textileAnimMs`** in Settings (default **200 ms/frame**),
-pushed live to the renderer via the `settingsChanged` IPC — RotMG's own rate
-isn't in the assets, so it's tunable. Confirm frame counts with the temporary
+pushed live via the `settingsChanged` IPC — RotMG's own rate isn't in the assets,
+so it's tunable. Note: other players' current frame isn't sent over the network,
+so animations play on our clock (not phase-synced), and we always show the *idle*
+sequence (not walk/attack). Confirm which indices animate with the temporary
 `[dye-anim]` bridge log.
 
 ## Colour fidelity: raw atlas decode

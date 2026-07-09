@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { useSprites } from './context'
 
 interface SpriteProps {
@@ -31,7 +32,18 @@ export function Sprite({
   accessoryDye,
   className
 }: SpriteProps): React.JSX.Element | null {
-  const { getSprite, getDyedSprite } = useSprites()
+  const { getSprite, getDyedSprite, isAnimated, frameMs } = useSprites()
+
+  // If this sprite animates (idle character frames or an animated textile dye),
+  // tick locally at the frame rate so it advances; static sprites never tick.
+  const [, setTick] = useState(0)
+  const animated = isAnimated(objectType, clothingDye, accessoryDye)
+  useEffect(() => {
+    if (!animated) return
+    const id = setInterval(() => setTick((t) => t + 1), Math.max(50, frameMs))
+    return () => clearInterval(id)
+  }, [animated, frameMs])
+
   if (objectType == null) return null
 
   const dyed =

@@ -16,12 +16,12 @@ public class SpriteFlatBuffer {
     private static final HashMap<String, HashMap<Integer, Sprite>> sprites;
 //    private static final HashMap<String, HashMap<Integer, Sprite>> animatedSprites;
 
-    // All animation frames per (group, index), kept only for textile groups so
-    // animated textiles can cycle every frame. The main `sprites` map collapses
-    // animated sprites to one representative frame (needed for character facing);
-    // textiles need them all. Initialized before the static block below, which
-    // populates it during class init.
-    private static final HashMap<String, HashMap<Integer, java.util.List<Sprite>>> textileFrames =
+    // All animation frames per (group, index), kept for character (player/skin)
+    // and textile groups so their animations can cycle every frame. The main
+    // `sprites` map collapses animated sprites to one representative frame
+    // (needed as a fallback / facing pick); animation needs them all. Initialized
+    // before the static block below, which populates it during class init.
+    private static final HashMap<String, HashMap<Integer, java.util.List<Sprite>>> animFrames =
         new HashMap<>();
 
     /**
@@ -97,9 +97,10 @@ public class SpriteFlatBuffer {
             int action = (int) animatedSheet.action();
             sprite.setAnimationVars(sprite.index, direction, action, animatedSheet.set());
 
-            // Keep every frame for textile groups so animated cloths can cycle.
-            if (name != null && name.startsWith("textile")) {
-                textileFrames.computeIfAbsent(name, k -> new HashMap<>())
+            // Keep every frame for character (player/skin) and textile groups so
+            // their idle/cloth animations can cycle.
+            if (name != null && (name.startsWith("player") || name.startsWith("textile"))) {
+                animFrames.computeIfAbsent(name, k -> new HashMap<>())
                     .computeIfAbsent(sprite.index(), k -> new java.util.ArrayList<>())
                     .add(sprite);
             }
@@ -186,42 +187,71 @@ public class SpriteFlatBuffer {
     }
 
     /**
-     * All animation frames for a (textile group, index), each as
-     * {@code {x, y, w, h, aId}}, ordered by animation {@code set}. Falls back to
-     * the single (collapsed) sprite as a 1-frame list when the group/index isn't
-     * an animated textile. Null only when the sprite doesn't resolve at all.
+     * All frames of a sprite's representative animation - the frames for the same
+     * (action, direction) that {@link #framePreference} selects (idle, right
+     * facing for characters), ordered by {@code set}. Each frame row is
+     * {@code {x, y, w, h, atlasId, maskX, maskY, maskW, maskH}} (mask entries 0
+     * when the frame has no dye mask). Falls back to the single static sprite as
+     * one frame. Null only when the sprite doesn't resolve at all.
      *
      * @param name  Name of the sprite group.
      * @param index Index of the sprite in the group.
-     * @return frame coordinate arrays, or null when nothing resolves.
+     * @return per-frame coordinate rows, or null when nothing resolves.
      */
-    public int[][] getSpriteFrames(String name, int index) {
+    public int[][] getAnimationFrames(String name, int index) {
         if (notLoaded) return null;
-        HashMap<Integer, java.util.List<Sprite>> group = textileFrames.get(name);
+        HashMap<Integer, java.util.List<Sprite>> group = animFrames.get(name);
         java.util.List<Sprite> frames = group == null ? null : group.get(index);
         if (frames != null && !frames.isEmpty()) {
-            java.util.List<Sprite> sorted = new java.util.ArrayList<>(frames);
-            sorted.sort(java.util.Comparator.comparingInt(s -> s.animatedSet));
-            int[][] out = new int[sorted.size()][];
-            for (int i = 0; i < sorted.size(); i++) {
-                Sprite s = sorted.get(i);
-                out[i] = new int[]{s.positionX, s.positionY, s.positionW, s.positionH, s.aId};
+            Sprite best = null;
+            for (Sprite s : frames) {
+                if (best == null || framePreference(s) > framePreference(best)) best = s;
             }
+            final int action = best.animatedAction;
+            final int direction = best.animatedDirection;
+            java.util.List<Sprite> seq = new java.util.ArrayList<>();
+            for (Sprite s : frames) {
+                if (s.animatedAction == action && s.animatedDirection == direction) seq.add(s);
+            }
+            seq.sort(java.util.Comparator.comparingInt(s -> s.animatedSet));
+            int[][] out = new int[seq.size()][];
+            for (int i = 0; i < seq.size(); i++) out[i] = spriteRow(seq.get(i));
             return out;
         }
-        int[] single = getSpriteData(name, index);
-        return single == null ? null : new int[][]{single};
+        HashMap<Integer, Sprite> list = sprites.get(name);
+        Sprite s = list == null ? null : list.get(index);
+        return s == null ? null : new int[][]{spriteRow(s)};
     }
 
-    // TEMP [dye-anim] Raw animation-frame count and set values for a textile
-    // (group, index), to confirm textiles actually animate (frames > 1).
-    public String describeTextileFrames(String name, int index) {
-        HashMap<Integer, java.util.List<Sprite>> group = textileFrames.get(name);
-        java.util.List<Sprite> frames = group == null ? null : group.get(index);
-        if (frames == null || frames.isEmpty()) return name + "[" + index + "] animFrames=0";
-        java.util.TreeSet<Integer> sets = new java.util.TreeSet<>();
-        for (Sprite s : frames) sets.add(s.animatedSet);
-        return name + "[" + index + "] animFrames=" + frames.size() + " sets=" + sets;
+    private static int[] spriteRow(Sprite s) {
+        boolean hasMask = s.maskPositionW > 0;
+        return new int[]{
+            s.positionX, s.positionY, s.positionW, s.positionH, s.aId,
+            hasMask ? s.maskPositionX : 0, hasMask ? s.maskPositionY : 0,
+            hasMask ? s.maskPositionW : 0, hasMask ? s.maskPositionH : 0
+        };
+    }
+
+    // TEMP [dye-anim] Per group, how many indices have >1 animation frame (i.e.
+    // are actually animated) and a couple of examples, to locate animated
+    // characters/textiles in the data regardless of what's equipped.
+    public String describeAnimatedIndices(String name) {
+        HashMap<Integer, java.util.List<Sprite>> group = animFrames.get(name);
+        if (group == null) return name + ": <no frames>";
+        int animated = 0;
+        StringBuilder examples = new StringBuilder();
+        for (java.util.Map.Entry<Integer, java.util.List<Sprite>> e : group.entrySet()) {
+            if (e.getValue().size() > 1) {
+                animated++;
+                if (animated <= 3) {
+                    java.util.TreeSet<Integer> sets = new java.util.TreeSet<>();
+                    for (Sprite s : e.getValue()) sets.add(s.animatedSet);
+                    examples.append(" [").append(e.getKey()).append(":frames=")
+                        .append(e.getValue().size()).append(",sets=").append(sets).append("]");
+                }
+            }
+        }
+        return name + ": indices=" + group.size() + " animatedIndices=" + animated + examples;
     }
 
     /**

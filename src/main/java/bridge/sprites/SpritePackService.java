@@ -111,6 +111,11 @@ public class SpritePackService {
         SpriteFlatBuffer sfb = new SpriteFlatBuffer();
         JsonObject table = new JsonObject();
         JsonObject maskTable = new JsonObject();
+        // animTable: objectType -> flat frame list for animated (idle) character
+        // sprites, 9 ints per frame [x,y,w,h,spriteAtlasId, mx,my,mw,mh] (mask on
+        // atlas 3, all-zero when the frame has no mask). Only present for
+        // objectTypes whose sprite has >1 frame.
+        JsonObject animTable = new JsonObject();
         for (int id : IdToAsset.objectIds()) {
             if (id <= 0) continue;
             try {
@@ -137,12 +142,20 @@ public class SpritePackService {
                     mrect.add(m[3]);
                     maskTable.add(String.valueOf(id), mrect);
                 }
+
+                int[][] frames = sfb.getAnimationFrames(name, index);
+                if (frames != null && frames.length > 1) {
+                    JsonArray fr = new JsonArray();
+                    for (int[] f : frames) for (int val : f) fr.add(val); // 9 ints/frame
+                    animTable.add(String.valueOf(id), fr);
+                }
             } catch (Exception e) {
                 // Skip any id whose texture can't be resolved.
             }
         }
         root.add("table", table);
         root.add("maskTable", maskTable);
+        root.add("animTable", animTable);
 
         // dyeTable: dyeId -> the cloth the dye applies, parsed from each Dye
         // object's <Tex1>/<Tex2> in the extracted XML (the dye object's sprite
@@ -152,15 +165,17 @@ public class SpritePackService {
         JsonObject dyeTable = buildDyeTable(sfb);
         root.add("dyeTable", dyeTable);
         System.out.println("[sprite-pack] built " + v + ": table=" + table.size()
-            + " maskTable=" + maskTable.size() + " dyeTable=" + dyeTable.size());
+            + " maskTable=" + maskTable.size() + " dyeTable=" + dyeTable.size()
+            + " animTable=" + animTable.size());
 
-        // TEMP [dye-anim] Confirm whether textiles carry multiple animation
-        // frames (frames > 1) in the sheet, per textile size group.
+        // TEMP [dye-anim] Scan character (player/skin) and textile groups for
+        // indices that actually animate (>1 frame), regardless of what's
+        // equipped, to confirm the frame extraction and locate animated ones.
         try {
-            for (String g : new String[]{"textile4x4", "textile5x5", "textile9x9", "textile10x10"}) {
-                for (int idx : new int[]{0, 25}) {
-                    System.out.println("[dye-anim] " + sfb.describeTextileFrames(g, idx));
-                }
+            for (String g : new String[]{
+                "players", "playerskins", "playerskins16", "playerskins32",
+                "textile4x4", "textile5x5", "textile9x9", "textile10x10"}) {
+                System.out.println("[dye-anim] " + sfb.describeAnimatedIndices(g));
             }
         } catch (Exception e) {
             System.out.println("[dye-anim] failed: " + e);
@@ -239,7 +254,7 @@ public class SpritePackService {
                     int idx = (int) (tex & 0xFFFFFF);
                     int[][] frames = null;
                     try {
-                        frames = sfb.getSpriteFrames("textile" + size + "x" + size, idx);
+                        frames = sfb.getAnimationFrames("textile" + size + "x" + size, idx);
                     } catch (Exception ex) {
                         frames = null;
                     }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { SpritePack } from '../../../shared/ipc'
 import { DEFAULT_SETTINGS } from '../../../shared/settings'
 import { SpriteContext } from './context'
@@ -8,6 +8,10 @@ import { SpriteContext } from './context'
 // subdivide each body pixel this many times and tile the pattern in that finer
 // space (the body / region outline stays blocky). 5 matches the in-game weave.
 const TEXTILE_SUB = 5
+
+// animTable stores this many ints per animation frame:
+// [x, y, w, h, spriteAtlasId, maskX, maskY, maskW, maskH].
+const FRAME_STRIDE = 9
 
 /** Crop an atlas region into an ImageData, for pixel-level dye compositing. */
 function regionImageData(
@@ -40,10 +44,9 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
   // Bumped when an atlas finishes decoding so consumers re-request (a sprite
   // that returned null because its atlas wasn't loaded yet can now be cropped).
   const [, setGen] = useState(0)
-  // Textile animation frame duration (Settings). Bumping the tick re-renders
-  // consumers so animated textiles advance a frame (see getDyedSprite).
+  // Animation frame duration (Settings). Each animated <Sprite> ticks itself at
+  // this rate; getSprite/getDyedSprite read the current frame from the clock.
   const [frameMs, setFrameMs] = useState(DEFAULT_SETTINGS.textileAnimMs)
-  const [, setAnimTick] = useState(0)
 
   useEffect(() => {
     window.overlay.getSettings().then((s) => setFrameMs(s.textileAnimMs))
@@ -52,19 +55,6 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       off()
     }
   }, [])
-
-  // Only run the animation clock if some dye is a multi-frame textile.
-  const hasAnimatedTextile = useMemo(
-    () =>
-      !!pack.dyeTable &&
-      Object.values(pack.dyeTable).some((e) => e[0] === 10 && (e.length - 2) / 4 > 1),
-    [pack.dyeTable]
-  )
-  useEffect(() => {
-    if (!hasAnimatedTextile) return
-    const id = setInterval(() => setAnimTick((t) => t + 1), Math.max(50, frameMs))
-    return () => clearInterval(id)
-  }, [hasAnimatedTextile, frameMs])
 
   const applyPack = useCallback((p: SpritePack): void => {
     cacheRef.current.clear()
@@ -106,12 +96,79 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
     }
   }, [applyPack])
 
+  // ---- Animation frame helpers (base character sprites) --------------------
+  // A base objectType's frames live in animTable (9 ints/frame); static sprites
+  // fall back to table/maskTable as a single frame.
+  const baseFrameCount = useCallback(
+    (objectType: number): number => {
+      const a = pack.animTable?.[String(objectType)]
+      return a ? Math.floor(a.length / FRAME_STRIDE) : 1
+    },
+    [pack]
+  )
+  const baseFrame = useCallback(
+    (objectType: number, now: number): number => {
+      const c = baseFrameCount(objectType)
+      return c > 1 ? Math.floor(now / Math.max(50, frameMs)) % c : 0
+    },
+    [baseFrameCount, frameMs]
+  )
+  /** [atlasId, x, y, w, h] for a base objectType's frame, or null. */
+  const baseSpriteRect = useCallback(
+    (objectType: number, frame: number): [number, number, number, number, number] | null => {
+      const a = pack.animTable?.[String(objectType)]
+      if (a) {
+        const o = frame * FRAME_STRIDE
+        return [a[o + 4], a[o], a[o + 1], a[o + 2], a[o + 3]]
+      }
+      const r = pack.table?.[String(objectType)]
+      return r ? [r[0], r[1], r[2], r[3], r[4]] : null
+    },
+    [pack]
+  )
+  /** [maskAtlasId(3), x, y, w, h] for a base objectType's frame, or null when no mask. */
+  const baseMaskRect = useCallback(
+    (objectType: number, frame: number): [number, number, number, number, number] | null => {
+      const a = pack.animTable?.[String(objectType)]
+      if (a) {
+        const o = frame * FRAME_STRIDE
+        return a[o + 7] > 0 ? [3, a[o + 5], a[o + 6], a[o + 7], a[o + 8]] : null
+      }
+      const m = pack.maskTable?.[String(objectType)]
+      return m ? [m[0], m[1], m[2], m[3], m[4]] : null
+    },
+    [pack]
+  )
+
+  const isAnimated = useCallback(
+    (
+      objectType: number | null | undefined,
+      clothingDye?: number | null,
+      accessoryDye?: number | null
+    ): boolean => {
+      if (
+        objectType != null &&
+        (pack.animTable?.[String(objectType)]?.length ?? 0) > FRAME_STRIDE
+      ) {
+        return true
+      }
+      const textileAnim = (id?: number | null): boolean => {
+        const e = id ? pack.dyeTable?.[String(id)] : undefined
+        return !!e && e[0] === 10 && (e.length - 2) / 4 > 1
+      }
+      return textileAnim(clothingDye) || textileAnim(accessoryDye)
+    },
+    [pack]
+  )
+
   const getSprite = useCallback(
     (objectType: number, size: number): string | null => {
       if (!pack.ready || !pack.table) return null
-      const rect = pack.table[String(objectType)]
+      const now = Date.now()
+      const frame = baseFrame(objectType, now)
+      const rect = baseSpriteRect(objectType, frame)
       if (!rect) return null
-      const key = `${objectType}:${size}`
+      const key = `${objectType}:${size}:${frame}`
       const cached = cacheRef.current.get(key)
       if (cached) return cached
       const [atlasId, x, y, w, h] = rect
@@ -130,7 +187,7 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
     },
     // `pack` re-derives getSprite; the setGen bump re-renders consumers once
     // atlases arrive so a previously-null sprite is retried.
-    [pack]
+    [pack, baseFrame, baseSpriteRect]
   )
 
   // Render a character sprite with clothing/accessory dyes composited in. Dyes
@@ -155,12 +212,18 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
         clothingDye != null && clothingDye > 0 ? pack.dyeTable?.[String(clothingDye)] : undefined
       const accessoryEntry =
         accessoryDye != null && accessoryDye > 0 ? pack.dyeTable?.[String(accessoryDye)] : undefined
-      const baseRect = pack.table?.[String(baseType)]
-      const maskRect = pack.maskTable?.[String(baseType)]
 
       if (!pack.ready || !pack.table || (!clothingEntry && !accessoryEntry)) {
         return getSprite(baseType, size)
       }
+
+      // The base character sprite may itself be an animated idle; grab its
+      // current frame's sprite + mask rects (both change together per frame so
+      // the dye region tracks the animation).
+      const now = Date.now()
+      const bFrame = baseFrame(baseType, now)
+      const baseRect = baseSpriteRect(baseType, bFrame)
+      const maskRect = baseMaskRect(baseType, bFrame)
       if (!baseRect || !maskRect) return getSprite(baseType, size)
 
       // For a textile entry, the frame count is (len-2)/4; the current frame is
@@ -168,14 +231,14 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       const frameOf = (e: number[] | undefined): number => {
         if (!e || e[0] !== 10) return 0
         const count = (e.length - 2) / 4
-        return count > 1 ? Math.floor(Date.now() / Math.max(50, frameMs)) % count : 0
+        return count > 1 ? Math.floor(now / Math.max(50, frameMs)) % count : 0
       }
       const clothingFrame = frameOf(clothingEntry)
       const accessoryFrame = frameOf(accessoryEntry)
 
       const key = `dye:${baseType}:${size}:${clothingEntry ? clothingDye : 0}:${
         accessoryEntry ? accessoryDye : 0
-      }:${clothingFrame}:${accessoryFrame}`
+      }:${bFrame}:${clothingFrame}:${accessoryFrame}`
       const cached = cacheRef.current.get(key)
       if (cached) return cached
 
@@ -295,11 +358,13 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       cacheRef.current.set(key, url)
       return url
     },
-    [pack, getSprite, frameMs]
+    [pack, getSprite, frameMs, baseFrame, baseSpriteRect, baseMaskRect]
   )
 
   return (
-    <SpriteContext.Provider value={{ ready: pack.ready, getSprite, getDyedSprite }}>
+    <SpriteContext.Provider
+      value={{ ready: pack.ready, getSprite, getDyedSprite, isAnimated, frameMs }}
+    >
       {children}
     </SpriteContext.Provider>
   )
