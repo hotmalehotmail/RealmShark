@@ -16,11 +16,6 @@ public class SpriteFlatBuffer {
     private static final HashMap<String, HashMap<Integer, Sprite>> sprites;
 //    private static final HashMap<String, HashMap<Integer, Sprite>> animatedSprites;
 
-    // One-time diagnostic: distinct "sheet -> direction:action" tuples, so the
-    // real direction/action numbering is visible in the bridge log. Declared
-    // before the static block below, which populates it during class init.
-    private static final java.util.TreeSet<String> reportedDirections = new java.util.TreeSet<>();
-
     /**
      * Static class used to load the flat buffer file.
      */
@@ -94,8 +89,6 @@ public class SpriteFlatBuffer {
             int action = (int) animatedSheet.action();
             sprite.setAnimationVars(sprite.index, direction, action, animatedSheet.set());
 
-            reportDirections(name, direction, action);
-
             // A character skin stores one frame per (action, direction, set); we
             // expose a single representative frame per index. Keep the frame that
             // best matches the preferred facing (right, standing) so character
@@ -106,36 +99,20 @@ public class SpriteFlatBuffer {
                 map.put(sprite.index(), sprite);
             }
         }
-
-        if (!reportedDirections.isEmpty()) {
-            System.out.println("[sprite-facing] animated (sheet -> direction:action) seen: "
-                + reportedDirections);
-        }
     }
 
     // ---- Representative-frame facing selection -------------------------------
     //
     // RotMG's animated character sheets store a frame per (action, direction,
     // set). direction/action are small ints defined by the game's own
-    // spritesheet data. We can't read that enum from source, so the exact
-    // number for "right" is confirmed from the one-time [sprite-facing]
-    // diagnostic below; adjust RIGHT_DIRECTION / STAND_ACTION if the log shows
-    // different numbering. Selection is a soft preference with fallbacks, so a
-    // wrong guess still yields a consistent frame rather than nothing.
+    // spritesheet data. Confirmed from the players sheet: direction 0=right,
+    // 2=up, 3=down (left is mirror-derived, not stored). Selection is a soft
+    // preference with fallbacks, so it always yields a consistent frame.
 
     /** action value for the standing (non-walking/attacking) pose. */
     private static final int STAND_ACTION = 0;
-    /** direction value that faces right. Confirmed from the players sheet:
-     *  0=right, 2=up, 3=down (left is mirror-derived, not stored). */
+    /** direction value that faces right. */
     private static final int RIGHT_DIRECTION = 0;
-
-    private static void reportDirections(String name, int direction, int action) {
-        if (name == null) return;
-        String lower = name.toLowerCase();
-        if (lower.contains("player") || lower.contains("skin") || lower.contains("char")) {
-            reportedDirections.add(name + " -> " + direction + ":" + action);
-        }
-    }
 
     /**
      * Higher score = better representative frame. Prefers a right-facing frame,
@@ -211,60 +188,6 @@ public class SpriteFlatBuffer {
         return new int[]{
             sprite.maskPositionX, sprite.maskPositionY, sprite.maskPositionW, sprite.maskPositionH
         };
-    }
-
-    // TEMP [dye-diag] Which sprite groups carry any mask, and how many. Reveals
-    // whether character/player groups have masks at all, or masks live only on
-    // some other group (which would explain a base sprite lacking a mask).
-    public String describeAllMaskGroups() {
-        StringBuilder sb = new StringBuilder();
-        int total = 0;
-        for (java.util.Map.Entry<String, HashMap<Integer, Sprite>> ge : sprites.entrySet()) {
-            int c = 0;
-            for (Sprite s : ge.getValue().values()) if (s.maskPositionW > 0) c++;
-            if (c > 0) {
-                sb.append(ge.getKey()).append('=').append(c).append(' ');
-                total += c;
-            }
-        }
-        return "groupsWithMask total=" + total + " :: " + sb;
-    }
-
-    // TEMP [dye-textile] One sprite's atlas id, rect, and most-common color, so
-    // we can tell which atlas the textile groups live in (do we ship it?) and
-    // eyeball-match a textile index to its cloth by color.
-    public String describeSpriteFull(String name, int index) {
-        HashMap<Integer, Sprite> list = sprites.get(name);
-        if (list == null) return name + ":<no group>";
-        Sprite s = list.get(index);
-        if (s == null) return name + "[" + index + "]:<no index> (size=" + list.size() + ")";
-        return name + "[" + index + "] aId=" + s.aId + " rect=" + s.positionX + "," + s.positionY
-            + " " + s.positionW + "x" + s.positionH
-            + " color=(" + Math.round(s.mostCommonColorR * 255) + ","
-            + Math.round(s.mostCommonColorG * 255) + "," + Math.round(s.mostCommonColorB * 255) + ")";
-    }
-
-    // TEMP [dye-groups] All sprite group names and their sizes, to locate the
-    // sheet holding textile cloth patterns.
-    public String describeAllGroups() {
-        StringBuilder sb = new StringBuilder("groups=" + sprites.size() + " :: ");
-        for (String k : new java.util.TreeSet<>(sprites.keySet())) {
-            sb.append(k).append('(').append(sprites.get(k).size()).append(") ");
-        }
-        return sb.toString();
-    }
-
-    // TEMP [dye-diag] Per-index mask presence within one sprite group, so we can
-    // see if the mask is simply on a different index than slot 0.
-    public String describeGroupMasks(String name) {
-        HashMap<Integer, Sprite> list = sprites.get(name);
-        if (list == null) return name + ": <no such group>";
-        java.util.TreeSet<Integer> maskIdx = new java.util.TreeSet<>();
-        for (java.util.Map.Entry<Integer, Sprite> e : list.entrySet()) {
-            if (e.getValue().maskPositionW > 0) maskIdx.add(e.getKey());
-        }
-        return name + ": indices=" + new java.util.TreeSet<>(list.keySet())
-            + " maskIndices=" + maskIdx;
     }
 
     /**

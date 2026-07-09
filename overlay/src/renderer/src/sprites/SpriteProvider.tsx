@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { SpritePack } from '../../../shared/ipc'
-import { DEFAULT_SETTINGS } from '../../../shared/settings'
 import { SpriteContext } from './context'
+
+// A textile (cloth) dye's woven pattern renders finer than the low-res body
+// sprite - its weave is smaller than a body pixel. So for textile dyes we
+// subdivide each body pixel this many times and tile the pattern in that finer
+// space (the body / region outline stays blocky). 5 matches the in-game weave.
+const TEXTILE_SUB = 5
 
 /** Crop an atlas region into an ImageData, for pixel-level dye compositing. */
 function regionImageData(
@@ -31,21 +36,9 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
   const [pack, setPack] = useState<SpritePack>({ ready: false })
   const atlasesRef = useRef<Record<string, ImageBitmap | HTMLImageElement>>({})
   const cacheRef = useRef<Map<string, string>>(new Map())
-  // TEMP dye diagnostic: dedup the [dye] decision log per base+dye combo.
-  const dyeDiagRef = useRef<Set<string>>(new Set())
   // Bumped when an atlas finishes decoding so consumers re-request (a sprite
   // that returned null because its atlas wasn't loaded yet can now be cropped).
   const [, setGen] = useState(0)
-  // Textile weave fineness (Settings). Higher = finer/smaller pattern pixels.
-  const [textileSub, setTextileSub] = useState(DEFAULT_SETTINGS.textileResolution)
-
-  useEffect(() => {
-    window.overlay.getSettings().then((s) => setTextileSub(s.textileResolution))
-    const off = window.overlay.onSettingsChanged((s) => setTextileSub(s.textileResolution))
-    return () => {
-      off()
-    }
-  }, [])
 
   const applyPack = useCallback((p: SpritePack): void => {
     cacheRef.current.clear()
@@ -114,21 +107,6 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
     [pack]
   )
 
-  // TEMP (dye-probe): report where an objectType resolves in the pack, so we can
-  // tell whether dye sprites (their ids come over the wire as Tex1/Tex2) ship in
-  // one of our atlases or need a separate sheet.
-  const describeSprite = useCallback(
-    (objectType: number): { inTable: boolean; atlasId: number | null; drawable: boolean } => {
-      const rect = pack.table?.[String(objectType)]
-      return {
-        inTable: !!rect,
-        atlasId: rect ? rect[0] : null,
-        drawable: getSprite(objectType, 40) !== null
-      }
-    },
-    [pack, getSprite]
-  )
-
   // Render a character sprite with clothing/accessory dyes composited in. Dyes
   // arrive as objectTypes (Tex1/Tex2); the dye's real color lives in
   // pack.dyeTable (parsed from the dye object XML - the dye's own sprite is only
@@ -170,25 +148,6 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       const baseRect = pack.table?.[String(baseType)]
       const maskRect = pack.maskTable?.[String(baseType)]
 
-      // TEMP dye diagnostic (deduped): surfaces how each dye resolved.
-      if ((clothingDye ?? 0) > 0 || (accessoryDye ?? 0) > 0) {
-        const dk = `${baseType}:${clothingDye ?? 0}:${accessoryDye ?? 0}`
-        if (!dyeDiagRef.current.has(dk)) {
-          dyeDiagRef.current.add(dk)
-          const desc = (id?: number | null): string => {
-            const e = id ? pack.dyeTable?.[String(id)] : undefined
-            if (!e) return `${id ?? 0}(none)`
-            return e[0] === 1
-              ? `${id}(solid ${e[1]},${e[2]},${e[3]})`
-              : `${id}(textile atlas${e[1]} ${e[4]}x${e[5]})`
-          }
-          console.log(
-            `[dye] base=${baseType} maskInTable=${!!maskRect} ` +
-              `clothing=${desc(clothingDye)} accessory=${desc(accessoryDye)}`
-          )
-        }
-      }
-
       if (!pack.ready || !pack.table || (!clothing && !accessory)) {
         return getSprite(baseType, size)
       }
@@ -196,7 +155,7 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
 
       const key = `dye:${baseType}:${size}:${clothing ? clothingDye : 0}:${
         accessory ? accessoryDye : 0
-      }:${textileSub}`
+      }`
       const cached = cacheRef.current.get(key)
       if (cached) return cached
 
@@ -214,15 +173,9 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       // we subdivide each body pixel (SUB) and tile the pattern in that finer
       // output space; the body / region outline stays blocky (base + mask are
       // sampled at their own low resolution). Solids are unaffected (SUB=1).
-      const SUB = clothing?.kind === 'textile' || accessory?.kind === 'textile' ? textileSub : 1
+      const SUB = clothing?.kind === 'textile' || accessory?.kind === 'textile' ? TEXTILE_SUB : 1
       const ow = Math.max(w, mw) * SUB
       const oh = Math.max(h, mh) * SUB
-      if (!dyeDiagRef.current.has('dim:' + baseType)) {
-        dyeDiagRef.current.add('dim:' + baseType)
-        console.log(
-          `[dye-dim] base=${baseType} baseSprite=${w}x${h} mask=${mw}x${mh} sub=${SUB} out=${ow}x${oh}`
-        )
-      }
       const out = new ImageData(ow, oh)
       for (let py = 0; py < oh; py++) {
         const byp = Math.min(h - 1, Math.floor((py * h) / oh))
@@ -300,18 +253,11 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       cacheRef.current.set(key, url)
       return url
     },
-    [pack, getSprite, textileSub]
-  )
-
-  const hasMask = useCallback(
-    (objectType: number): boolean => !!pack.maskTable?.[String(objectType)],
-    [pack]
+    [pack, getSprite]
   )
 
   return (
-    <SpriteContext.Provider
-      value={{ ready: pack.ready, getSprite, describeSprite, getDyedSprite, hasMask }}
-    >
+    <SpriteContext.Provider value={{ ready: pack.ready, getSprite, getDyedSprite }}>
       {children}
     </SpriteContext.Provider>
   )

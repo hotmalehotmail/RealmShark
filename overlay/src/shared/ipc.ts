@@ -8,7 +8,6 @@ export const IPC = {
   overlayDetach: 'overlay-detach',
   getSettings: 'get-settings',
   saveSettings: 'save-settings',
-  settingsChanged: 'settings-changed',
   getAppVersion: 'get-app-version',
   relaunch: 'relaunch-app',
   getPanelLayout: 'get-panel-layout',

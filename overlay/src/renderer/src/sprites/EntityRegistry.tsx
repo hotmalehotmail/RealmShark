@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 import type { PacketEnvelope } from '../../../shared/ipc'
-import { EntityContext, useSprites } from './context'
+import { EntityContext } from './context'
 
 /** StatType numeric ids we consume here (packets/data/enums/StatType.java). */
 const SKIN_ID_STAT = 25
@@ -53,39 +53,11 @@ export function EntityRegistryProvider({
 }): React.JSX.Element {
   const recordsRef = useRef<Map<number, EntityRecord>>(new Map())
   const localPlayerRef = useRef<number | null>(null)
-  // TEMP dye-probe: keep the latest sprite lookup reachable inside the packet
-  // handler (set up once) so it sees the pack once it has loaded.
-  const sprites = useSprites()
-  const spritesRef = useRef(sprites)
-  useEffect(() => {
-    spritesRef.current = sprites
-  }, [sprites])
 
   useEffect(() => {
     const clear = (): void => {
       recordsRef.current.clear()
       localPlayerRef.current = null
-    }
-
-    // TEMP dye-probe: log the local player's Tex1/Tex2 (clothing/accessory dye)
-    // raw values so we can decode the dye packing, then remove once dyes ship.
-    const lastDye: { t1?: number; t2?: number } = {}
-    const probeDye = (objectId: number, stats?: StatEntry[]): void => {
-      if (objectId !== localPlayerRef.current || !stats) return
-      for (const s of stats) {
-        if ((s.statTypeNum !== 32 && s.statTypeNum !== 33) || s.statValue == null) continue
-        const isClothing = s.statTypeNum === 32
-        if (s.statValue === (isClothing ? lastDye.t1 : lastDye.t2)) continue
-        if (isClothing) lastDye.t1 = s.statValue
-        else lastDye.t2 = s.statValue
-        // Does this dye id resolve to a sprite in the pack we already ship?
-        const d = spritesRef.current.describeSprite(s.statValue)
-        console.log(
-          `[dye-probe] ${isClothing ? 'Tex1 clothing' : 'Tex2 accessory'} = ` +
-            `0x${(s.statValue >>> 0).toString(16)} (${s.statValue}) → ` +
-            `inPack=${d.inTable} atlas=${d.atlasId} drawable=${d.drawable}`
-        )
-      }
     }
 
     // Merge a stat set into an objectId's record. Stats arrive as deltas from
@@ -123,7 +95,6 @@ export function EntityRegistryProvider({
         }
       }
       recordsRef.current.set(objectId, rec)
-      probeDye(objectId, stats)
     }
 
     const offBatch = window.overlay.onPacketBatch((packets: PacketEnvelope[]) => {

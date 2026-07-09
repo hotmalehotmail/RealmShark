@@ -3,13 +3,6 @@ import { createContext, useContext } from 'react'
 /** Shared sprite/entity contexts + hooks, kept out of the provider component
  *  files so those export only components (react-refresh requirement). */
 
-/** TEMP (dye-probe): where an objectType's sprite lives in the pack. */
-export interface SpriteLookup {
-  inTable: boolean
-  atlasId: number | null
-  drawable: boolean
-}
-
 export interface SpriteContextValue {
   ready: boolean
   /**
@@ -28,18 +21,12 @@ export interface SpriteContextValue {
     clothingDye?: number | null,
     accessoryDye?: number | null
   ) => string | null
-  /** TEMP (dye-probe): report whether an objectType resolves in the sprite pack. */
-  describeSprite: (objectType: number) => SpriteLookup
-  /** TEMP (dye-probe): whether an objectType has a dye mask in the pack. */
-  hasMask: (objectType: number) => boolean
 }
 
 export const SpriteContext = createContext<SpriteContextValue>({
   ready: false,
   getSprite: () => null,
-  getDyedSprite: () => null,
-  describeSprite: () => ({ inTable: false, atlasId: null, drawable: false }),
-  hasMask: () => false
+  getDyedSprite: () => null
 })
 
 export function useSprites(): SpriteContextValue {
