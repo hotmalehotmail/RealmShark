@@ -2,6 +2,19 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Reference docs
+
+`docs/` holds deep-dive documentation for each subsystem — fuller than this file. Consult the relevant one before changing a subsystem, and update it in the same change when your change affects what it describes. `docs/README.md` is the index; key entries:
+
+- `docs/architecture.md` — end-to-end system overview
+- `docs/bridge-server.md` — the Java WebSocket bridge (packet → JSON → WS)
+- `docs/dps-engine.md` — DPS attribution and computation
+- `docs/overlay-main-process.md` / `docs/overlay-renderer.md` — the Electron app (main / renderer)
+- `docs/asset-pipeline.md` / `docs/dyes-and-textiles.md` — sprite and dye/textile rendering
+- `docs/build-and-release.md` — build, packaging, and release steps
+
+A `post-commit` doc-sync hook (see `docs/doc-sync.md`) auto-updates stale docs as a backstop, but it is conservative — prefer updating docs yourself.
+
 ## What this repo is
 
 Two projects in one repo, on the `bridge` branch:
