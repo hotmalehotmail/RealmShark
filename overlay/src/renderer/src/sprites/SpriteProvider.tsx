@@ -125,8 +125,9 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
   // regions to the dye color, scaled by the mask value so the base sprite's
   // shading is preserved: the undyed sprite is itself referenceColor x
   // (maskValue/255), so dyeColor x (maskValue/255) reproduces the same shading.
-  // Falls back to the plain sprite when there's no solid dye or no mask (textile
-  // dyes - encoding [10, idx] - have no pattern shipped yet, so render undyed).
+  // Textile dyes are the same but the region is filled with the tiled cloth
+  // pattern (cropped from its atlas rect) instead of a flat color. Falls back to
+  // the plain sprite when there's no dye or no mask.
   const getDyedSprite = useCallback(
     (
       baseType: number,
@@ -134,14 +135,27 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       clothingDye?: number | null,
       accessoryDye?: number | null
     ): string | null => {
-      const dyeColor = (dyeId?: number | null): [number, number, number] | null => {
+      // A resolved dye is either a solid RGB or a tileable textile pattern
+      // (cropped from its atlas rect). Both get scaled by the mask shade below.
+      type DyeSrc =
+        | { kind: 'solid'; rgb: [number, number, number] }
+        | { kind: 'textile'; pixels: ImageData; pw: number; ph: number }
+      const resolveDye = (dyeId?: number | null): DyeSrc | null => {
         if (dyeId == null || dyeId <= 0) return null
         const e = pack.dyeTable?.[String(dyeId)]
-        if (!e || e[0] !== 1) return null // solid only; textile (10) not renderable yet
-        return [e[1], e[2], e[3]]
+        if (!e) return null
+        if (e[0] === 1) return { kind: 'solid', rgb: [e[1], e[2], e[3]] }
+        if (e[0] === 10) {
+          const [, atlasId, x, y, pw, ph] = e
+          const img = atlasesRef.current[String(atlasId)]
+          if (!img) return null // atlas not decoded yet
+          const d = regionImageData(img, x, y, pw, ph)
+          return d ? { kind: 'textile', pixels: d, pw, ph } : null
+        }
+        return null
       }
-      const clothing = dyeColor(clothingDye)
-      const accessory = dyeColor(accessoryDye)
+      const clothing = resolveDye(clothingDye)
+      const accessory = resolveDye(accessoryDye)
       const baseRect = pack.table?.[String(baseType)]
       const maskRect = pack.maskTable?.[String(baseType)]
 
@@ -153,7 +167,9 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
           const desc = (id?: number | null): string => {
             const e = id ? pack.dyeTable?.[String(id)] : undefined
             if (!e) return `${id ?? 0}(none)`
-            return e[0] === 1 ? `${id}(solid ${e[1]},${e[2]},${e[3]})` : `${id}(textile ${e[1]})`
+            return e[0] === 1
+              ? `${id}(solid ${e[1]},${e[2]},${e[3]})`
+              : `${id}(textile atlas${e[1]} ${e[4]}x${e[5]})`
           }
           console.log(
             `[dye] base=${baseType} maskInTable=${!!maskRect} ` +
@@ -192,26 +208,45 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
           const baseA = base.data[i + 3]
           // Mask channels: red = clothing region, green = accessory region; the
           // channel value is the shade level. Recolor to the dye, scaled by it.
-          let color: [number, number, number] | null = null
+          let src: DyeSrc | null = null
           let shade = 0
           if (baseA > 0 && px < mStride && py < maskH) {
             const mi = (py * mStride + px) * 4
             const mr = mask.data[mi]
             const mg = mask.data[mi + 1]
             if (clothing && mr > 0 && mr >= mg) {
-              color = clothing
+              src = clothing
               shade = mr / 255
             } else if (accessory && mg > 0) {
-              color = accessory
+              src = accessory
               shade = mg / 255
             }
           }
-          if (color) {
-            out.data[i] = Math.round(color[0] * shade)
-            out.data[i + 1] = Math.round(color[1] * shade)
-            out.data[i + 2] = Math.round(color[2] * shade)
-            out.data[i + 3] = baseA // keep the character silhouette's alpha
-          } else {
+          let dyed = false
+          if (src) {
+            let r = 0
+            let g = 0
+            let b = 0
+            let a = 255
+            if (src.kind === 'solid') {
+              ;[r, g, b] = src.rgb
+            } else {
+              // Tile the pattern across the region, aligned to the sprite origin.
+              const j = ((py % src.ph) * src.pw + (px % src.pw)) * 4
+              r = src.pixels.data[j]
+              g = src.pixels.data[j + 1]
+              b = src.pixels.data[j + 2]
+              a = src.pixels.data[j + 3]
+            }
+            if (a > 0) {
+              out.data[i] = Math.round(r * shade)
+              out.data[i + 1] = Math.round(g * shade)
+              out.data[i + 2] = Math.round(b * shade)
+              out.data[i + 3] = baseA // keep the character silhouette's alpha
+              dyed = true
+            }
+          }
+          if (!dyed) {
             out.data[i] = base.data[i]
             out.data[i + 1] = base.data[i + 1]
             out.data[i + 2] = base.data[i + 2]

@@ -149,7 +149,7 @@ public class SpritePackService {
         // is only a generic icon and does not carry the color). Encoding:
         //   solid  (high byte 0x01): [1, r, g, b]
         //   textile(high nibble 0xA): [10, textileIndex]
-        JsonObject dyeTable = buildDyeTable();
+        JsonObject dyeTable = buildDyeTable(sfb);
         root.add("dyeTable", dyeTable);
         System.out.println("[sprite-pack] built " + v + ": table=" + table.size()
             + " maskTable=" + maskTable.size() + " dyeTable=" + dyeTable.size());
@@ -235,11 +235,13 @@ public class SpritePackService {
      * {@code <Class>Dye</Class>} objects and parsing their {@code <Tex1>} (or
      * {@code <Tex2>}) packed cloth value. The dye object's own sprite is only a
      * generic icon, so the color/pattern lives here, not in the atlas.
-     * <p>Encoding of the packed value: high byte {@code 0x01} = solid RGB in the
-     * low 24 bits (emitted as {@code [1, r, g, b]}); high nibble {@code 0xA} =
-     * textile, low 24 bits are the textile index (emitted as {@code [10, idx]}).
+     * <p>Encoding of the packed value: high byte {@code 0x01}/{@code 0x02} =
+     * solid RGB in the low 24 bits (emitted as {@code [1, r, g, b]}); otherwise
+     * a textile - the high byte is the tile-size group ({@code 0x0A} ->
+     * {@code textile10x10}) and the low 24 bits the in-group index; resolved to
+     * the pattern's atlas rect and emitted as {@code [10, atlasId, x, y, w, h]}.
      */
-    private synchronized JsonObject buildDyeTable() {
+    private synchronized JsonObject buildDyeTable(SpriteFlatBuffer sfb) {
         if (cachedDyeTable != null) return cachedDyeTable;
         JsonObject dyeTable = new JsonObject();
         java.io.File xmlDir = new java.io.File("assets/xml");
@@ -281,9 +283,26 @@ public class SpritePackService {
                     arr.add((int) ((tex >> 16) & 0xFF));
                     arr.add((int) ((tex >> 8) & 0xFF));
                     arr.add((int) (tex & 0xFF));
-                } else { // textile: low 24 bits are the pattern index
+                } else {
+                    // textile: high byte = tile-size group (0x0A -> textile10x10),
+                    // low 24 bits = in-group index. Resolve the pattern's atlas
+                    // rect so the renderer can tile it (the sheet is atlas 4,
+                    // already shipped). Emitted as [10, atlasId, x, y, w, h].
+                    int size = (int) high;
+                    int idx = (int) (tex & 0xFFFFFF);
+                    int[] d = null;
+                    try {
+                        d = sfb.getSpriteData("textile" + size + "x" + size, idx);
+                    } catch (Exception ex) {
+                        d = null;
+                    }
+                    if (d == null) continue; // unresolved textile -> renders undyed
                     arr.add(10);
-                    arr.add((int) (tex & 0xFFFFFF));
+                    arr.add(d[4]); // atlasId
+                    arr.add(d[0]); // x
+                    arr.add(d[1]); // y
+                    arr.add(d[2]); // w
+                    arr.add(d[3]); // h
                 }
                 dyeTable.add(String.valueOf(id), arr);
             }

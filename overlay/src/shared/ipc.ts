@@ -89,7 +89,7 @@ export interface SpritePack {
    * dyeId -> the cloth a dye applies (its color/pattern, parsed from the dye
    * object's XML - the dye's own sprite is only a generic icon). Encoding:
    *   solid:   [1, r, g, b]
-   *   textile: [10, textileIndex]  (pattern not yet shipped; renders undyed)
+   *   textile: [10, atlasId, x, y, w, h]  (the pattern's rect to tile)
    */
   dyeTable?: Record<string, number[]>
 }
