@@ -313,8 +313,9 @@ send (`spritePack.ts:55`). Routed by `PacketBridge.handleClientMessage`
 
 The full pack keys: `atlases` = `atlasId("1".."4") → data:image/png;base64,…`;
 `table` = `objectType → [atlasId,x,y,w,h]`; `maskTable` = `objectType →
-[3,x,y,w,h]`; `dyeTable` = `dyeId → [1,r,g,b]` (solid) or `[10,atlasId,x,y,w,h]`
-(textile). The `table`/`maskTable`/`dyeTable` semantics are documented in
+[3,x,y,w,h]`; `dyeTable` = `dyeId → [1,r,g,b]` (solid) or
+`[10,atlasId,x0,y0,w0,h0,...]` (textile, one 4-tuple per animation frame). The
+`table`/`maskTable`/`dyeTable` semantics are documented in
 [dyes-and-textiles.md](dyes-and-textiles.md); the TS mirror is `SpritePack` in
 `overlay/src/shared/ipc.ts:74`.
 

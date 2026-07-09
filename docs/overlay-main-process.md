@@ -342,9 +342,11 @@ and closes.
 ## 4. Settings & config
 
 **Model** (`shared/settings.ts`): `OverlaySettings = { gameWindowTitle,
-toggleHotkey }`, with `DEFAULT_SETTINGS = { gameWindowTitle: 'RotMGExalt',
-toggleHotkey: 'Alt+Shift+R' }`. `gameWindowTitle` is the exact strcmp target for
-`attachByTitle` (§1).
+toggleHotkey, textileAnimMs }`, with `DEFAULT_SETTINGS = { gameWindowTitle:
+'RotMGExalt', toggleHotkey: 'Alt+Shift+R', textileAnimMs: 200 }`.
+`gameWindowTitle` is the exact strcmp target for `attachByTitle` (§1).
+`textileAnimMs` is the animated-textile-dye frame duration — see
+`dyes-and-textiles.md`.
 
 **Storage** (`settings.ts`): JSON at `app.getPath('userData')/settings.json`.
 `loadSettings()` merges the file over `DEFAULT_SETTINGS` (so new keys pick up
@@ -360,6 +362,10 @@ at runtime:
   if registration fails (invalid or already claimed), re-register the old one and
   report `hotkeyRegistered: false`. The persisted `toggleHotkey` keeps the old
   value in that case.
+- `textileAnimMs` is clamped to `[50, 2000]` (falling back to `200` if the clamp
+  math yields a falsy value) so a bad value can't stall or thrash the render
+  loop, then pushed live to the overlay renderer via the `settingsChanged`
+  IPC (`IPC.settingsChanged`) — no restart needed.
 
 `SaveSettingsResult` (`shared/ipc.ts:42`) carries `{ needsRestart,
 hotkeyRegistered }` back to the config UI, which then can offer `relaunch`.
@@ -486,6 +492,7 @@ Two shapes of method:
 | `onOverlayDetach(cb)` | `overlay-detach` | main→rend | — |
 | `getSettings()` | `get-settings` | invoke | → `OverlaySettings` |
 | `saveSettings(s)` | `save-settings` | invoke | `OverlaySettings` → `SaveSettingsResult` |
+| `onSettingsChanged(cb)` | `settings-changed` | main→rend | `OverlaySettings` |
 | `getAppVersion()` | `get-app-version` | invoke | → `string` |
 | `relaunch()` | `relaunch-app` | invoke | → void |
 | `getPanelLayout()` | `get-panel-layout` | invoke | → `PanelInstance[] \| null` |

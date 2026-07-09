@@ -290,7 +290,8 @@ solid vs. textile `dyeTable` encoding) is documented in **`dyes-and-textiles.md`
 — not repeated here. Key contract: it **falls back to `getSprite`** when the pack
 isn't ready, there's no dye, or the base type has no mask
 (`SpriteProvider.tsx:151-154`), and memoises by
-`"dye:baseType:size:clothingDye:accessoryDye"`.
+`"dye:baseType:size:clothingDye:accessoryDye:clothingFrame:accessoryFrame"` (the
+frame indices only vary for animated textiles — see `dyes-and-textiles.md`).
 
 Both functions are exposed via `SpriteContext` (`context.ts:6-30`); panels call
 them through `useSprites()` or the `<Sprite>` component.
@@ -444,11 +445,12 @@ mismatch). `types.ts` documents the exact Java field names Gson serializes.
 ## 6. ConfigWindow, DpsList, consoleLog
 
 **`ConfigWindow.tsx`** — the `#config` window body. Loads `getSettings()`, edits
-`gameWindowTitle` and `toggleHotkey` locally, and `saveSettings()` returns
-`{ needsRestart, hotkeyRegistered }` (`ConfigWindow.tsx:17-25`): a window-title
-change needs a restart (offered as a "Restart now" button → `relaunch()`), and a
-failed hotkey registration is reported inline while the previous hotkey stays.
-See `overlay-main-process.md` for how these settings are applied.
+`gameWindowTitle`, `toggleHotkey`, and `textileAnimMs` (a slider, 50-1000ms)
+locally, and `saveSettings()` returns `{ needsRestart, hotkeyRegistered }`
+(`ConfigWindow.tsx:17-25`): a window-title change needs a restart (offered as a
+"Restart now" button → `relaunch()`), and a failed hotkey registration is
+reported inline while the previous hotkey stays. See `overlay-main-process.md`
+for how these settings are applied.
 
 **`DpsList.tsx`** — pure presentation for a `DpsSnapshot`. Renders "No target
 attacked yet" when `targetId === null`, an optional header with the target sprite
