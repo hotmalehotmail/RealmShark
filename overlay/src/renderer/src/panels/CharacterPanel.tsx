@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { PanelSize } from '../../../shared/panels'
+import { CharacterSprite } from '../sprites/CharacterSprite'
 import { useEntityRegistry } from '../sprites/context'
 import { Sprite } from '../sprites/Sprite'
 import type { PanelContentProps } from './registry'
@@ -33,16 +34,13 @@ function CharacterPanel({ size }: PanelContentProps): React.JSX.Element {
     return <div className="text-xs text-white/40">Waiting for local player…</div>
   }
 
-  const skinType = entities.skin(localId)
-  const classType = entities.objectType(localId)
-  const spriteType = skinType && skinType > 0 ? skinType : classType
   const equipment = entities.equipment(localId) ?? []
   const name = entities.name(localId)
 
   return (
     <div className="flex h-full w-full flex-col text-white">
       <div className="flex items-center gap-3">
-        <Sprite objectType={spriteType} size={PLAYER_SIZE[size]} />
+        <CharacterSprite objectId={localId} size={PLAYER_SIZE[size]} />
         <div className="min-w-0">
           <div className="truncate text-sm font-semibold">{name ?? `Player #${localId}`}</div>
           {size !== 'sm' && <div className="text-xs text-white/40">You</div>}

@@ -5,6 +5,10 @@ interface SpriteProps {
   objectType: number | null | undefined
   /** Rendered pixel size (square). */
   size?: number
+  /** Clothing dye objectType (Tex1) to composite onto a character sprite. */
+  clothingDye?: number | null
+  /** Accessory dye objectType (Tex2) to composite onto a character sprite. */
+  accessoryDye?: number | null
   className?: string
 }
 
@@ -23,12 +27,18 @@ function placeholderColor(objectType: number): string {
 export function Sprite({
   objectType,
   size = 32,
+  clothingDye,
+  accessoryDye,
   className
 }: SpriteProps): React.JSX.Element | null {
-  const { getSprite } = useSprites()
+  const { getSprite, getDyedSprite } = useSprites()
   if (objectType == null) return null
 
-  const url = getSprite(objectType, size)
+  const dyed =
+    (clothingDye != null && clothingDye > 0) || (accessoryDye != null && accessoryDye > 0)
+  const url = dyed
+    ? getDyedSprite(objectType, size, clothingDye, accessoryDye)
+    : getSprite(objectType, size)
   if (url) {
     return (
       <img

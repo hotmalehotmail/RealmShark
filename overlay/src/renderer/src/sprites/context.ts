@@ -17,6 +17,17 @@ export interface SpriteContextValue {
    * when there's no real pack / no entry (caller renders a placeholder).
    */
   getSprite: (objectType: number, size: number) => string | null
+  /**
+   * Like getSprite, but composites clothing/accessory dyes (their objectTypes)
+   * onto the character sprite. Falls back to the plain sprite when there's no
+   * dye or the sprite has no mask. Usable from any panel.
+   */
+  getDyedSprite: (
+    baseType: number,
+    size: number,
+    clothingDye?: number | null,
+    accessoryDye?: number | null
+  ) => string | null
   /** TEMP (dye-probe): report whether an objectType resolves in the sprite pack. */
   describeSprite: (objectType: number) => SpriteLookup
 }
@@ -24,6 +35,7 @@ export interface SpriteContextValue {
 export const SpriteContext = createContext<SpriteContextValue>({
   ready: false,
   getSprite: () => null,
+  getDyedSprite: () => null,
   describeSprite: () => ({ inTable: false, atlasId: null, drawable: false })
 })
 
@@ -41,6 +53,10 @@ export interface EntityContextValue {
    * for a live objectId. Empty slots are `<= 0`. Returns null if the id is unknown.
    */
   equipment: (objectId: number | null | undefined) => number[] | null
+  /** The clothing dye (Tex1) objectType for a live objectId, or null. */
+  clothingDye: (objectId: number | null | undefined) => number | null
+  /** The accessory dye (Tex2) objectType for a live objectId, or null. */
+  accessoryDye: (objectId: number | null | undefined) => number | null
   /** The NAME_STAT username for a live objectId, or null if unknown. */
   name: (objectId: number | null | undefined) => string | null
   /** The local player's objectId (CreateSuccessPacket / EnemyHitPacket.mainID), or null if not yet resolved. */
@@ -51,6 +67,8 @@ export const EntityContext = createContext<EntityContextValue>({
   objectType: () => null,
   skin: () => null,
   equipment: () => null,
+  clothingDye: () => null,
+  accessoryDye: () => null,
   name: () => null,
   localPlayerId: () => null
 })

@@ -59,4 +59,10 @@ export interface SpritePack {
   atlases?: Record<string, string>
   /** objectType -> [atlasId, x, y, w, h] within that atlas. */
   table?: Record<string, [number, number, number, number, number]>
+  /**
+   * objectType -> [maskAtlasId(=3), x, y, w, h] of the dye mask (marks the
+   * clothing/accessory regions), for objectTypes that have one. Used to
+   * composite clothing/accessory dyes onto a character sprite.
+   */
+  maskTable?: Record<string, [number, number, number, number, number]>
 }

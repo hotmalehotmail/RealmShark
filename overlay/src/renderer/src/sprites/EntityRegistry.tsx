@@ -6,6 +6,8 @@ import { EntityContext, useSprites } from './context'
 const SKIN_ID_STAT = 25
 const INVENTORY_0_STAT = 8
 const NAME_STAT = 31
+const CLOTHING_DYE_STAT = 32 // TEX1 - clothing dye objectType
+const ACCESSORY_DYE_STAT = 33 // TEX2 - accessory dye objectType
 
 interface StatEntry {
   statTypeNum: number
@@ -20,12 +22,15 @@ interface UpdateData {
   }>
 }
 
-/** Merged, per-objectId record built up from UpdatePacket stat deltas. */
+/** Merged, per-objectId record built up from packet stat deltas. */
 interface EntityRecord {
   objectType: number
   skin?: number
   /** 4 equipped slots (INVENTORY_0..3). Empty slots are `<= 0`. */
   equipment?: number[]
+  /** Clothing (Tex1) / accessory (Tex2) dye, as dye objectTypes. */
+  clothingDye?: number
+  accessoryDye?: number
   name?: string
 }
 
@@ -83,38 +88,56 @@ export function EntityRegistryProvider({
       }
     }
 
+    // Merge a stat set into an objectId's record. Stats arrive as deltas from
+    // both UpdatePacket (new objects) and NewTickPacket (ongoing changes), so we
+    // merge, keeping the last known value per field. objectType is only known
+    // from UpdatePacket; a NewTick for an object we haven't created yet is skipped.
+    const mergeStats = (
+      objectId: number,
+      objectType: number | undefined,
+      stats?: StatEntry[]
+    ): void => {
+      let rec = recordsRef.current.get(objectId)
+      if (!rec) {
+        if (objectType == null) return
+        rec = { objectType }
+      } else if (objectType != null) {
+        rec.objectType = objectType
+      }
+      for (const s of stats ?? []) {
+        if (s.statTypeNum === SKIN_ID_STAT && s.statValue != null) {
+          rec.skin = s.statValue
+        } else if (
+          s.statTypeNum >= INVENTORY_0_STAT &&
+          s.statTypeNum <= INVENTORY_0_STAT + 3 &&
+          s.statValue != null
+        ) {
+          if (!rec.equipment) rec.equipment = [-1, -1, -1, -1]
+          rec.equipment[s.statTypeNum - INVENTORY_0_STAT] = s.statValue
+        } else if (s.statTypeNum === CLOTHING_DYE_STAT && s.statValue != null) {
+          rec.clothingDye = s.statValue
+        } else if (s.statTypeNum === ACCESSORY_DYE_STAT && s.statValue != null) {
+          rec.accessoryDye = s.statValue
+        } else if (s.statTypeNum === NAME_STAT && s.stringStatValue) {
+          rec.name = s.stringStatValue
+        }
+      }
+      recordsRef.current.set(objectId, rec)
+      probeDye(objectId, stats)
+    }
+
     const offBatch = window.overlay.onPacketBatch((packets: PacketEnvelope[]) => {
       for (const env of packets) {
         if (env.type === 'UpdatePacket') {
           const data = env.data as UpdateData | null
           for (const obj of data?.newObjects ?? []) {
-            const status = obj?.status
-            if (!status) continue
-            const rec = recordsRef.current.get(status.objectId) ?? { objectType: obj.objectType }
-            // objectType can be re-asserted; keep it current.
-            rec.objectType = obj.objectType
-            for (const s of status.stats ?? []) {
-              if (s.statTypeNum === SKIN_ID_STAT && s.statValue != null) {
-                rec.skin = s.statValue
-              } else if (
-                s.statTypeNum >= INVENTORY_0_STAT &&
-                s.statTypeNum <= INVENTORY_0_STAT + 3 &&
-                s.statValue != null
-              ) {
-                if (!rec.equipment) rec.equipment = [-1, -1, -1, -1]
-                rec.equipment[s.statTypeNum - INVENTORY_0_STAT] = s.statValue
-              } else if (s.statTypeNum === NAME_STAT && s.stringStatValue) {
-                rec.name = s.stringStatValue
-              }
-            }
-            recordsRef.current.set(status.objectId, rec)
-            probeDye(status.objectId, status.stats)
+            if (obj?.status) mergeStats(obj.status.objectId, obj.objectType, obj.status.stats)
           }
         } else if (env.type === 'NewTickPacket') {
           const nt = env.data as {
             status?: Array<{ objectId: number; stats?: StatEntry[] }>
           } | null
-          for (const st of nt?.status ?? []) probeDye(st.objectId, st.stats)
+          for (const st of nt?.status ?? []) mergeStats(st.objectId, undefined, st.stats)
         } else if (env.type === 'CreateSuccessPacket') {
           const id = (env.data as { objectId?: number } | null)?.objectId
           if (typeof id === 'number' && id > 0) localPlayerRef.current = id
@@ -153,10 +176,22 @@ export function EntityRegistryProvider({
       objectId == null ? null : (recordsRef.current.get(objectId)?.name ?? null),
     []
   )
+  const clothingDye = useCallback(
+    (objectId: number | null | undefined): number | null =>
+      objectId == null ? null : (recordsRef.current.get(objectId)?.clothingDye ?? null),
+    []
+  )
+  const accessoryDye = useCallback(
+    (objectId: number | null | undefined): number | null =>
+      objectId == null ? null : (recordsRef.current.get(objectId)?.accessoryDye ?? null),
+    []
+  )
   const localPlayerId = useCallback((): number | null => localPlayerRef.current, [])
 
   return (
-    <EntityContext.Provider value={{ objectType, skin, equipment, name, localPlayerId }}>
+    <EntityContext.Provider
+      value={{ objectType, skin, equipment, clothingDye, accessoryDye, name, localPlayerId }}
+    >
       {children}
     </EntityContext.Provider>
   )
