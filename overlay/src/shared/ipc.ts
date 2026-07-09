@@ -1,8 +1,10 @@
 /** Channel names shared between main and renderer over the Electron IPC bridge. */
 export const IPC = {
   bridgeStatus: 'bridge-status',
+  getBridgeStatus: 'get-bridge-status',
   packetBatch: 'packet-batch',
   interactiveChange: 'interactive-change',
+  attachSuccess: 'attach-success',
   getSettings: 'get-settings',
   saveSettings: 'save-settings',
   relaunch: 'relaunch-app'

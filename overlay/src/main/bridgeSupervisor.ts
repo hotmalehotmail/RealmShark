@@ -34,16 +34,21 @@ function isPortOpen(): Promise<boolean> {
  * e.g. the user launched it manually, or a previous overlay instance's child
  * is still running. Requires a `java` runtime on PATH; the bridge's own
  * capture step is what actually needs elevation, not this spawn.
+ *
+ * @param fake - passes --fake to the bridge, emitting synthetic packets instead
+ * of sniffing. Used on platforms where electron-overlay-window can't attach
+ * (i.e. anywhere but Windows/Linux) so the UI can still be exercised locally.
  */
-export async function ensureBridgeRunning(): Promise<void> {
+export async function ensureBridgeRunning(fake: boolean): Promise<void> {
   if (await isPortOpen()) {
     console.log('[bridge-supervisor] bridge already listening, not spawning')
     return
   }
 
   const path = jarPath()
-  console.log('[bridge-supervisor] spawning bridge:', path)
-  child = spawn('java', ['-jar', path], { stdio: 'pipe' })
+  const args = ['-jar', path, ...(fake ? ['--fake'] : [])]
+  console.log('[bridge-supervisor] spawning bridge: java', args.join(' '))
+  child = spawn('java', args, { stdio: 'pipe' })
 
   child.stdout?.on('data', (data) => process.stdout.write(`[bridge] ${data}`))
   child.stderr?.on('data', (data) => process.stderr.write(`[bridge] ${data}`))

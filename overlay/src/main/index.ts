@@ -1,9 +1,9 @@
-import { app, BrowserWindow, globalShortcut, ipcMain, nativeImage } from 'electron'
+import { app, BrowserWindow, globalShortcut, ipcMain, Menu, nativeImage } from 'electron'
 import { join } from 'path'
 import { electronApp, is } from '@electron-toolkit/utils'
 import { OverlayController, OVERLAY_WINDOW_OPTS } from 'electron-overlay-window'
 import icon from '../../resources/icon.png?asset'
-import { IPC, type SaveSettingsResult } from '../shared/ipc'
+import { IPC, type BridgeStatus, type SaveSettingsResult } from '../shared/ipc'
 import type { OverlaySettings } from '../shared/settings'
 import { startBridgeClient } from './bridgeClient'
 import { ensureBridgeRunning, stopBridge } from './bridgeSupervisor'
@@ -15,6 +15,10 @@ import { createTray, setTrayStatus } from './tray'
 // acceleration can break overlay transparency. https://github.com/electron/electron/issues/25153
 app.disableHardwareAcceleration()
 
+// Neither the overlay HUD nor the settings window needs the default
+// File/Edit/View/Window/Help menu bar - drop it app-wide.
+Menu.setApplicationMenu(null)
+
 // A second launch would spawn its own bridge.jar attempt and leave the first
 // instance's child process orphaned if this one exits uncleanly - only ever
 // allow one overlay (and one supervised bridge process) at a time.
@@ -22,8 +26,15 @@ if (!app.requestSingleInstanceLock()) {
   app.quit()
 }
 
+// electron-overlay-window can only attach to a real target window on Windows
+// or Linux (X11). Everywhere else (macOS during development, mainly) fall
+// back to a plain visible window and a simulated attach, so the UI can be
+// built/tested without the game - see createOverlayWindow() below.
+const supportsAttach = process.platform === 'win32' || process.platform === 'linux'
+
 let settings = loadSettings()
 let currentHotkey = settings.toggleHotkey
+let currentBridgeStatus: BridgeStatus = 'connecting'
 
 let overlayWindow: BrowserWindow
 let isInteractive = false
@@ -45,22 +56,39 @@ function createOverlayWindow(): void {
     overlayWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
-  // electron-overlay-window matches this with an exact strcmp, not a substring
-  // or regex - must match the live window title byte-for-byte, including case.
-  // Also: the library can only be attached once per process, so changing this
-  // requires a restart (see IPC.saveSettings handler below).
-  OverlayController.attachByTitle(overlayWindow, settings.gameWindowTitle, {
-    hasTitleBarOnMac: true
-  })
+  if (supportsAttach) {
+    // electron-overlay-window matches this with an exact strcmp, not a substring
+    // or regex - must match the live window title byte-for-byte, including case.
+    // Also: the library can only be attached once per process, so changing this
+    // requires a restart (see IPC.saveSettings handler below).
+    OverlayController.attachByTitle(overlayWindow, settings.gameWindowTitle, {
+      hasTitleBarOnMac: true
+    })
+    OverlayController.events.on('attach', () => {
+      overlayWindow.webContents.send(IPC.attachSuccess)
+    })
+  } else {
+    console.log(
+      '[overlay] platform has no window-attach support - showing a standalone window for local UI testing'
+    )
+    overlayWindow.setIgnoreMouseEvents(true)
+    overlayWindow.show()
+    setTimeout(() => overlayWindow.webContents.send(IPC.attachSuccess), 1000)
+  }
 }
 
 /** Flips the overlay between click-through (game gets input) and interactive (overlay gets input). */
 function toggleInteractive(): void {
   isInteractive = !isInteractive
-  if (isInteractive) {
-    OverlayController.activateOverlay()
+  if (supportsAttach) {
+    if (isInteractive) {
+      OverlayController.activateOverlay()
+    } else {
+      OverlayController.focusTarget()
+    }
   } else {
-    OverlayController.focusTarget()
+    overlayWindow.setIgnoreMouseEvents(!isInteractive)
+    if (isInteractive) overlayWindow.focus()
   }
   overlayWindow.webContents.send(IPC.interactiveChange, isInteractive)
 }
@@ -87,10 +115,11 @@ app.whenReady().then(() => {
     onOpenSettings: openConfigWindow
   })
 
-  void ensureBridgeRunning()
+  void ensureBridgeRunning(!supportsAttach)
 
   startBridgeClient({
     onStatus: (status) => {
+      currentBridgeStatus = status
       overlayWindow.webContents.send(IPC.bridgeStatus, status)
       setTrayStatus(status)
     },
@@ -98,6 +127,8 @@ app.whenReady().then(() => {
       overlayWindow.webContents.send(IPC.packetBatch, packets)
     }
   })
+
+  ipcMain.handle(IPC.getBridgeStatus, (): BridgeStatus => currentBridgeStatus)
 
   ipcMain.handle(IPC.getSettings, (): OverlaySettings => settings)
 
