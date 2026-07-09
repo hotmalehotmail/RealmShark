@@ -57,6 +57,13 @@ export interface EntityContextValue {
   characters: () => number[]
   /** The local player's objectId (CreateSuccessPacket / EnemyHitPacket.mainID), or null if not yet resolved. */
   localPlayerId: () => number | null
+  /**
+   * Subscribe to be called (coalesced to an animation frame) whenever a
+   * display-relevant field changes - a new/updated player's skin, equipment,
+   * dye, name, the local-player id, or an instance reset. Lets a panel re-render
+   * on change instead of polling. Returns an unsubscribe function.
+   */
+  subscribe: (cb: () => void) => () => void
 }
 
 export const EntityContext = createContext<EntityContextValue>({
@@ -67,7 +74,8 @@ export const EntityContext = createContext<EntityContextValue>({
   accessoryDye: () => null,
   name: () => null,
   characters: () => [],
-  localPlayerId: () => null
+  localPlayerId: () => null,
+  subscribe: () => () => {}
 })
 
 export function useEntityRegistry(): EntityContextValue {

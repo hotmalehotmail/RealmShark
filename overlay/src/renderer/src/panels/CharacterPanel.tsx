@@ -10,9 +10,6 @@ const PLAYER_SIZE: Record<PanelSize, number> = { sm: 40, md: 64, lg: 88 }
 /** Equipment-slot icon pixel size per panel size. */
 const SLOT_SIZE: Record<PanelSize, number> = { sm: 20, md: 28, lg: 36 }
 
-/** Re-read cadence, matching useDpsTracker - the registry is ref-backed and doesn't re-render on packets. */
-const REFRESH_MS = 500
-
 /**
  * Shows the local player: a large sprite (equipped skin if set, else the class
  * objectType), a row of the 4 equipped-slot icons (weapon/ability/armor/ring),
@@ -24,10 +21,8 @@ function CharacterPanel({ size }: PanelContentProps): React.JSX.Element {
   const entities = useEntityRegistry()
   const [, setTick] = useState(0)
 
-  useEffect(() => {
-    const interval = setInterval(() => setTick((n) => n + 1), REFRESH_MS)
-    return () => clearInterval(interval)
-  }, [])
+  // Re-render only when the registry reports a relevant change (event-driven).
+  useEffect(() => entities.subscribe(() => setTick((n) => n + 1)), [entities])
 
   const localId = entities.localPlayerId()
   if (localId == null) {

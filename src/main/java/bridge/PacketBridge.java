@@ -38,7 +38,8 @@ public class PacketBridge {
     private static final int DEFAULT_PORT = 47474;
     private static final int QUEUE_CAPACITY = 5000;   // drop-oldest guard so capture never blocks
     private static final long FLUSH_INTERVAL_MS = 33; // ~30 flushes/sec batch cadence
-    private static final long DPS_INTERVAL_MS = 250;  // computed-DPS snapshot cadence
+    private static final long DPS_INTERVAL_MS = 250;  // heartbeat DPS-snapshot cadence
+    private static final long DPS_COALESCE_MS = 50;   // min gap between damage-triggered snapshots
 
     private final BridgeServer server;
     private final PacketSerializer serializer = new PacketSerializer();
@@ -46,6 +47,10 @@ public class PacketBridge {
     private final DpsBroadcaster dps = new DpsBroadcaster();
     private final SpritePackService sprites = new SpritePackService();
     private final BlockingQueue<String> queue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
+    // Set on the sniffer thread when a damage packet lands, so the DPS scheduler
+    // pushes a fresh snapshot within DPS_COALESCE_MS instead of waiting a full tick.
+    private volatile boolean dpsDirty = false;
+    private volatile long lastDpsSendMs = 0;
 
     public PacketBridge(int port) {
         server = new BridgeServer(port);
@@ -105,8 +110,9 @@ public class PacketBridge {
                 if (names != null) enqueue(names);
             }
             // Feed the DPS engine (computes each player's damage from the same
-            // stream); snapshots are emitted on a separate cadence below.
-            dps.feed(packet);
+            // stream); snapshots are emitted by the scheduler below. Mark dirty
+            // on a damage packet so that scheduler pushes an update promptly.
+            if (dps.feed(packet)) dpsDirty = true;
         });
 
         // 2. Start the WebSocket server (spawns its own thread).
@@ -120,12 +126,20 @@ public class PacketBridge {
         });
         flusher.scheduleAtFixedRate(this::flush, FLUSH_INTERVAL_MS, FLUSH_INTERVAL_MS, TimeUnit.MILLISECONDS);
 
-        // Emit a computed-DPS snapshot on a slower cadence (it aggregates the
-        // whole fight, so 500ms is plenty and keeps message volume low).
+        // Emit computed-DPS snapshots: promptly (within DPS_COALESCE_MS) after a
+        // damage packet so total-damage numbers feel real-time, and otherwise as
+        // a heartbeat every DPS_INTERVAL_MS so the fight-average DPS keeps
+        // trending as the fight timer grows. Coalesced so a burst of damage
+        // packets can't flood the socket.
         flusher.scheduleAtFixedRate(() -> {
+            long now = System.currentTimeMillis();
+            boolean heartbeat = now - lastDpsSendMs >= DPS_INTERVAL_MS;
+            if (!dpsDirty && !heartbeat) return;
+            dpsDirty = false;
+            lastDpsSendMs = now;
             String json = dps.snapshotJson();
             if (json != null) enqueue(json);
-        }, DPS_INTERVAL_MS, DPS_INTERVAL_MS, TimeUnit.MILLISECONDS);
+        }, DPS_COALESCE_MS, DPS_COALESCE_MS, TimeUnit.MILLISECONDS);
 
         // Periodic engine diagnostic (every ~3s) so the Console panel shows why
         // self-DPS may be missing: worldPlayerId/player resolution + shoot/hit counts.

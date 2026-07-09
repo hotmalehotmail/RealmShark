@@ -40,7 +40,13 @@ public class DpsBroadcaster {
     }
 
     /** Feed one decoded packet into the engine (no-op for packet types DPS doesn't use). */
-    public void feed(Packet packet) {
+    /**
+     * @return true if this packet changed a player's damage total (an
+     * {@link EnemyHitPacket} or {@link DamagePacket}), so the caller can push a
+     * fresh DPS snapshot promptly instead of waiting for the periodic cadence.
+     */
+    public boolean feed(Packet packet) {
+        boolean damage = false;
         try {
             synchronized (engine) {
                 if (packet instanceof MapInfoPacket) {
@@ -58,8 +64,10 @@ public class DpsBroadcaster {
                     engine.serverPlayerShoot((ServerPlayerShootPacket) packet);
                 } else if (packet instanceof EnemyHitPacket) {
                     engine.enemtyHit((EnemyHitPacket) packet);
+                    damage = true;
                 } else if (packet instanceof DamagePacket) {
                     engine.damage((DamagePacket) packet);
+                    damage = true;
                 }
             }
         } catch (Throwable t) {
@@ -67,6 +75,7 @@ public class DpsBroadcaster {
             System.out.println("[bridge] dps engine feed error: " + t);
             if (System.getenv("DPS_TRACE") != null) t.printStackTrace();
         }
+        return damage;
     }
 
     /**

@@ -53,32 +53,56 @@ export function EntityRegistryProvider({
 }): React.JSX.Element {
   const recordsRef = useRef<Map<number, EntityRecord>>(new Map())
   const localPlayerRef = useRef<number | null>(null)
+  const listenersRef = useRef<Set<() => void>>(new Set())
+  const notifyPending = useRef(false)
+
+  const subscribe = useCallback((cb: () => void): (() => void) => {
+    listenersRef.current.add(cb)
+    return () => {
+      listenersRef.current.delete(cb)
+    }
+  }, [])
 
   useEffect(() => {
+    // Coalesce a burst of packets into one notification per animation frame.
+    const scheduleNotify = (): void => {
+      if (notifyPending.current) return
+      notifyPending.current = true
+      requestAnimationFrame(() => {
+        notifyPending.current = false
+        for (const cb of listenersRef.current) cb()
+      })
+    }
+
     const clear = (): void => {
       recordsRef.current.clear()
       localPlayerRef.current = null
+      scheduleNotify()
     }
 
     // Merge a stat set into an objectId's record. Stats arrive as deltas from
     // both UpdatePacket (new objects) and NewTickPacket (ongoing changes), so we
     // merge, keeping the last known value per field. objectType is only known
-    // from UpdatePacket; a NewTick for an object we haven't created yet is skipped.
+    // from UpdatePacket; a NewTick for an object we haven't created yet is
+    // skipped. Returns true if a display-relevant field (skin/equipment/dye/
+    // name) changed, so the caller can notify subscribers.
     const mergeStats = (
       objectId: number,
       objectType: number | undefined,
       stats?: StatEntry[]
-    ): void => {
+    ): boolean => {
       let rec = recordsRef.current.get(objectId)
       if (!rec) {
-        if (objectType == null) return
+        if (objectType == null) return false
         rec = { objectType }
       } else if (objectType != null) {
         rec.objectType = objectType
       }
+      let changed = false
       for (const s of stats ?? []) {
         if (s.statTypeNum === SKIN_ID_STAT && s.statValue != null) {
           rec.skin = s.statValue
+          changed = true
         } else if (
           s.statTypeNum >= INVENTORY_0_STAT &&
           s.statTypeNum <= INVENTORY_0_STAT + 3 &&
@@ -86,39 +110,56 @@ export function EntityRegistryProvider({
         ) {
           if (!rec.equipment) rec.equipment = [-1, -1, -1, -1]
           rec.equipment[s.statTypeNum - INVENTORY_0_STAT] = s.statValue
+          changed = true
         } else if (s.statTypeNum === CLOTHING_DYE_STAT && s.statValue != null) {
           rec.clothingDye = s.statValue
+          changed = true
         } else if (s.statTypeNum === ACCESSORY_DYE_STAT && s.statValue != null) {
           rec.accessoryDye = s.statValue
+          changed = true
         } else if (s.statTypeNum === NAME_STAT && s.stringStatValue) {
           rec.name = s.stringStatValue
+          changed = true
         }
       }
       recordsRef.current.set(objectId, rec)
+      return changed
     }
 
     const offBatch = window.overlay.onPacketBatch((packets: PacketEnvelope[]) => {
+      let changed = false
       for (const env of packets) {
         if (env.type === 'UpdatePacket') {
           const data = env.data as UpdateData | null
           for (const obj of data?.newObjects ?? []) {
-            if (obj?.status) mergeStats(obj.status.objectId, obj.objectType, obj.status.stats)
+            if (obj?.status)
+              changed = mergeStats(obj.status.objectId, obj.objectType, obj.status.stats) || changed
           }
         } else if (env.type === 'NewTickPacket') {
           const nt = env.data as {
             status?: Array<{ objectId: number; stats?: StatEntry[] }>
           } | null
-          for (const st of nt?.status ?? []) mergeStats(st.objectId, undefined, st.stats)
+          for (const st of nt?.status ?? [])
+            changed = mergeStats(st.objectId, undefined, st.stats) || changed
         } else if (env.type === 'CreateSuccessPacket') {
           const id = (env.data as { objectId?: number } | null)?.objectId
-          if (typeof id === 'number' && id > 0) localPlayerRef.current = id
+          // Guard on an actual change: EnemyHitPacket below arrives every hit, so
+          // only flag when the local-player id is first resolved or changes.
+          if (typeof id === 'number' && id > 0 && localPlayerRef.current !== id) {
+            localPlayerRef.current = id
+            changed = true
+          }
         } else if (env.type === 'EnemyHitPacket') {
           const main = (env.data as { mainID?: number } | null)?.mainID
-          if (typeof main === 'number' && main > 0) localPlayerRef.current = main
+          if (typeof main === 'number' && main > 0 && localPlayerRef.current !== main) {
+            localPlayerRef.current = main
+            changed = true
+          }
         } else if (env.type === 'MapInfoPacket') {
           clear()
         }
       }
+      if (changed) scheduleNotify()
     })
     const offDetach = window.overlay.onOverlayDetach(clear)
     return () => {
@@ -179,7 +220,8 @@ export function EntityRegistryProvider({
         accessoryDye,
         name,
         characters,
-        localPlayerId
+        localPlayerId,
+        subscribe
       }}
     >
       {children}

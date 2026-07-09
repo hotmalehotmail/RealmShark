@@ -10,10 +10,6 @@ const CHAR_SIZE: Record<PanelSize, number> = { sm: 40, md: 52, lg: 64 }
 /** Equipment-slot icon pixel size per panel size. */
 const SLOT_SIZE: Record<PanelSize, number> = { sm: 16, md: 20, lg: 24 }
 
-// Re-read cadence. The EntityRegistry is ref-backed (no re-render on packets),
-// so we poll it, matching the DPS panel's 200ms.
-const REFRESH_MS = 200
-
 /**
  * Lists every character (player) in the current instance - their dyed sprite,
  * username, and equipped items - resolved through the shared EntityRegistry.
@@ -25,10 +21,9 @@ function InstancePanel({ size }: PanelContentProps): React.JSX.Element {
   const entities = useEntityRegistry()
   const [, setTick] = useState(0)
 
-  useEffect(() => {
-    const interval = setInterval(() => setTick((n) => n + 1), REFRESH_MS)
-    return () => clearInterval(interval)
-  }, [])
+  // Re-render only when the registry reports a relevant change (event-driven),
+  // instead of polling on a timer.
+  useEffect(() => entities.subscribe(() => setTick((n) => n + 1)), [entities])
 
   const localId = entities.localPlayerId()
   const ids = entities.characters().sort((a, b) => {
