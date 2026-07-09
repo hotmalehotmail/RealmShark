@@ -1,0 +1,83 @@
+import { useEffect, useRef, useState } from 'react'
+import type { PanelInstance } from '../../../shared/panels'
+import type { SizePx } from './anchor'
+import PanelFrame, { SIZE_CYCLE } from './PanelFrame'
+import { PANEL_REGISTRY } from './registry'
+
+const SAVE_DEBOUNCE_MS = 500
+
+function defaultLayout(): PanelInstance[] {
+  return [
+    { id: 'status', type: 'status', anchor: { pos: 'tl', x: 2, y: 2 }, size: 'md', zIndex: 1 },
+    { id: 'dps', type: 'dps', anchor: { pos: 'tl', x: 2, y: 20 }, size: 'md', zIndex: 2 }
+  ]
+}
+
+function windowSize(): SizePx {
+  return { width: window.innerWidth, height: window.innerHeight }
+}
+
+function PanelCanvas(): React.JSX.Element {
+  const [panels, setPanels] = useState<PanelInstance[]>([])
+  const [canvasSize, setCanvasSize] = useState<SizePx>(windowSize)
+  const loadedRef = useRef(false)
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+  useEffect(() => {
+    window.overlay.getPanelLayout().then((saved) => {
+      setPanels(saved && saved.length > 0 ? saved : defaultLayout())
+      loadedRef.current = true
+    })
+
+    const handleResize = (): void => setCanvasSize(windowSize())
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  useEffect(() => {
+    // Skip saving the very first render (before the initial load resolves),
+    // so we never overwrite a saved layout with the pre-load empty array.
+    if (!loadedRef.current) return
+    clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(() => {
+      window.overlay.savePanelLayout(panels)
+    }, SAVE_DEBOUNCE_MS)
+    return () => clearTimeout(saveTimer.current)
+  }, [panels])
+
+  const updatePanel = (id: string, patch: Partial<PanelInstance>): void => {
+    setPanels((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)))
+  }
+
+  const bringToTop = (id: string): void => {
+    setPanels((prev) => {
+      const maxZ = Math.max(0, ...prev.map((p) => p.zIndex))
+      return prev.map((p) => (p.id === id && p.zIndex !== maxZ ? { ...p, zIndex: maxZ + 1 } : p))
+    })
+  }
+
+  return (
+    <div className="relative h-full w-full">
+      {panels.map((panel) => {
+        const spec = PANEL_REGISTRY[panel.type]
+        if (!spec) return null
+        return (
+          <PanelFrame
+            key={panel.id}
+            panel={panel}
+            spec={spec}
+            canvasSize={canvasSize}
+            onDrag={(id, x, y) => updatePanel(id, { anchor: { pos: 'tl', x, y } })}
+            onCycleSize={(id) => {
+              const current = panels.find((p) => p.id === id)
+              if (current) updatePanel(id, { size: SIZE_CYCLE[current.size] })
+            }}
+            onBringToTop={bringToTop}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
+export default PanelCanvas

@@ -4,10 +4,12 @@ import { electronApp, is } from '@electron-toolkit/utils'
 import { OverlayController, OVERLAY_WINDOW_OPTS } from 'electron-overlay-window'
 import icon from '../../resources/icon.png?asset'
 import { IPC, type BridgeStatus, type SaveSettingsResult } from '../shared/ipc'
+import type { PanelInstance } from '../shared/panels'
 import type { OverlaySettings } from '../shared/settings'
 import { startBridgeClient } from './bridgeClient'
 import { ensureBridgeRunning, stopBridge } from './bridgeSupervisor'
 import { openConfigWindow } from './configWindow'
+import { loadPanelLayout, persistPanelLayout } from './panelLayout'
 import { loadSettings, persistSettings } from './settings'
 import { createTray, setTrayStatus } from './tray'
 
@@ -164,6 +166,12 @@ app.whenReady().then(() => {
   ipcMain.handle(IPC.relaunch, () => {
     app.relaunch()
     app.exit(0)
+  })
+
+  ipcMain.handle(IPC.getPanelLayout, (): PanelInstance[] | null => loadPanelLayout())
+
+  ipcMain.handle(IPC.savePanelLayout, (_event, panels: PanelInstance[]) => {
+    persistPanelLayout(panels)
   })
 })
 
