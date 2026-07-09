@@ -104,21 +104,28 @@ function createOverlayWindow(): void {
 /** Flips the overlay between click-through (game gets input) and interactive (overlay gets input). */
 function toggleInteractive(): void {
   isInteractive = !isInteractive
-  if (supportsAttach) {
-    if (isInteractive) {
+  if (isInteractive) {
+    // Become focusable first, then take focus.
+    overlayWindow.setFocusable(true)
+    if (supportsAttach) {
       OverlayController.activateOverlay()
     } else {
-      OverlayController.focusTarget()
+      overlayWindow.setIgnoreMouseEvents(false)
+      overlayWindow.focus()
     }
   } else {
-    overlayWindow.setIgnoreMouseEvents(!isInteractive)
-    if (isInteractive) overlayWindow.focus()
+    // Hand input back to the game. Drop focusability and actively release our
+    // own focus (blur) BEFORE focusing the target, so the OS doesn't bounce
+    // focus back to the overlay - otherwise the game stays unfocused and the
+    // user has to click it to regain keyboard control.
+    overlayWindow.setFocusable(false)
+    overlayWindow.blur()
+    if (supportsAttach) {
+      OverlayController.focusTarget()
+    } else {
+      overlayWindow.setIgnoreMouseEvents(true)
+    }
   }
-  // A focusable window can end up holding OS keyboard focus (e.g. right after
-  // activateOverlay()'s own .focus() call above) even once mouse events are
-  // passed through again - without this, keystrokes meant for the game can
-  // keep going to the (invisible) overlay after toggling back to click-through.
-  overlayWindow.setFocusable(isInteractive)
   overlayWindow.webContents.send(IPC.interactiveChange, isInteractive)
 }
 
