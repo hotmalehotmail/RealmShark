@@ -18,6 +18,20 @@ function defaultLayout(): PanelInstance[] {
   ]
 }
 
+// A saved layout is authoritative for the panels it contains (user moved/
+// resized them), but panel types added in a later version won't be in an
+// older panels.json. Without this, a newly-added default panel (e.g. the
+// console) would never appear for existing users on upgrade - only on a
+// fresh install or after clearing panels.json. So we keep every saved panel
+// and append any default panel whose id isn't present yet.
+function mergeWithDefaults(saved: PanelInstance[] | null | undefined): PanelInstance[] {
+  const defaults = defaultLayout()
+  if (!saved || saved.length === 0) return defaults
+  const savedIds = new Set(saved.map((p) => p.id))
+  const missing = defaults.filter((p) => !savedIds.has(p.id))
+  return missing.length > 0 ? [...saved, ...missing] : saved
+}
+
 function windowSize(): SizePx {
   return { width: window.innerWidth, height: window.innerHeight }
 }
@@ -30,7 +44,7 @@ function PanelCanvas(): React.JSX.Element {
 
   useEffect(() => {
     window.overlay.getPanelLayout().then((saved) => {
-      setPanels(saved && saved.length > 0 ? saved : defaultLayout())
+      setPanels(mergeWithDefaults(saved))
       loadedRef.current = true
     })
 

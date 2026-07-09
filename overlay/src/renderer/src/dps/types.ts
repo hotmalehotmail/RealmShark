@@ -54,6 +54,24 @@ export interface ServerPlayerShootPacketData {
   summonerId: number
 }
 
+/**
+ * packets/outgoing/EnemyHitPacket.java: sent by the *local* client (outgoing
+ * direction) every time the player's own projectile hits an enemy - so it's
+ * emitted constantly during combat and only ever by the local machine. This
+ * makes it a far more reliable local-player signal than CreateSuccessPacket
+ * (which is sent only once, at map load, and is missed entirely if the sniffer
+ * attaches mid-instance). `mainID` is the main (local) player hitting the
+ * target; `shooterID` is the actual shooter (a pet/minion for summon hits,
+ * else the same as the player); `targetId` is the enemy being hit.
+ */
+export interface EnemyHitPacketData {
+  bulletId: number
+  targetId: number
+  shooterID: number
+  kill: boolean
+  mainID: number
+}
+
 export interface PlayerDps {
   objectId: number
   name: string

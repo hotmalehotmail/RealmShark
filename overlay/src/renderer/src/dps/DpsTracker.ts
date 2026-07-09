@@ -3,6 +3,7 @@ import {
   NAME_STAT_TYPE_NUM,
   type CreateSuccessPacketData,
   type DamagePacketData,
+  type EnemyHitPacketData,
   type PlayerDps,
   type ServerPlayerShootPacketData,
   type UpdatePacketData
@@ -24,6 +25,7 @@ const RELEVANT_TYPES = [
   'MapInfoPacket',
   'UpdatePacket',
   'ServerPlayerShootPacket',
+  'EnemyHitPacket',
   'DamagePacket'
 ] as const
 
@@ -52,6 +54,13 @@ export const EMPTY_SNAPSHOT: DpsSnapshot = { targetId: null, targetName: '', row
  * also be reset externally when the game closes (electron-overlay-window's
  * "detach" event) - both wipe the same state, just triggered from different
  * places.
+ *
+ * The local player's objectId is resolved from two sources: CreateSuccessPacket
+ * (authoritative but sent only once, at map load - missed if we attach
+ * mid-instance) and EnemyHitPacket.mainID (an outgoing packet emitted on every
+ * one of our hits, so it re-establishes identity continuously). The latter is
+ * what makes DPS work when the sniffer attaches after the player is already
+ * in-game; see ingestEnemyHit.
  */
 export class DpsTracker {
   private entityNames = new Map<number, string>()
@@ -71,7 +80,7 @@ export class DpsTracker {
       switch (envelope.type) {
         case 'CreateSuccessPacket': {
           this.localPlayerId = (envelope.data as CreateSuccessPacketData).objectId
-          dlog('local player id =', this.localPlayerId)
+          dlog('local player id =', this.localPlayerId, '(from CreateSuccessPacket)')
           break
         }
         case 'MapInfoPacket':
@@ -83,6 +92,9 @@ export class DpsTracker {
           break
         case 'ServerPlayerShootPacket':
           this.ingestShoot(envelope.data as ServerPlayerShootPacketData)
+          break
+        case 'EnemyHitPacket':
+          this.ingestEnemyHit(envelope.data as EnemyHitPacketData)
           break
         case 'DamagePacket':
           this.ingestDamage(envelope.data as DamagePacketData, envelope.time)
@@ -126,6 +138,32 @@ export class DpsTracker {
     // pets/minions/traps acting on a player's behalf carry a nonzero owner.
     if (data.summonerId !== 0) {
       this.minionOwners.set(data.ownerId, data.summonerId)
+    }
+  }
+
+  /**
+   * The local player hit an enemy (outgoing packet, so this fires only on our
+   * own machine). `mainID` is the local player - a live, continuously-emitted
+   * identity signal that works even when we attached mid-instance and never
+   * saw the one-shot CreateSuccessPacket. `targetId` is what we're currently
+   * attacking, so it also gives us the focus target directly, without having
+   * to wait for a DamagePacket to match our (possibly still-unknown) id.
+   */
+  private ingestEnemyHit(data: EnemyHitPacketData): void {
+    // Prefer mainID (always the player, even for pet/minion hits); fall back to
+    // shooterID if a client build ever sends mainID as 0/absent.
+    const playerId = Number.isFinite(data.mainID) && data.mainID > 0 ? data.mainID : data.shooterID
+    if (Number.isFinite(playerId) && playerId > 0 && playerId !== this.localPlayerId) {
+      dlog('local player id =', playerId, '(from EnemyHitPacket)')
+      this.localPlayerId = playerId
+    }
+    if (Number.isFinite(data.targetId) && this.focusTargetId !== data.targetId) {
+      dlog(
+        'focus target ->',
+        data.targetId,
+        `(${this.nameOf(data.targetId)}) (from EnemyHitPacket)`
+      )
+      this.focusTargetId = data.targetId
     }
   }
 

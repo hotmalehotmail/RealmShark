@@ -11,6 +11,7 @@ import packets.incoming.DamagePacket;
 import packets.incoming.MapInfoPacket;
 import packets.incoming.ServerPlayerShootPacket;
 import packets.incoming.UpdatePacket;
+import packets.outgoing.EnemyHitPacket;
 import packets.packetcapture.register.Register;
 
 import java.util.Random;
@@ -24,8 +25,11 @@ import java.util.Random;
  * NAME_STAT, same shape a real client sees on entering a map), a
  * {@link CreateSuccessPacket} assigning the local player identity to the
  * first roster member, a {@link ServerPlayerShootPacket} establishing a fake
- * pet owned by the local player (to exercise minion-damage attribution), and
- * loops {@link DamagePacket}s against two distinct fake enemies attributed
+ * pet owned by the local player (to exercise minion-damage attribution),
+ * an outgoing {@link EnemyHitPacket} every tick (the local player hitting an
+ * enemy - the reliable, continuously-emitted local-player and focus-target
+ * signal that does not depend on catching the one-shot CreateSuccessPacket),
+ * and loops {@link DamagePacket}s against two distinct fake enemies attributed
  * to random roster members or the fake pet - enough surface to exercise
  * per-enemy DPS tracking, local-player focus-target attribution, minion
  * attribution, and periodic instance resets (a {@link MapInfoPacket} every
@@ -76,6 +80,12 @@ public class FakePacketSource {
                 Register.INSTANCE.emitPacketLogs(rosterUpdate());
                 Register.INSTANCE.emitPacketLogs(petOwnership());
             }
+            // The local player hitting an enemy, sent every tick like a real
+            // client does during sustained fire. This is what lets the DPS
+            // tracker resolve the local player (EnemyHitPacket.mainID) and the
+            // focus target without depending on the one-shot CreateSuccessPacket.
+            // Swap targets every ~20 ticks to exercise focus-target switching.
+            Register.INSTANCE.emitPacketLogs(localPlayerHit(ENEMY_IDS[(tick / 20) % ENEMY_IDS.length]));
             Register.INSTANCE.emitPacketLogs(randomDamage());
             tick++;
             try {
@@ -93,6 +103,22 @@ public class FakePacketSource {
         p.objectId = LOCAL_PLAYER_ID;
         p.charId = 1;
         p.str = "";
+        return p;
+    }
+
+    /**
+     * The local player landing a hit on an enemy - an outgoing packet a real
+     * client sends on every one of its own hits. mainID (and shooterID, for a
+     * direct player shot) is the local player's objectId; targetId is the enemy.
+     */
+    private EnemyHitPacket localPlayerHit(int target) {
+        EnemyHitPacket p = new EnemyHitPacket();
+        p.time = 0;
+        p.bulletId = (short) rng.nextInt(256);
+        p.shooterID = LOCAL_PLAYER_ID;
+        p.targetId = target;
+        p.kill = false;
+        p.mainID = LOCAL_PLAYER_ID;
         return p;
     }
 
