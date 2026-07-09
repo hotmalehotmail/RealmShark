@@ -2,6 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { SpritePack } from '../../../shared/ipc'
 import { SpriteContext } from './context'
 
+// Cloth textiles render finer than the low-res body sprite (their weave is
+// smaller than a body pixel), so for textile dyes we subdivide each body pixel
+// this many times and tile the pattern in that finer space. Tuning knob: larger
+// = finer/smaller pattern pixels. ~16 matches the in-game weave (roughly one
+// 10x10 pattern tile per body pixel).
+const TEXTILE_SUB = 16
+
 /** Crop an atlas region into an ImageData, for pixel-level dye compositing. */
 function regionImageData(
   img: ImageBitmap | HTMLImageElement,
@@ -199,16 +206,17 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       const mask = regionImageData(maskImg, mx, my, mw, mh)
       if (!base || !mask) return null
 
-      // The dye mask is often higher resolution than the low-res body sprite,
-      // and the game renders the cloth at that finer resolution. So composite at
-      // the larger of the two, sampling the base (nearest) and mask each at their
-      // own scale, rather than collapsing everything to the base's resolution.
-      const ow = Math.max(w, mw)
-      const oh = Math.max(h, mh)
+      // Textiles render their weave finer than a body pixel, so for textile dyes
+      // we subdivide each body pixel (SUB) and tile the pattern in that finer
+      // output space; the body / region outline stays blocky (base + mask are
+      // sampled at their own low resolution). Solids are unaffected (SUB=1).
+      const SUB = clothing?.kind === 'textile' || accessory?.kind === 'textile' ? TEXTILE_SUB : 1
+      const ow = Math.max(w, mw) * SUB
+      const oh = Math.max(h, mh) * SUB
       if (!dyeDiagRef.current.has('dim:' + baseType)) {
         dyeDiagRef.current.add('dim:' + baseType)
         console.log(
-          `[dye-dim] base=${baseType} baseSprite=${w}x${h} mask=${mw}x${mh} out=${ow}x${oh}`
+          `[dye-dim] base=${baseType} baseSprite=${w}x${h} mask=${mw}x${mh} sub=${SUB} out=${ow}x${oh}`
         )
       }
       const out = new ImageData(ow, oh)
