@@ -146,6 +146,21 @@ public class SpritePackService {
         System.out.println(
             "[sprite-pack] built " + v + ": table=" + table.size() + " maskTable=" + maskTable.size());
 
+        // TEMP [dye-diag] Where do character dye masks actually live? Dump the
+        // set of sprite groups that carry any mask, plus the per-index mask map
+        // for the player class the user is on (804) and its base texture slot.
+        try {
+            System.out.println("[dye-diag] " + sfb.describeAllMaskGroups());
+            for (int classId : new int[]{804, 782, 768}) {
+                String cn = IdToAsset.getObjectTextureName(classId, 0);
+                int ci = (cn == null) ? -1 : IdToAsset.getObjectTextureIndex(classId, 0);
+                System.out.println("[dye-diag] class " + classId + " tex=" + cn + " index=" + ci
+                    + " | " + (cn == null ? "<no texture>" : sfb.describeGroupMasks(cn)));
+            }
+        } catch (Exception e) {
+            System.out.println("[dye-diag] failed: " + e);
+        }
+
         cachedVersion = v;
         cachedPackJson = gson.toJson(root);
         return cachedPackJson;

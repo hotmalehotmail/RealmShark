@@ -152,6 +152,36 @@ public class SpriteFlatBuffer {
         };
     }
 
+    // TEMP [dye-diag] Which sprite groups carry any mask, and how many. Reveals
+    // whether character/player groups have masks at all, or masks live only on
+    // some other group (which would explain a base sprite lacking a mask).
+    public String describeAllMaskGroups() {
+        StringBuilder sb = new StringBuilder();
+        int total = 0;
+        for (java.util.Map.Entry<String, HashMap<Integer, Sprite>> ge : sprites.entrySet()) {
+            int c = 0;
+            for (Sprite s : ge.getValue().values()) if (s.maskPositionW > 0) c++;
+            if (c > 0) {
+                sb.append(ge.getKey()).append('=').append(c).append(' ');
+                total += c;
+            }
+        }
+        return "groupsWithMask total=" + total + " :: " + sb;
+    }
+
+    // TEMP [dye-diag] Per-index mask presence within one sprite group, so we can
+    // see if the mask is simply on a different index than slot 0.
+    public String describeGroupMasks(String name) {
+        HashMap<Integer, Sprite> list = sprites.get(name);
+        if (list == null) return name + ": <no such group>";
+        java.util.TreeSet<Integer> maskIdx = new java.util.TreeSet<>();
+        for (java.util.Map.Entry<Integer, Sprite> e : list.entrySet()) {
+            if (e.getValue().maskPositionW > 0) maskIdx.add(e.getKey());
+        }
+        return name + ": indices=" + new java.util.TreeSet<>(list.keySet())
+            + " maskIndices=" + maskIdx;
+    }
+
     /**
      * Retrieves sprite most common color.
      *
