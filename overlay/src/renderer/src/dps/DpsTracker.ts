@@ -64,6 +64,8 @@ export const EMPTY_SNAPSHOT: DpsSnapshot = { targetId: null, targetName: '', row
  */
 export class DpsTracker {
   private entityNames = new Map<number, string>()
+  /** Enemy/NPC id -> name, resolved bridge-side from game assets (objectNames envelope). */
+  private objectNames = new Map<number, string>()
   private targets = new Map<number, Map<number, HitEvent[]>>()
   private focusTargetId: number | null = null
   private localPlayerId: number | null = null
@@ -89,6 +91,9 @@ export class DpsTracker {
           break
         case 'UpdatePacket':
           this.ingestUpdate(envelope.data as UpdatePacketData)
+          break
+        case 'objectNames':
+          this.ingestObjectNames(envelope.data as Record<string, string>)
           break
         case 'ServerPlayerShootPacket':
           this.ingestShoot(envelope.data as ServerPlayerShootPacketData)
@@ -131,6 +136,23 @@ export class DpsTracker {
         this.entityNames.set(obj.status.objectId, nameStat.stringStatValue)
       }
     }
+  }
+
+  /**
+   * Enemy/NPC names resolved bridge-side from the game's assets (keyed by
+   * objectId as a string on the wire). Players are named via NAME_STAT instead,
+   * which nameOf() prefers, so these never override a real player name.
+   */
+  private ingestObjectNames(data: Record<string, string>): void {
+    let added = 0
+    for (const [id, name] of Object.entries(data)) {
+      const objectId = Number(id)
+      if (Number.isFinite(objectId) && !this.objectNames.has(objectId)) {
+        this.objectNames.set(objectId, name)
+        added++
+      }
+    }
+    if (added > 0) dlog('resolved', added, 'object name(s), e.g.', Object.values(data)[0])
   }
 
   private ingestShoot(data: ServerPlayerShootPacketData): void {
@@ -201,6 +223,7 @@ export class DpsTracker {
   /** Wipe all tracked state - call on instance change (handled internally) or the game closing. */
   reset(): void {
     this.entityNames.clear()
+    this.objectNames.clear()
     this.targets.clear()
     this.focusTargetId = null
     this.localPlayerId = null
@@ -265,6 +288,8 @@ export class DpsTracker {
   }
 
   private nameOf(id: number): string {
-    return this.entityNames.get(id) ?? `#${id}`
+    // Player NAME_STAT wins over an asset-resolved name (a player object also
+    // has an objectType); enemies only have the latter; else fall back to id.
+    return this.entityNames.get(id) ?? this.objectNames.get(id) ?? `#${id}`
   }
 }

@@ -42,6 +42,10 @@ public class FakePacketSource {
     private static final int LOCAL_PLAYER_ID = ROSTER_IDS[0]; // "you" are Alice
 
     private static final int[] ENEMY_IDS = {100_000, 100_001};
+    // objectTypes for the two fake enemies - resolved to names via IdToAsset
+    // (see the synthetic assets/ObjectID.list used for local testing). Unlike
+    // players, enemies carry no NAME_STAT, so their name comes from the type.
+    private static final int[] ENEMY_TYPES = {1900, 1901};
 
     // A fake pet owned by the local player, to exercise minion-damage attribution.
     private static final int PET_ID = 50;
@@ -66,6 +70,7 @@ public class FakePacketSource {
             // them up within a few seconds, not never.
             if (tick % 15 == 0) {
                 Register.INSTANCE.emitPacketLogs(rosterUpdate());
+                Register.INSTANCE.emitPacketLogs(enemyUpdate());
                 Register.INSTANCE.emitPacketLogs(petOwnership());
             }
             // Simulate periodic instance transitions to exercise the DPS tracker's reset.
@@ -78,6 +83,7 @@ public class FakePacketSource {
                 Register.INSTANCE.emitPacketLogs(mapInfo());
                 Register.INSTANCE.emitPacketLogs(createSuccess());
                 Register.INSTANCE.emitPacketLogs(rosterUpdate());
+                Register.INSTANCE.emitPacketLogs(enemyUpdate());
                 Register.INSTANCE.emitPacketLogs(petOwnership());
             }
             // The local player hitting an enemy, sent every tick like a real
@@ -158,6 +164,34 @@ public class FakePacketSource {
 
             ObjectData obj = new ObjectData();
             obj.objectType = 0x0300; // arbitrary player-class-ish id, not read by the UI
+            obj.status = status;
+            p.newObjects[i] = obj;
+        }
+        return p;
+    }
+
+    /**
+     * Introduces the two fake enemies as map objects carrying an objectType but
+     * no NAME_STAT, exactly as the real client sees a monster. The bridge's
+     * ObjectNames resolver turns their objectType into a display name so the
+     * DPS panel can show a readable target instead of the raw id.
+     */
+    private UpdatePacket enemyUpdate() {
+        UpdatePacket p = new UpdatePacket();
+        p.levelType = 0;
+        p.pos = new WorldPosData();
+        p.tiles = new GroundTileData[0];
+        p.drops = new int[0];
+
+        p.newObjects = new ObjectData[ENEMY_IDS.length];
+        for (int i = 0; i < ENEMY_IDS.length; i++) {
+            ObjectStatusData status = new ObjectStatusData();
+            status.objectId = ENEMY_IDS[i];
+            status.pos = new WorldPosData();
+            status.stats = new StatData[0]; // no NAME_STAT: named via objectType
+
+            ObjectData obj = new ObjectData();
+            obj.objectType = ENEMY_TYPES[i];
             obj.status = status;
             p.newObjects[i] = obj;
         }

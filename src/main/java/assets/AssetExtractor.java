@@ -102,6 +102,26 @@ public class AssetExtractor {
         }
     }
 
+    /**
+     * Extraction path for non-GUI callers such as the WebSocket bridge - the
+     * same work {@link #checkForExtraction} does, minus the Swing progress
+     * dialog. No-ops when the assets are already current. Reads the installed
+     * game's resources.assets, so it throws if the game isn't installed / the
+     * path is wrong; callers are expected to run this off-thread and catch
+     * {@link Throwable} (a missing game must not take the bridge down).
+     *
+     * @param version build version tag, mixed into the freshness check.
+     */
+    public static void extractHeadless(String version) throws Throwable {
+        // extractAssetsFromXML() -> setDisplay() dereferences this; the GUI
+        // path sets it in main(). Instantiating it is windowless.
+        if (pane == null) pane = new JOptionPane();
+        String lastModifiedTime = lastEdited(version);
+        if (checkUpdateAssets(lastModifiedTime) == 0) return;
+        extractAssets(assetFile(), lastModifiedTime);
+        extractAssetsFromXML();
+    }
+
     public static String lastEdited(String version) throws IOException {
         File file = assetFile();
         BasicFileAttributes attr;

@@ -1,5 +1,6 @@
 package bridge;
 
+import packets.incoming.UpdatePacket;
 import packets.packetcapture.PacketProcessor;
 import packets.packetcapture.register.Register;
 
@@ -35,6 +36,7 @@ public class PacketBridge {
 
     private final BridgeServer server;
     private final PacketSerializer serializer = new PacketSerializer();
+    private final ObjectNames objectNames = new ObjectNames();
     private final BlockingQueue<String> queue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
 
     public PacketBridge(int port) {
@@ -60,13 +62,18 @@ public class PacketBridge {
     }
 
     private void start(boolean fake) {
+        // 0. Load enemy/NPC name assets (off-thread, best-effort) so UpdatePackets
+        //    can be annotated with human-readable object names.
+        objectNames.init(fake);
+
         // 1. Receive every decoded packet on the sniffer thread; serialize + enqueue.
+        //    UpdatePackets additionally emit a synthetic objectNames envelope so
+        //    the overlay can name enemies it would otherwise only know by id.
         Register.INSTANCE.registerAll(packet -> {
-            String json = serializer.toJson(packet);
-            if (!queue.offer(json)) {
-                // Queue full: drop oldest to keep capture non-blocking.
-                queue.poll();
-                queue.offer(json);
+            enqueue(serializer.toJson(packet));
+            if (packet instanceof UpdatePacket) {
+                String names = objectNames.envelopeFor((UpdatePacket) packet);
+                if (names != null) enqueue(names);
             }
         });
 
@@ -88,6 +95,14 @@ public class PacketBridge {
         } else {
             System.out.println("[bridge] starting sniffer (requires Npcap + running game)");
             new PacketProcessor().start();
+        }
+    }
+
+    /** Enqueue a JSON message, dropping the oldest if the queue is full so capture never blocks. */
+    private void enqueue(String json) {
+        if (!queue.offer(json)) {
+            queue.poll();
+            queue.offer(json);
         }
     }
 

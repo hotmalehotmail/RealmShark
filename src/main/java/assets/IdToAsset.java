@@ -177,6 +177,17 @@ public class IdToAsset {
     }
 
     /**
+     * Number of object entries currently loaded - lets a headless caller (e.g.
+     * the bridge) confirm assets actually loaded, since a missing asset file
+     * leaves the map effectively empty rather than throwing.
+     *
+     * @return count of loaded object entries.
+     */
+    public static int loadedObjectCount() {
+        return objectID.size();
+    }
+
+    /**
      * Method to grab the name of the tile resource.
      * If display name is not present, use the regular name.
      *
