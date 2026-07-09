@@ -27,9 +27,11 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
   const [lastPacket, setLastPacket] = useState<PacketEnvelope | null>(null)
   const [toggleHotkey, setToggleHotkey] = useState(DEFAULT_SETTINGS.toggleHotkey)
   const [heapMb, setHeapMb] = useState<number | null>(() => usedJsHeapMb())
+  const [version, setVersion] = useState('')
 
   useEffect(() => {
     window.overlay.getSettings().then((settings) => setToggleHotkey(settings.toggleHotkey))
+    window.overlay.getAppVersion().then(setVersion)
     window.overlay.getBridgeStatus().then(setStatus)
     const offStatus = window.overlay.onBridgeStatus(setStatus)
     const offBatch = window.overlay.onPacketBatch((packets) => {
@@ -47,7 +49,10 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
   return (
     <div className="flex h-full w-full flex-col text-sm text-white">
       <div className="flex items-center justify-between">
-        <span className="font-semibold tracking-wide">RealmShark</span>
+        <span className="flex items-baseline gap-1.5">
+          <span className="font-semibold tracking-wide">RealmShark</span>
+          {version && <span className="text-xs text-white/40 font-mono">v{version}</span>}
+        </span>
         <span className="flex items-center gap-1.5 text-xs text-white/70">
           <span className={`h-2 w-2 rounded-full ${STATUS_STYLES[status]}`} />
           {status}

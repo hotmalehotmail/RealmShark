@@ -164,6 +164,8 @@ app.whenReady().then(() => {
 
   ipcMain.handle(IPC.getSettings, (): OverlaySettings => settings)
 
+  ipcMain.handle(IPC.getAppVersion, (): string => app.getVersion())
+
   ipcMain.handle(IPC.saveSettings, (_event, next: OverlaySettings): SaveSettingsResult => {
     const titleChanged = next.gameWindowTitle !== settings.gameWindowTitle
     const hotkeyChanged = next.toggleHotkey !== currentHotkey
