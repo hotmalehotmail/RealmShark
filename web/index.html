@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RealmShark Bridge — Test</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0; font: 14px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+      background: #0e1116; color: #d7dde5;
+    }
+    header {
+      padding: 12px 16px; background: #161b22; border-bottom: 1px solid #232a33;
+      display: flex; gap: 20px; align-items: baseline; flex-wrap: wrap;
+    }
+    header h1 { font-size: 15px; margin: 0; color: #58a6ff; }
+    .stat { color: #8b949e; }
+    .stat b { color: #d7dde5; }
+    #dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: #f85149; }
+    #dot.on { background: #3fb950; }
+    #log {
+      padding: 8px 16px; overflow-y: auto; height: calc(100vh - 52px);
+    }
+    .row { padding: 2px 0; border-bottom: 1px solid #1b2027; white-space: pre-wrap; word-break: break-word; }
+    .in  { color: #79c0ff; }
+    .out { color: #ffa657; }
+    .type { font-weight: 600; }
+    .data { color: #8b949e; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>RealmShark Bridge</h1>
+    <span class="stat"><span id="dot"></span> <span id="status">connecting…</span></span>
+    <span class="stat">total <b id="total">0</b></span>
+    <span class="stat"><b id="rate">0</b>/s</span>
+  </header>
+  <div id="log"></div>
+
+  <script>
+    const URL = "ws://127.0.0.1:8080";
+    const MAX_ROWS = 300;
+
+    const $ = (id) => document.getElementById(id);
+    let total = 0, sinceTick = 0;
+
+    // Rolling packets/sec counter.
+    setInterval(() => { $("rate").textContent = sinceTick; sinceTick = 0; }, 1000);
+
+    function addRow(env) {
+      const row = document.createElement("div");
+      row.className = "row";
+      const dir = env.direction === "incoming" ? "in" : "out";
+      row.innerHTML =
+        `<span class="${dir}">${env.direction === "incoming" ? "◀" : "▶"}</span> ` +
+        `<span class="type">${env.type}</span> ` +
+        `<span class="data">${JSON.stringify(env.data)}</span>`;
+      const log = $("log");
+      log.appendChild(row);
+      while (log.childElementCount > MAX_ROWS) log.removeChild(log.firstChild);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function connect() {
+      const ws = new WebSocket(URL);
+      ws.onopen = () => {
+        $("dot").classList.add("on");
+        $("status").textContent = "connected " + URL;
+      };
+      ws.onclose = () => {
+        $("dot").classList.remove("on");
+        $("status").textContent = "disconnected — retrying…";
+        setTimeout(connect, 1000);
+      };
+      ws.onerror = () => ws.close();
+      ws.onmessage = (ev) => {
+        const msg = JSON.parse(ev.data);
+        const packets = msg.batch || [msg];
+        total += packets.length;
+        sinceTick += packets.length;
+        $("total").textContent = total;
+        for (const p of packets) addRow(p);
+      };
+    }
+    connect();
+  </script>
+</body>
+</html>

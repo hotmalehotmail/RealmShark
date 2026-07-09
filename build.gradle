@@ -31,6 +31,19 @@ dependencies {
     implementation 'com.ardikars.pcap:pcap-jdk7:1.4.2'
     implementation 'com.google.code.gson:gson:2.9.1'
     implementation 'com.google.flatbuffers:flatbuffers-java:23.5.26'
+    implementation 'org.java-websocket:Java-WebSocket:1.5.7'
+}
+
+// Run the WebSocket bridge without disturbing the library's main class.
+//   ./gradlew runBridge -Pargs="--fake"
+task runBridge(type: JavaExec) {
+    group = 'application'
+    description = 'Runs the WebSocket bridge (bridge.PacketBridge).'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'bridge.PacketBridge'
+    if (project.hasProperty('args')) {
+        args project.getProperty('args').split('\\s+')
+    }
 }
 
 mainClassName = applicationName.toLowerCase() + '.' + applicationName
