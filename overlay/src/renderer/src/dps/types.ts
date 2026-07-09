@@ -78,3 +78,24 @@ export interface PlayerDps {
   damage: number
   dps: number
 }
+
+/**
+ * The bridge's computed-DPS envelope ({type:"dps"}). The Java DpsEngine already
+ * did the weapon/ability/crucible damage math and per-player attribution, so the
+ * overlay just renders it. One entry per enemy the local user has hit.
+ */
+export interface BridgeDpsPlayer {
+  id: number
+  name: string
+  damage: number
+  dps: number
+}
+export interface BridgeDpsEnemy {
+  id: number
+  name: string
+  fightMs: number
+  players: BridgeDpsPlayer[]
+}
+export interface BridgeDpsData {
+  enemies: BridgeDpsEnemy[]
+}

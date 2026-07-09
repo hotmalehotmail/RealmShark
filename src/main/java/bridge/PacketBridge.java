@@ -33,10 +33,12 @@ public class PacketBridge {
     private static final int DEFAULT_PORT = 47474;
     private static final int QUEUE_CAPACITY = 5000;   // drop-oldest guard so capture never blocks
     private static final long FLUSH_INTERVAL_MS = 33; // ~30 flushes/sec batch cadence
+    private static final long DPS_INTERVAL_MS = 500;  // computed-DPS snapshot cadence
 
     private final BridgeServer server;
     private final PacketSerializer serializer = new PacketSerializer();
     private final ObjectNames objectNames = new ObjectNames();
+    private final DpsBroadcaster dps = new DpsBroadcaster();
     private final BlockingQueue<String> queue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
 
     public PacketBridge(int port) {
@@ -75,6 +77,9 @@ public class PacketBridge {
                 String names = objectNames.envelopeFor((UpdatePacket) packet);
                 if (names != null) enqueue(names);
             }
+            // Feed the DPS engine (computes each player's damage from the same
+            // stream); snapshots are emitted on a separate cadence below.
+            dps.feed(packet);
         });
 
         // 2. Start the WebSocket server (spawns its own thread).
@@ -87,6 +92,13 @@ public class PacketBridge {
             return t;
         });
         flusher.scheduleAtFixedRate(this::flush, FLUSH_INTERVAL_MS, FLUSH_INTERVAL_MS, TimeUnit.MILLISECONDS);
+
+        // Emit a computed-DPS snapshot on a slower cadence (it aggregates the
+        // whole fight, so 500ms is plenty and keeps message volume low).
+        flusher.scheduleAtFixedRate(() -> {
+            String json = dps.snapshotJson();
+            if (json != null) enqueue(json);
+        }, DPS_INTERVAL_MS, DPS_INTERVAL_MS, TimeUnit.MILLISECONDS);
 
         // 4. Start the packet source.
         if (fake) {

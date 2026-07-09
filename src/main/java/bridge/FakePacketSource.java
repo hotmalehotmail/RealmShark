@@ -9,6 +9,7 @@ import packets.data.enums.StatType;
 import packets.incoming.CreateSuccessPacket;
 import packets.incoming.DamagePacket;
 import packets.incoming.MapInfoPacket;
+import packets.incoming.NewTickPacket;
 import packets.incoming.ServerPlayerShootPacket;
 import packets.incoming.UpdatePacket;
 import packets.outgoing.EnemyHitPacket;
@@ -86,6 +87,10 @@ public class FakePacketSource {
                 Register.INSTANCE.emitPacketLogs(enemyUpdate());
                 Register.INSTANCE.emitPacketLogs(petOwnership());
             }
+            // A NewTickPacket every tick, like a real client. It carries the
+            // server clock the DPS engine uses as its time base - without it the
+            // engine can't measure fight duration, so every computed DPS is 0.
+            Register.INSTANCE.emitPacketLogs(newTick(tick));
             // The local player hitting an enemy, sent every tick like a real
             // client does during sustained fire. This is what lets the DPS
             // tracker resolve the local player (EnemyHitPacket.mainID) and the
@@ -128,6 +133,17 @@ public class FakePacketSource {
         return p;
     }
 
+    /** A NewTickPacket carrying an advancing server clock (~300ms/tick), the engine's time base. */
+    private NewTickPacket newTick(int tick) {
+        NewTickPacket p = new NewTickPacket();
+        p.tickId = tick;
+        p.tickTime = 300;
+        p.serverRealTimeMS = tick * 300;
+        p.serverLastTimeRTTMS = 0;
+        p.status = new ObjectStatusData[0];
+        return p;
+    }
+
     /** Establishes that PET_ID is a summon owned by the local player. */
     private ServerPlayerShootPacket petOwnership() {
         ServerPlayerShootPacket p = new ServerPlayerShootPacket();
@@ -151,23 +167,64 @@ public class FakePacketSource {
 
         p.newObjects = new ObjectData[ROSTER_IDS.length];
         for (int i = 0; i < ROSTER_IDS.length; i++) {
-            StatData nameStat = new StatData();
-            nameStat.statTypeNum = StatType.NAME_STAT.get();
-            nameStat.statType = StatType.NAME_STAT;
-            nameStat.stringStatValue = ROSTER_NAMES[i];
-            nameStat.statValueTwo = -1;
-
             ObjectStatusData status = new ObjectStatusData();
             status.objectId = ROSTER_IDS[i];
             status.pos = new WorldPosData();
-            status.stats = new StatData[]{nameStat};
+            status.stats = playerStats(ROSTER_NAMES[i]);
 
             ObjectData obj = new ObjectData();
-            obj.objectType = 0x0300; // arbitrary player-class-ish id, not read by the UI
+            obj.objectType = 0x0300; // player class 768, matches the synthetic players.xml
             obj.status = status;
             p.newObjects[i] = obj;
         }
         return p;
+    }
+
+    /** A numeric stat entry. */
+    private static StatData stat(StatType type, int value) {
+        StatData s = new StatData();
+        s.statTypeNum = type.get();
+        s.statType = type;
+        s.statValue = value;
+        s.statValueTwo = -1;
+        return s;
+    }
+
+    /**
+     * A realistic player stat block. The DPS engine reads the full base+boost
+     * stat set (Entity.calculateBaseStats) plus ATTACK/CONDITION/exalt for the
+     * damage multiplier, so a real client always sends all of these - the fake
+     * source must too or the engine can't compute a maxed player's damage.
+     */
+    private StatData[] playerStats(String name) {
+        StatData nameStat = new StatData();
+        nameStat.statTypeNum = StatType.NAME_STAT.get();
+        nameStat.statType = StatType.NAME_STAT;
+        nameStat.stringStatValue = name;
+        nameStat.statValueTwo = -1;
+        return new StatData[]{
+            nameStat,
+            stat(StatType.MAX_HP_STAT, 770), stat(StatType.HP_STAT, 770),
+            stat(StatType.MAX_MP_STAT, 252), stat(StatType.MP_STAT, 252),
+            stat(StatType.ATTACK_STAT, 75), stat(StatType.DEFENSE_STAT, 25),
+            stat(StatType.SPEED_STAT, 75), stat(StatType.DEXTERITY_STAT, 75),
+            stat(StatType.VITALITY_STAT, 40), stat(StatType.WISDOM_STAT, 75),
+            stat(StatType.CONDITION_STAT, 0), stat(StatType.NEW_CON_STAT, 0),
+            stat(StatType.MAX_HP_BOOST_STAT, 0), stat(StatType.MAX_MP_BOOST_STAT, 0),
+            stat(StatType.ATTACK_BOOST_STAT, 0), stat(StatType.DEFENSE_BOOST_STAT, 0),
+            stat(StatType.SPEED_BOOST_STAT, 0), stat(StatType.DEXTERITY_BOOST_STAT, 0),
+            stat(StatType.VITALITY_BOOST_STAT, 0), stat(StatType.WISDOM_BOOST_STAT, 0),
+            stat(StatType.EXALTATION_BONUS_DAMAGE, 1000) // /1000 -> x1.0 multiplier
+        };
+    }
+
+    /** Enemy stat block: what the defense/condition damage calc reads. */
+    private StatData[] enemyStats() {
+        return new StatData[]{
+            stat(StatType.MAX_HP_STAT, 20000), stat(StatType.HP_STAT, 20000),
+            stat(StatType.DEFENSE_STAT, 0),
+            stat(StatType.CONDITION_STAT, 0), stat(StatType.NEW_CON_STAT, 0)
+        };
     }
 
     /**
@@ -188,7 +245,7 @@ public class FakePacketSource {
             ObjectStatusData status = new ObjectStatusData();
             status.objectId = ENEMY_IDS[i];
             status.pos = new WorldPosData();
-            status.stats = new StatData[0]; // no NAME_STAT: named via objectType
+            status.stats = enemyStats(); // no NAME_STAT: named via objectType
 
             ObjectData obj = new ObjectData();
             obj.objectType = ENEMY_TYPES[i];

@@ -41,3 +41,6 @@ hs_err_pid*
 realmShark.properties
 .DS_Store
 /FameSessions/
+
+# Claude Code agent worktrees
+.claude/worktrees/

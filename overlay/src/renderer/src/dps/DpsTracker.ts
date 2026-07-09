@@ -1,6 +1,7 @@
 import type { PacketEnvelope } from '../../../shared/ipc'
 import {
   NAME_STAT_TYPE_NUM,
+  type BridgeDpsData,
   type CreateSuccessPacketData,
   type DamagePacketData,
   type EnemyHitPacketData,
@@ -66,6 +67,8 @@ export class DpsTracker {
   private entityNames = new Map<number, string>()
   /** Enemy/NPC id -> name, resolved bridge-side from game assets (objectNames envelope). */
   private objectNames = new Map<number, string>()
+  /** Bridge-computed DPS, per enemy id -> { name, rows }. Replaces the local DamagePacket estimate. */
+  private bridgeEnemies = new Map<number, { name: string; rows: PlayerDps[] }>()
   private targets = new Map<number, Map<number, HitEvent[]>>()
   private focusTargetId: number | null = null
   private localPlayerId: number | null = null
@@ -94,6 +97,9 @@ export class DpsTracker {
           break
         case 'objectNames':
           this.ingestObjectNames(envelope.data as Record<string, string>)
+          break
+        case 'dps':
+          this.ingestBridgeDps(envelope.data as BridgeDpsData)
           break
         case 'ServerPlayerShootPacket':
           this.ingestShoot(envelope.data as ServerPlayerShootPacketData)
@@ -153,6 +159,32 @@ export class DpsTracker {
       }
     }
     if (added > 0) dlog('resolved', added, 'object name(s), e.g.', Object.values(data)[0])
+  }
+
+  /**
+   * Bridge-computed DPS snapshot: the Java DpsEngine already did the real
+   * damage math (weapon/ability/crucible) and per-player attribution, so we
+   * just index it by enemy id for snapshot() to look up the focused target.
+   */
+  private ingestBridgeDps(data: BridgeDpsData): void {
+    this.bridgeEnemies.clear()
+    for (const enemy of data.enemies ?? []) {
+      const rows: PlayerDps[] = (enemy.players ?? []).map((p) => ({
+        objectId: p.id,
+        name: p.name,
+        damage: p.damage,
+        dps: p.dps
+      }))
+      this.bridgeEnemies.set(enemy.id, { name: enemy.name, rows })
+    }
+    if (data.enemies?.length) {
+      const e = data.enemies[0]
+      dlog(
+        'bridge dps: enemies=',
+        data.enemies.length,
+        `e.g. ${e.name} (${e.players?.length ?? 0} players)`
+      )
+    }
   }
 
   private ingestShoot(data: ServerPlayerShootPacketData): void {
@@ -224,6 +256,7 @@ export class DpsTracker {
   reset(): void {
     this.entityNames.clear()
     this.objectNames.clear()
+    this.bridgeEnemies.clear()
     this.targets.clear()
     this.focusTargetId = null
     this.localPlayerId = null
@@ -254,6 +287,18 @@ export class DpsTracker {
   snapshot(nowMs: number, windowMs: number = WINDOW_MS): DpsSnapshot {
     if (this.focusTargetId === null) {
       return EMPTY_SNAPSHOT
+    }
+
+    // Prefer the bridge's authoritative computed DPS for the focused enemy (it
+    // includes the local player's own damage, which the packet stream alone
+    // can't provide). Its own resolved enemy name wins over our id fallback.
+    const bridge = this.bridgeEnemies.get(this.focusTargetId)
+    if (bridge) {
+      return {
+        targetId: this.focusTargetId,
+        targetName: bridge.name || this.nameOf(this.focusTargetId),
+        rows: bridge.rows
+      }
     }
 
     const byAttacker = this.targets.get(this.focusTargetId)
