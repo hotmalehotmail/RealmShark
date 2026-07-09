@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { BridgeStatus, PacketEnvelope } from '../../shared/ipc'
 import { DEFAULT_SETTINGS } from '../../shared/settings'
+import DpsList from './DpsList'
+import { useDpsTracker } from './dps/useDpsTracker'
 
 const STATUS_STYLES: Record<BridgeStatus, string> = {
   connected: 'bg-emerald-500',
@@ -18,6 +20,7 @@ function App(): React.JSX.Element {
   const [toggleHotkey, setToggleHotkey] = useState(DEFAULT_SETTINGS.toggleHotkey)
   const [showAttachToast, setShowAttachToast] = useState(false)
   const attachToastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const dpsSnapshot = useDpsTracker()
 
   useEffect(() => {
     window.overlay.getSettings().then((settings) => setToggleHotkey(settings.toggleHotkey))
@@ -80,6 +83,8 @@ function App(): React.JSX.Element {
               last: {lastPacket.direction} {lastPacket.type}
             </div>
           )}
+
+          <DpsList snapshot={dpsSnapshot} />
         </div>
       )}
     </div>

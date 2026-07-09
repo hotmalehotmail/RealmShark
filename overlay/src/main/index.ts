@@ -67,6 +67,12 @@ function createOverlayWindow(): void {
     OverlayController.events.on('attach', () => {
       overlayWindow.webContents.send(IPC.attachSuccess)
     })
+    // The target window (the game) was closed - distinct from 'blur', which
+    // just means it lost focus. This is the signal to wipe session-scoped UI
+    // state like the DPS tracker, not a mere focus change.
+    OverlayController.events.on('detach', () => {
+      overlayWindow.webContents.send(IPC.overlayDetach)
+    })
   } else {
     console.log(
       '[overlay] platform has no window-attach support - showing a standalone window for local UI testing'

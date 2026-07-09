@@ -23,6 +23,11 @@ const overlayApi = {
     ipcRenderer.on(IPC.attachSuccess, listener)
     return () => ipcRenderer.removeListener(IPC.attachSuccess, listener)
   },
+  onOverlayDetach: (cb: () => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on(IPC.overlayDetach, listener)
+    return () => ipcRenderer.removeListener(IPC.overlayDetach, listener)
+  },
   getBridgeStatus: (): Promise<BridgeStatus> => ipcRenderer.invoke(IPC.getBridgeStatus),
   getSettings: (): Promise<OverlaySettings> => ipcRenderer.invoke(IPC.getSettings),
   saveSettings: (settings: OverlaySettings): Promise<SaveSettingsResult> =>

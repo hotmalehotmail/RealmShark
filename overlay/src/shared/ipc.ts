@@ -5,6 +5,7 @@ export const IPC = {
   packetBatch: 'packet-batch',
   interactiveChange: 'interactive-change',
   attachSuccess: 'attach-success',
+  overlayDetach: 'overlay-detach',
   getSettings: 'get-settings',
   saveSettings: 'save-settings',
   relaunch: 'relaunch-app'
