@@ -105,8 +105,12 @@ public class SpritePackService {
 
         // table: objectType -> [atlasId, x, y, w, h], resolved via the same
         // IdToAsset -> flatbuffer path assets.ImageBuffer.getImage uses.
+        // maskTable: objectType -> [maskAtlasId(=3), x, y, w, h] for sprites that
+        // have a dye mask (marks clothing/accessory regions) - used for dye
+        // compositing. Only present for objectTypes that carry a mask.
         SpriteFlatBuffer sfb = new SpriteFlatBuffer();
         JsonObject table = new JsonObject();
+        JsonObject maskTable = new JsonObject();
         for (int id : IdToAsset.objectIds()) {
             if (id <= 0) continue;
             try {
@@ -122,11 +126,23 @@ public class SpritePackService {
                 rect.add(d[2]);
                 rect.add(d[3]);
                 table.add(String.valueOf(id), rect);
+
+                int[] m = sfb.getMaskSpriteData(name, index); // {x, y, w, h} or null
+                if (m != null) {
+                    JsonArray mrect = new JsonArray();
+                    mrect.add(3); // characters_masks atlas
+                    mrect.add(m[0]);
+                    mrect.add(m[1]);
+                    mrect.add(m[2]);
+                    mrect.add(m[3]);
+                    maskTable.add(String.valueOf(id), mrect);
+                }
             } catch (Exception e) {
                 // Skip any id whose texture can't be resolved.
             }
         }
         root.add("table", table);
+        root.add("maskTable", maskTable);
 
         cachedVersion = v;
         cachedPackJson = gson.toJson(root);

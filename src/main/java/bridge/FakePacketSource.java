@@ -277,7 +277,11 @@ public class FakePacketSource {
             stat(StatType.INVENTORY_0_STAT, LOCAL_EQUIPMENT[0]),
             stat(StatType.INVENTORY_1_STAT, LOCAL_EQUIPMENT[1]),
             stat(StatType.INVENTORY_2_STAT, LOCAL_EQUIPMENT[2]),
-            stat(StatType.INVENTORY_3_STAT, LOCAL_EQUIPMENT[3])
+            stat(StatType.INVENTORY_3_STAT, LOCAL_EQUIPMENT[3]),
+            // Clothing (Tex1) / accessory (Tex2) dyes, as dye objectTypes, so the
+            // dye tracking + compositing path is exercised in fake mode too.
+            stat(StatType.TEX1_STAT, 4149),
+            stat(StatType.TEX2_STAT, 4967)
         };
         StatData[] all = new StatData[base.length + extra.length];
         System.arraycopy(base, 0, all, 0, base.length);

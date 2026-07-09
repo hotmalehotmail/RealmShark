@@ -104,6 +104,11 @@ public class SpriteFlatBuffer {
         newSprite.aId = (int) s.aId();
         Position position = s.position();
         newSprite.setPosition(position.w(), position.h(), position.x(), position.y());
+        Position maskPosition = s.maskPosition();
+        if (maskPosition != null) {
+            newSprite.setMaskPosition(
+                maskPosition.w(), maskPosition.h(), maskPosition.x(), maskPosition.y());
+        }
         Color color = s.mostCommonColor();
         newSprite.setColor(color.r(), color.g(), color.b(), color.a());
 
@@ -125,6 +130,26 @@ public class SpriteFlatBuffer {
 //        }
         Sprite sprite = list.get(index);
         return new int[]{sprite.positionX, sprite.positionY, sprite.positionW, sprite.positionH, sprite.aId};
+    }
+
+    /**
+     * Mask coordinates for a sprite (in the characters_masks atlas), or null if
+     * the sprite has no mask. The mask marks the dye-able clothing/accessory
+     * regions and is used for dye compositing.
+     *
+     * @param name  Name of the sprite group.
+     * @param index Index of the sprite in the group.
+     * @return {maskX, maskY, maskW, maskH}, or null when there is no mask.
+     */
+    public int[] getMaskSpriteData(String name, int index) {
+        if (notLoaded) return null;
+        HashMap<Integer, Sprite> list = sprites.get(name);
+        if (list == null) return null;
+        Sprite sprite = list.get(index);
+        if (sprite == null || sprite.maskPositionW <= 0) return null;
+        return new int[]{
+            sprite.maskPositionX, sprite.maskPositionY, sprite.maskPositionW, sprite.maskPositionH
+        };
     }
 
     /**
@@ -177,6 +202,13 @@ public class SpriteFlatBuffer {
             positionH = (int) h;
             positionX = (int) x;
             positionY = (int) y;
+        }
+
+        public void setMaskPosition(float w, float h, float x, float y) {
+            maskPositionW = (int) w;
+            maskPositionH = (int) h;
+            maskPositionX = (int) x;
+            maskPositionY = (int) y;
         }
 
         public void setColor(float r, float g, float b, float a) {
