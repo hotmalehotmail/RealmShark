@@ -10,7 +10,30 @@ const PROBE_TIMEOUT_MS = 500
 const PORT_FREE_POLL_MS = 150
 const PORT_FREE_MAX_WAIT_MS = 3000
 
+// Auto-relaunch tuning. The bridge's capture layer is native (Npcap via the
+// ardikars binding) and can crash the JVM outright (e.g. STATUS_HEAP_CORRUPTION,
+// exit code 0xC0000374) rather than throw. When that happens we respawn so the
+// overlay self-heals, but cap the rate so a bridge that crashes on every start
+// doesn't spin the CPU forever.
+const RESTART_BACKOFF_MS = 2000
+const RESTART_MAX = 5
+const RESTART_WINDOW_MS = 60_000
+
 let child: ChildProcess | undefined
+
+// True only while stopBridge() is tearing the bridge down on purpose (app quit),
+// so the child's `exit` handler can tell an intentional stop from a crash and
+// skip respawning in the former case.
+let intentionalStop = false
+// The --fake mode of the last ensureBridgeRunning() call, so an auto-respawn
+// re-runs in the same mode without the caller being involved.
+let lastFakeMode = false
+// Timestamps (ms) of recent auto-respawns, pruned to a rolling window, to detect
+// a crash loop. A run that survives the window empties this naturally.
+let restartTimes: number[] = []
+// Handle of a pending backoff timer, so stopBridge() can cancel a respawn that
+// was scheduled but hasn't fired yet.
+let respawnTimer: ReturnType<typeof setTimeout> | undefined
 
 function jarPath(): string {
   return app.isPackaged
@@ -149,6 +172,11 @@ async function reapOrphanedBridge(): Promise<void> {
  * (i.e. anywhere but Windows/Linux) so the UI can still be exercised locally.
  */
 export async function ensureBridgeRunning(fake: boolean): Promise<void> {
+  // Remember the mode and mark that we're (re)spawning on purpose, so a stale
+  // intentionalStop from a prior teardown can't suppress this run's exit handler.
+  lastFakeMode = fake
+  intentionalStop = false
+
   await reapOrphanedBridge()
 
   if (await isPortOpen()) {
@@ -179,7 +207,46 @@ export async function ensureBridgeRunning(fake: boolean): Promise<void> {
     console.log('[bridge-supervisor] bridge process exited with code', code)
     child = undefined
     clearPidFile()
+
+    // An intentional stop (app quit) is expected - don't fight it by respawning.
+    if (intentionalStop) return
+
+    scheduleRespawn(code)
   })
+}
+
+/**
+ * Respawn a bridge WE spawned that exited unexpectedly (a crash - a native
+ * capture-layer fault or the JVM dying), unless we've restarted too many times
+ * in a short window, in which case we give up to avoid a CPU-spinning crash
+ * loop. A run that survives longer than the window empties `restartTimes`, so
+ * an occasional crash always gets the full retry budget again.
+ */
+function scheduleRespawn(code: number | null): void {
+  const now = Date.now()
+  restartTimes = restartTimes.filter((t) => now - t < RESTART_WINDOW_MS)
+
+  if (restartTimes.length >= RESTART_MAX) {
+    console.error(
+      `[bridge-supervisor] bridge keeps exiting (code ${code}); giving up after ${restartTimes.length} restarts within ${RESTART_WINDOW_MS / 1000}s`
+    )
+    return
+  }
+
+  restartTimes.push(now)
+  const attempt = restartTimes.length
+  console.error(
+    `[bridge-supervisor] bridge exited unexpectedly (code ${code}), relaunching in ${RESTART_BACKOFF_MS / 1000}s (attempt ${attempt}/${RESTART_MAX})`
+  )
+
+  respawnTimer = setTimeout(() => {
+    respawnTimer = undefined
+    // A quit may have raced in during the backoff; bail rather than resurrect.
+    if (intentionalStop) return
+    void ensureBridgeRunning(lastFakeMode).catch((err) => {
+      console.error('[bridge-supervisor] respawn failed:', err)
+    })
+  }, RESTART_BACKOFF_MS)
 }
 
 /**
@@ -189,6 +256,15 @@ export async function ensureBridgeRunning(fake: boolean): Promise<void> {
  * cleared afterward.
  */
 export function stopBridge(): void {
+  // Mark the teardown as intentional and cancel any pending auto-respawn so the
+  // child's exit handler (and a scheduled backoff) won't resurrect the bridge
+  // during app quit.
+  intentionalStop = true
+  if (respawnTimer !== undefined) {
+    clearTimeout(respawnTimer)
+    respawnTimer = undefined
+  }
+
   const spawnedPid = child?.pid
   child = undefined
 
