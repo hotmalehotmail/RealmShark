@@ -21,6 +21,13 @@ function defaultLayout(): PanelInstance[] {
       anchor: { pos: 'tl', x: 35, y: 50 },
       size: 'md',
       zIndex: 4
+    },
+    {
+      id: 'instance',
+      type: 'instance',
+      anchor: { pos: 'tl', x: 65, y: 2 },
+      size: 'md',
+      zIndex: 5
     }
   ]
 }

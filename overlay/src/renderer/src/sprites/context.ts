@@ -49,6 +49,11 @@ export interface EntityContextValue {
   accessoryDye: (objectId: number | null | undefined) => number | null
   /** The NAME_STAT username for a live objectId, or null if unknown. */
   name: (objectId: number | null | undefined) => string | null
+  /**
+   * objectIds of every named character (player) currently tracked. Players carry
+   * NAME_STAT; enemies/monsters don't, so this filters to the instance's players.
+   */
+  characters: () => number[]
   /** The local player's objectId (CreateSuccessPacket / EnemyHitPacket.mainID), or null if not yet resolved. */
   localPlayerId: () => number | null
 }
@@ -60,6 +65,7 @@ export const EntityContext = createContext<EntityContextValue>({
   clothingDye: () => null,
   accessoryDye: () => null,
   name: () => null,
+  characters: () => [],
   localPlayerId: () => null
 })
 

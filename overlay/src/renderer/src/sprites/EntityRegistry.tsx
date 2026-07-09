@@ -157,11 +157,27 @@ export function EntityRegistryProvider({
       objectId == null ? null : (recordsRef.current.get(objectId)?.accessoryDye ?? null),
     []
   )
+  const characters = useCallback((): number[] => {
+    const ids: number[] = []
+    for (const [id, rec] of recordsRef.current) {
+      if (rec.name != null && rec.name !== '') ids.push(id)
+    }
+    return ids
+  }, [])
   const localPlayerId = useCallback((): number | null => localPlayerRef.current, [])
 
   return (
     <EntityContext.Provider
-      value={{ objectType, skin, equipment, clothingDye, accessoryDye, name, localPlayerId }}
+      value={{
+        objectType,
+        skin,
+        equipment,
+        clothingDye,
+        accessoryDye,
+        name,
+        characters,
+        localPlayerId
+      }}
     >
       {children}
     </EntityContext.Provider>
