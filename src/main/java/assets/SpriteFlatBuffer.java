@@ -85,8 +85,67 @@ public class SpriteFlatBuffer {
             assets.flattbuffer.Sprite s = animatedSheet.sprites();
             Sprite sprite = getSprite(s);
             sprite.index = (int) animatedSheet.index();
-            map.put(sprite.index(), sprite);
+            int direction = (int) animatedSheet.direction();
+            int action = (int) animatedSheet.action();
+            sprite.setAnimationVars(sprite.index, direction, action, animatedSheet.set());
+
+            reportDirections(name, direction, action);
+
+            // A character skin stores one frame per (action, direction, set); we
+            // expose a single representative frame per index. Keep the frame that
+            // best matches the preferred facing (right, standing) so character
+            // panels render the side view instead of the default front/down one.
+            Sprite existing = map.get(sprite.index());
+            if (existing == null
+                || framePreference(sprite) > framePreference(existing)) {
+                map.put(sprite.index(), sprite);
+            }
         }
+
+        if (!reportedDirections.isEmpty()) {
+            System.out.println("[sprite-facing] animated (sheet -> direction:action) seen: "
+                + reportedDirections);
+        }
+    }
+
+    // ---- Representative-frame facing selection -------------------------------
+    //
+    // RotMG's animated character sheets store a frame per (action, direction,
+    // set). direction/action are small ints defined by the game's own
+    // spritesheet data. We can't read that enum from source, so the exact
+    // number for "right" is confirmed from the one-time [sprite-facing]
+    // diagnostic below; adjust RIGHT_DIRECTION / STAND_ACTION if the log shows
+    // different numbering. Selection is a soft preference with fallbacks, so a
+    // wrong guess still yields a consistent frame rather than nothing.
+
+    /** action value for the standing (non-walking/attacking) pose. */
+    private static final int STAND_ACTION = 0;
+    /** direction value that faces right. */
+    private static final int RIGHT_DIRECTION = 2;
+
+    // One-time diagnostic: distinct "sheet -> direction:action" tuples, so the
+    // real direction/action numbering is visible in the bridge log.
+    private static final java.util.TreeSet<String> reportedDirections = new java.util.TreeSet<>();
+
+    private static void reportDirections(String name, int direction, int action) {
+        if (name == null) return;
+        String lower = name.toLowerCase();
+        if (lower.contains("player") || lower.contains("skin") || lower.contains("char")) {
+            reportedDirections.add(name + " -> " + direction + ":" + action);
+        }
+    }
+
+    /**
+     * Higher score = better representative frame. Prefers a right-facing frame,
+     * then a standing pose, then the first animation set, so the exposed sprite
+     * is a stable side view.
+     */
+    private static int framePreference(Sprite s) {
+        int score = 0;
+        if (s.animatedDirection == RIGHT_DIRECTION) score += 100;
+        if (s.animatedAction == STAND_ACTION) score += 10;
+        score += Math.max(0, 5 - s.animatedSet); // earlier set slightly preferred
+        return score;
     }
 
     public static void main(String[] args) throws IOException {
@@ -217,10 +276,10 @@ public class SpriteFlatBuffer {
 
         int animatedIndex;
         int animatedDirection;
-        String animatedAction;
+        int animatedAction;
         int animatedSet;
 
-        public void setAnimationVars(int index, int direction, String action, int set) {
+        public void setAnimationVars(int index, int direction, int action, int set) {
             animatedIndex = index;
             animatedDirection = direction;
             animatedAction = action;
