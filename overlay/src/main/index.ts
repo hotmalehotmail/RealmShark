@@ -27,10 +27,14 @@ app.disableHardwareAcceleration()
 // File/Edit/View/Window/Help menu bar - drop it app-wide.
 Menu.setApplicationMenu(null)
 
-// A second launch would spawn its own bridge.jar attempt and leave the first
-// instance's child process orphaned if this one exits uncleanly - only ever
-// allow one overlay (and one supervised bridge process) at a time.
-if (!app.requestSingleInstanceLock()) {
+// Only ever allow one overlay (and one supervised bridge). A losing second
+// launch must quit and do NOTHING else - in particular it must not run the
+// bridge supervisor, whose reaper would force-kill the FIRST (still-running)
+// instance's healthy bridge, leaving it bridgeless with no respawn. A genuine
+// orphan (from a crashed instance that released the lock) is instead reaped by
+// the launch that WINS the lock. Startup below is gated on gotSingleInstanceLock.
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
   app.quit()
 }
 
@@ -128,6 +132,10 @@ app.on('second-instance', () => {
 })
 
 app.whenReady().then(() => {
+  // Losing second instance: quit() was already called above; do no startup so
+  // we never touch the first instance's bridge.
+  if (!gotSingleInstanceLock) return
+
   electronApp.setAppUserModelId('com.realmshark.overlay')
 
   createOverlayWindow()
@@ -203,7 +211,9 @@ app.whenReady().then(() => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
-  stopBridge()
+  // Never stop the bridge from a losing second instance - it isn't ours; it
+  // belongs to the still-running first instance.
+  if (gotSingleInstanceLock) stopBridge()
 })
 
 app.on('window-all-closed', () => {
