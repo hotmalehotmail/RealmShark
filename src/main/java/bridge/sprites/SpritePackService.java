@@ -143,6 +143,8 @@ public class SpritePackService {
         }
         root.add("table", table);
         root.add("maskTable", maskTable);
+        System.out.println(
+            "[sprite-pack] built " + v + ": table=" + table.size() + " maskTable=" + maskTable.size());
 
         cachedVersion = v;
         cachedPackJson = gson.toJson(root);

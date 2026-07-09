@@ -30,6 +30,8 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
   const [pack, setPack] = useState<SpritePack>({ ready: false })
   const atlasesRef = useRef<Record<string, HTMLImageElement>>({})
   const cacheRef = useRef<Map<string, string>>(new Map())
+  // TEMP dye diagnostic: dedup the [dye] decision log per base+dye combo.
+  const dyeDiagRef = useRef<Set<string>>(new Set())
   // Bumped when an atlas finishes decoding so consumers re-request (a sprite
   // that returned null because its atlas wasn't loaded yet can now be cropped).
   const [, setGen] = useState(0)
@@ -115,11 +117,26 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
     ): string | null => {
       const hasClothing = clothingDye != null && clothingDye > 0
       const hasAccessory = accessoryDye != null && accessoryDye > 0
+      const baseRect = pack.table?.[String(baseType)]
+      const maskRect = pack.maskTable?.[String(baseType)]
+
+      // TEMP dye diagnostic (deduped): surfaces why a dye did/didn't composite.
+      if (hasClothing || hasAccessory) {
+        const dk = `${baseType}:${clothingDye ?? 0}:${accessoryDye ?? 0}`
+        if (!dyeDiagRef.current.has(dk)) {
+          dyeDiagRef.current.add(dk)
+          console.log(
+            `[dye] base=${baseType} ready=${pack.ready} baseInTable=${!!baseRect} ` +
+              `maskInTable=${!!maskRect} ` +
+              `clothing=${clothingDye ?? 0}(inTable=${!!(clothingDye && pack.table?.[String(clothingDye)])}) ` +
+              `accessory=${accessoryDye ?? 0}(inTable=${!!(accessoryDye && pack.table?.[String(accessoryDye)])})`
+          )
+        }
+      }
+
       if (!pack.ready || !pack.table || (!hasClothing && !hasAccessory)) {
         return getSprite(baseType, size)
       }
-      const baseRect = pack.table[String(baseType)]
-      const maskRect = pack.maskTable?.[String(baseType)]
       if (!baseRect || !maskRect) return getSprite(baseType, size)
 
       const key = `dye:${baseType}:${size}:${hasClothing ? clothingDye : 0}:${
