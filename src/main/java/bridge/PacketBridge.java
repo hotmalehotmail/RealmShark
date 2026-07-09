@@ -100,6 +100,12 @@ public class PacketBridge {
             if (json != null) enqueue(json);
         }, DPS_INTERVAL_MS, DPS_INTERVAL_MS, TimeUnit.MILLISECONDS);
 
+        // Periodic engine diagnostic (every ~3s) so the Console panel shows why
+        // self-DPS may be missing: worldPlayerId/player resolution + shoot/hit counts.
+        flusher.scheduleAtFixedRate(
+            () -> System.out.println("[dps-engine] " + dps.debugState()),
+            3000, 3000, TimeUnit.MILLISECONDS);
+
         // 4. Start the packet source.
         if (fake) {
             System.out.println("[bridge] running in FAKE mode (no sniffing)");

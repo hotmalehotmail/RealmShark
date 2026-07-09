@@ -120,8 +120,11 @@ export async function ensureBridgeRunning(fake: boolean): Promise<void> {
     writeFileSync(pidFilePath(), String(child.pid))
   }
 
-  child.stdout?.on('data', (data) => process.stdout.write(`[bridge] ${data}`))
-  child.stderr?.on('data', (data) => process.stderr.write(`[bridge] ${data}`))
+  // Route through console.* (not process.stdout) so the bridge's own output is
+  // captured by installMainConsoleCapture and reaches the renderer Console panel
+  // - the packaged app has no terminal, so this is the only way a user sees it.
+  child.stdout?.on('data', (data) => console.log(`[bridge] ${String(data).trimEnd()}`))
+  child.stderr?.on('data', (data) => console.error(`[bridge] ${String(data).trimEnd()}`))
   child.on('error', (err) => {
     console.error('[bridge-supervisor] failed to spawn bridge (is Java installed?):', err.message)
     clearPidFile()

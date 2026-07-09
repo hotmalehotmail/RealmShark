@@ -32,6 +32,13 @@ public class DpsBroadcaster {
     private final DpsEngine engine = new DpsEngine();
     private final Gson gson = new Gson();
 
+    /** One-line engine state for the periodic diagnostic log (thread-safe read). */
+    public String debugState() {
+        synchronized (engine) {
+            return engine.debugState();
+        }
+    }
+
     /** Feed one decoded packet into the engine (no-op for packet types DPS doesn't use). */
     public void feed(Packet packet) {
         try {

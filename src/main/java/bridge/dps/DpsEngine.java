@@ -49,6 +49,20 @@ public class DpsEngine {
     public final HashMap<Integer, Entity> entityList = new HashMap<>();
     protected final HashMap<Integer, Entity> playerList = new HashMap<>();
     public final HashMap<Integer, Entity> playerListUpdated = new HashMap<>();
+
+    // --- debug instrumentation (diagnosing missing self-DPS); low-volume ---
+    public int dbgShoots, dbgProjWithDmg, dbgEnemyHits, dbgUserHits;
+    private boolean dbgLoggedShoot, dbgLoggedHit, dbgLoggedUser;
+
+    /** One-line state summary for the periodic [dps-engine] diagnostic log. */
+    public String debugState() {
+        return "worldPlayerId=" + worldPlayerId
+            + " player=" + (player == null ? "NULL" : String.valueOf(player.id))
+            + " isUser=" + (player != null && player.isUser())
+            + " players=" + playerList.size() + " entities=" + entityList.size()
+            + " shoots=" + dbgShoots + " projWithDmg=" + dbgProjWithDmg
+            + " enemyHits=" + dbgEnemyHits + " userHits=" + dbgUserHits;
+    }
     protected final Projectile[] projectiles = new Projectile[512];
     // Map keyed by (ownerId << 32) | (bulletId & 0xffffffffL) for reliable lookup of player/server-created projectiles
     protected final HashMap<Long, Projectile> playerProjectiles =
@@ -86,6 +100,7 @@ public class DpsEngine {
     public void setUserId(int objectId, int charId, String str) {
         this.worldPlayerId = objectId;
         this.charId = charId;
+        System.out.println("[dps-engine] setUserId worldPlayerId=" + objectId + " (from CreateSuccessPacket)");
         // STUB: replaced at integration. Original tomato called updateDungeonStats(charId, str)
         // here (dungeon-completion stat tracking, non-DPS).
     }
@@ -232,6 +247,16 @@ public class DpsEngine {
             p.weaponId,
             p.projectileId
         );
+        dbgShoots++;
+        if (proj != null && proj.getDamage() > 0) dbgProjWithDmg++;
+        if (!dbgLoggedShoot) {
+            dbgLoggedShoot = true;
+            System.out.println("[dps-engine] first playerShoot weaponId=" + p.weaponId
+                + " projId=" + p.projectileId + " bulletId=" + p.bulletId
+                + " player=" + (player == null ? "NULL" : String.valueOf(player.id))
+                + " rng=" + (rng == null ? "NULL" : "ok")
+                + " projDmg=" + (proj == null ? "nullproj" : String.valueOf(proj.getDamage())));
+        }
         // Store in the fixed-size array for quick access (legacy)
         if (p.bulletId >= 0 && p.bulletId < projectiles.length) {
             projectiles[p.bulletId] = proj;
@@ -423,6 +448,19 @@ public class DpsEngine {
             shooterId = projectile.getSummonerId();
         }
         Entity attacker = playerList.get(shooterId);
+        dbgEnemyHits++;
+        if (attacker != null && attacker.isUser()) dbgUserHits++;
+        if (!dbgLoggedHit || (attacker != null && attacker.isUser() && !dbgLoggedUser)) {
+            boolean userHit = attacker != null && attacker.isUser();
+            if (userHit) dbgLoggedUser = true;
+            dbgLoggedHit = true;
+            System.out.println("[dps-engine] " + (userHit ? "first USER enemtyHit" : "first enemtyHit")
+                + " bulletId=" + p.bulletId + " shooterID=" + p.shooterID + " mainID=" + p.mainID
+                + " projFound=" + (projectile != null)
+                + " projDmg=" + (projectile == null ? -1 : projectile.getDamage())
+                + " attacker=" + (attacker == null ? "NULL(not in playerList)" : (attacker.id + (attacker.isUser() ? "(user)" : "")))
+                + " worldPlayerId=" + worldPlayerId);
+        }
         target.userProjectileHit(attacker, projectile, timePc);
         if (!entityHitList.containsKey(id)) {
             entityHitList.put(id, target);
