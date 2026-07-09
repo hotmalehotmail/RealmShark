@@ -132,7 +132,11 @@ app.whenReady().then(() => {
 
   createOverlayWindow()
 
-  setMainLogSink((entry) => overlayWindow.webContents.send(IPC.mainLogEntry, entry))
+  setMainLogSink((entry) => {
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.webContents.send(IPC.mainLogEntry, entry)
+    }
+  })
 
   registerHotkey(settings.toggleHotkey)
 

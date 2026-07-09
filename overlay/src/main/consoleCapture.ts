@@ -38,7 +38,14 @@ export function installMainConsoleCapture(): void {
       }
       buffer.push(entry)
       if (buffer.length > MAX_ENTRIES) buffer.splice(0, buffer.length - MAX_ENTRIES)
-      onEntry?.(entry)
+      // A broken sink (e.g. sending to a window torn down during quit) must
+      // never make a console.* call throw - that would abort whatever code was
+      // logging, e.g. stopBridge mid-shutdown, leaving the bridge unkilled.
+      try {
+        onEntry?.(entry)
+      } catch {
+        // swallow
+      }
     }
   }
 }
