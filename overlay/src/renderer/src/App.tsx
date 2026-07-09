@@ -52,6 +52,14 @@ function App(): React.JSX.Element {
         </div>
       )}
 
+      {/* Dim backdrop: rendered only in interactive mode to visibly darken the
+          game behind the overlay and signal that input is being captured. It's
+          a real positioned box (not inside the display:contents subtree below),
+          so it appears/disappears together with interactive mode. Rendered
+          before the panel canvas with no positive z-index, so the positioned
+          panels paint on top and stay crisp -- only the game behind is dimmed. */}
+      {interactive && <div className="absolute inset-0 bg-black/40" />}
+
       {/* Always mounted (never conditionally rendered) - panels hold live
           state (packet counter, the DPS tracker's whole session) that must
           survive toggling interactive mode on and off. Only visually hidden
