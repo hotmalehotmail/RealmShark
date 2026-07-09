@@ -49,23 +49,12 @@ let settings = loadSettings()
 let currentHotkey = settings.toggleHotkey
 let currentBridgeStatus: BridgeStatus = 'connecting'
 
-// Anti-flash "occlusion" strategy (Idea 1): electron-overlay-window hides the
-// overlay on game-blur and re-shows it on focus; Chromium stops painting a
-// hidden window, so on re-show it repaints - the alt-tab "flash". Disabling
-// native window occlusion keeps the window painted while hidden so re-showing
-// is instant. Must be set before app-ready, so we read the persisted setting
-// here (changing the setting requires a restart). Merge with any existing
-// disable-features value so we don't clobber Electron's own defaults.
-if (settings.flashFix === 'occlusion') {
-  const existing = app.commandLine.getSwitchValue('disable-features')
-  app.commandLine.appendSwitch(
-    'disable-features',
-    existing ? `${existing},CalculateNativeWinOcclusion` : 'CalculateNativeWinOcclusion'
-  )
-}
-
 let overlayWindow: BrowserWindow
 let isInteractive = false
+// Whether the attached game window currently has OS focus (from
+// electron-overlay-window's focus/blur events). Used to ignore the global
+// toggle hotkey when the user has alt-tabbed away from the game.
+let gameHasFocus = false
 
 function createOverlayWindow(): void {
   overlayWindow = new BrowserWindow({
@@ -74,10 +63,7 @@ function createOverlayWindow(): void {
     ...OVERLAY_WINDOW_OPTS,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
-      // Part of the 'occlusion' anti-flash strategy (Idea 1): keep the renderer
-      // painting while the window is hidden/backgrounded so re-show is instant.
-      backgroundThrottling: settings.flashFix === 'occlusion' ? false : undefined
+      sandbox: false
     }
   })
 
@@ -101,16 +87,24 @@ function createOverlayWindow(): void {
       hasTitleBarOnMac: true
     })
     OverlayController.events.on('attach', () => {
+      gameHasFocus = true
       overlayWindow.webContents.send(IPC.attachSuccess)
+    })
+    OverlayController.events.on('focus', () => {
+      gameHasFocus = true
+    })
+    OverlayController.events.on('blur', () => {
+      gameHasFocus = false
     })
     // The target window (the game) was closed - distinct from 'blur', which
     // just means it lost focus. This is the signal to wipe session-scoped UI
     // state like the DPS tracker, not a mere focus change.
     OverlayController.events.on('detach', () => {
+      gameHasFocus = false
       overlayWindow.webContents.send(IPC.overlayDetach)
     })
 
-    if (settings.flashFix === 'nohide') installNoHideStrategy()
+    installNoHideStrategy()
   } else {
     console.log(
       '[overlay] platform has no window-attach support - showing a standalone window for local UI testing'
@@ -122,12 +116,12 @@ function createOverlayWindow(): void {
 }
 
 /**
- * Anti-flash "nohide" strategy (Idea 2): the library hides the overlay on
- * game-blur and re-shows it on focus, and that re-show is what flashes. Instead
- * of hiding, SINK the overlay (drop always-on-top + go click-through) so it
- * falls behind a covering window along with the game, then re-raise it on
- * game-focus - no hide/show, nothing to animate. The real hide() is preserved
- * for detach (game actually closed), where the overlay should truly disappear.
+ * Stop the alt-tab "flash": the library hides the overlay on game-blur and
+ * re-shows it on focus, and that re-show is what flashed. Instead of hiding,
+ * SINK the overlay (drop always-on-top + go click-through) so it falls behind a
+ * covering window along with the game, then re-raise it on game-focus - no
+ * hide/show, nothing to animate. The real hide() is preserved for detach (game
+ * actually closed), where the overlay should truly disappear.
  */
 function installNoHideStrategy(): void {
   const realHide = overlayWindow.hide.bind(overlayWindow)
@@ -184,8 +178,19 @@ function toggleInteractive(): void {
   overlayWindow.webContents.send(IPC.interactiveChange, isInteractive)
 }
 
+/**
+ * Global-hotkey handler. Unlike the tray toggle (which the user can only reach
+ * by leaving the game), the hotkey must NOT pop the overlay up when they've
+ * alt-tabbed to another app - only when the game has focus, or when the overlay
+ * is already interactive (so they can always toggle it back off).
+ */
+function onToggleHotkey(): void {
+  if (supportsAttach && !isInteractive && !gameHasFocus) return
+  toggleInteractive()
+}
+
 function registerHotkey(accelerator: string): boolean {
-  const ok = globalShortcut.register(accelerator, toggleInteractive)
+  const ok = globalShortcut.register(accelerator, onToggleHotkey)
   if (ok) currentHotkey = accelerator
   return ok
 }
@@ -254,8 +259,6 @@ app.whenReady().then(() => {
   ipcMain.handle(IPC.saveSettings, (_event, next: OverlaySettings): SaveSettingsResult => {
     const titleChanged = next.gameWindowTitle !== settings.gameWindowTitle
     const hotkeyChanged = next.toggleHotkey !== currentHotkey
-    // The flash strategy is applied at window/app startup, so switching it needs a restart.
-    const flashFixChanged = next.flashFix !== settings.flashFix
 
     let hotkeyRegistered = true
     if (hotkeyChanged) {
@@ -273,7 +276,7 @@ app.whenReady().then(() => {
     }
     persistSettings(settings)
 
-    return { needsRestart: titleChanged || flashFixChanged, hotkeyRegistered }
+    return { needsRestart: titleChanged, hotkeyRegistered }
   })
 
   ipcMain.handle(IPC.relaunch, () => {

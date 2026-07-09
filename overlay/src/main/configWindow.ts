@@ -12,7 +12,7 @@ export function openConfigWindow(): void {
 
   configWindow = new BrowserWindow({
     width: 440,
-    height: 470,
+    height: 360,
     resizable: false,
     title: 'RealmShark Overlay Settings',
     webPreferences: {
