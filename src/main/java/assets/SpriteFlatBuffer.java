@@ -16,6 +16,11 @@ public class SpriteFlatBuffer {
     private static final HashMap<String, HashMap<Integer, Sprite>> sprites;
 //    private static final HashMap<String, HashMap<Integer, Sprite>> animatedSprites;
 
+    // One-time diagnostic: distinct "sheet -> direction:action" tuples, so the
+    // real direction/action numbering is visible in the bridge log. Declared
+    // before the static block below, which populates it during class init.
+    private static final java.util.TreeSet<String> reportedDirections = new java.util.TreeSet<>();
+
     /**
      * Static class used to load the flat buffer file.
      */
@@ -122,10 +127,6 @@ public class SpriteFlatBuffer {
     private static final int STAND_ACTION = 0;
     /** direction value that faces right. */
     private static final int RIGHT_DIRECTION = 2;
-
-    // One-time diagnostic: distinct "sheet -> direction:action" tuples, so the
-    // real direction/action numbering is visible in the bridge log.
-    private static final java.util.TreeSet<String> reportedDirections = new java.util.TreeSet<>();
 
     private static void reportDirections(String name, int direction, int action) {
         if (name == null) return;
