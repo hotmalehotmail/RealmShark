@@ -171,7 +171,11 @@ export class DpsTracker {
     for (const enemy of data.enemies ?? []) {
       const rows: PlayerDps[] = (enemy.players ?? []).map((p) => ({
         objectId: p.id,
-        name: p.name,
+        // Prefer the player's NAME_STAT username we saw in the stream. The
+        // bridge falls back to the class name (IdToAsset.objectName) whenever a
+        // player entity is missing NAME_STAT, so `p.name` can be e.g. "Wizard"
+        // instead of the username - our entityNames map is authoritative here.
+        name: this.entityNames.get(p.id) ?? p.name,
         damage: p.damage,
         dps: p.dps
       }))
