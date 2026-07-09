@@ -157,14 +157,36 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       const mask = regionImageData(maskImg, mx, my, Math.min(mw, w), Math.min(mh, h))
       if (!base || !mask) return null
 
-      // Each dye is just an objectType in the pack; grab its swatch/pattern pixels.
-      const dyeRegion = (dyeId: number): { pixels: ImageData; w: number; h: number } | null => {
+      // Each dye is just an objectType in the pack; grab its swatch/pattern
+      // pixels. The swatch has transparent padding around the actual color, so
+      // also compute the average of its opaque pixels ("fill") to substitute
+      // wherever a tiled sample lands on that transparent border - otherwise
+      // those pixels get written as opaque black (the "white dye -> black" bug).
+      const dyeRegion = (
+        dyeId: number
+      ): { pixels: ImageData; w: number; h: number; fill: [number, number, number] } | null => {
         const r = pack.table?.[String(dyeId)]
         if (!r) return null
         const img = atlasesRef.current[String(r[0])]
         if (!img) return null
         const d = regionImageData(img, r[1], r[2], r[3], r[4])
-        return d ? { pixels: d, w: r[3], h: r[4] } : null
+        if (!d) return null
+        let sr = 0,
+          sg = 0,
+          sb = 0,
+          n = 0
+        for (let k = 0; k < d.data.length; k += 4) {
+          if (d.data[k + 3] > 0) {
+            sr += d.data[k]
+            sg += d.data[k + 1]
+            sb += d.data[k + 2]
+            n++
+          }
+        }
+        const fill: [number, number, number] = n
+          ? [Math.round(sr / n), Math.round(sg / n), Math.round(sb / n)]
+          : [0, 0, 0]
+        return { pixels: d, w: r[3], h: r[4], fill }
       }
       const clothing = hasClothing ? dyeRegion(clothingDye as number) : null
       const accessory = hasAccessory ? dyeRegion(accessoryDye as number) : null
@@ -211,16 +233,29 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
           const mi = (py * mStride + px) * 4
           const mr = mask.data[mi]
           const mg = mask.data[mi + 1]
-          let src: { pixels: ImageData; w: number; h: number } | null = null
+          let src: {
+            pixels: ImageData
+            w: number
+            h: number
+            fill: [number, number, number]
+          } | null = null
           if (baseA > 0) {
             if (clothing && mr >= 128 && mr >= mg) src = clothing
             else if (accessory && mg >= 128) src = accessory
           }
           if (src) {
             const si = ((py % src.h) * src.w + (px % src.w)) * 4
-            out.data[i] = src.pixels.data[si]
-            out.data[i + 1] = src.pixels.data[si + 1]
-            out.data[i + 2] = src.pixels.data[si + 2]
+            // Use the swatch pixel where it's opaque; on its transparent padding
+            // fall back to the swatch's average color rather than black.
+            if (src.pixels.data[si + 3] > 0) {
+              out.data[i] = src.pixels.data[si]
+              out.data[i + 1] = src.pixels.data[si + 1]
+              out.data[i + 2] = src.pixels.data[si + 2]
+            } else {
+              out.data[i] = src.fill[0]
+              out.data[i + 1] = src.fill[1]
+              out.data[i + 2] = src.fill[2]
+            }
             out.data[i + 3] = baseA // keep the character silhouette's alpha
           } else {
             out.data[i] = base.data[i]
