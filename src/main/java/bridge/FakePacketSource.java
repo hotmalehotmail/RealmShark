@@ -57,6 +57,14 @@ public class FakePacketSource {
     // outgoing PlayerShoot -> EnemyHit projectile path.
     private static final int WEAPON_ID = 4000;
 
+    // The local player's equipped skin (SKIN_ID, an objectType) and 4 equipped
+    // slots (INVENTORY_0..3: weapon/ability/armor/ring, each an item objectType),
+    // so the overlay's Character panel is exercisable in fake mode. Values are
+    // arbitrary plausible objectTypes - the overlay resolves them through the
+    // shared Sprite path (real atlas sprite if assets loaded, else placeholder).
+    private static final int LOCAL_SKIN_ID = 2500;
+    private static final int[] LOCAL_EQUIPMENT = {WEAPON_ID, 4100, 4200, 4300};
+
     // Set FAKE_NO_CREATE_SUCCESS to simulate a mid-session attach: the engine
     // never sees CreateSuccessPacket and must fall back to EnemyHitPacket.mainID
     // to identify the local player (exercises DpsEngine.resolveLocalPlayer).
@@ -205,7 +213,11 @@ public class FakePacketSource {
             ObjectStatusData status = new ObjectStatusData();
             status.objectId = ROSTER_IDS[i];
             status.pos = new WorldPosData();
-            status.stats = playerStats(ROSTER_NAMES[i]);
+            // Give the local player an equipped skin + 4 inventory slots so the
+            // overlay's Character panel has something to render.
+            status.stats = ROSTER_IDS[i] == LOCAL_PLAYER_ID
+                ? localPlayerStats(ROSTER_NAMES[i])
+                : playerStats(ROSTER_NAMES[i]);
 
             ObjectData obj = new ObjectData();
             obj.objectType = 0x0300; // player class 768, matches the synthetic players.xml
@@ -251,6 +263,26 @@ public class FakePacketSource {
             stat(StatType.VITALITY_BOOST_STAT, 0), stat(StatType.WISDOM_BOOST_STAT, 0),
             stat(StatType.EXALTATION_BONUS_DAMAGE, 1000) // /1000 -> x1.0 multiplier
         };
+    }
+
+    /**
+     * The local player's stat block, extended with an equipped skin (SKIN_ID) and
+     * the 4 equipped slots (INVENTORY_0..3), so the overlay's Character panel can
+     * render the player's sprite + loadout. Same shape a real client sends.
+     */
+    private StatData[] localPlayerStats(String name) {
+        StatData[] base = playerStats(name);
+        StatData[] extra = {
+            stat(StatType.SKIN_ID, LOCAL_SKIN_ID),
+            stat(StatType.INVENTORY_0_STAT, LOCAL_EQUIPMENT[0]),
+            stat(StatType.INVENTORY_1_STAT, LOCAL_EQUIPMENT[1]),
+            stat(StatType.INVENTORY_2_STAT, LOCAL_EQUIPMENT[2]),
+            stat(StatType.INVENTORY_3_STAT, LOCAL_EQUIPMENT[3])
+        };
+        StatData[] all = new StatData[base.length + extra.length];
+        System.arraycopy(base, 0, all, 0, base.length);
+        System.arraycopy(extra, 0, all, base.length, extra.length);
+        return all;
     }
 
     /** Enemy stat block: what the defense/condition damage calc reads. */

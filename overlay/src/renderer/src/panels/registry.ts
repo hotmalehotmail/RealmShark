@@ -1,6 +1,7 @@
 import type { ComponentType } from 'react'
 import type { PanelSize } from '../../../shared/panels'
 import type { SizePx } from './anchor'
+import CharacterPanel from './CharacterPanel'
 import ConsolePanel from './ConsolePanel'
 import DpsPanel from './DpsPanel'
 import StatusPanel from './StatusPanel'
@@ -46,5 +47,15 @@ export const PANEL_REGISTRY: Record<string, PanelSpec> = {
       lg: { width: 480, height: 320 }
     },
     component: ConsolePanel
+  },
+  character: {
+    type: 'character',
+    title: 'Character',
+    sizes: {
+      sm: { width: 160, height: 100 },
+      md: { width: 220, height: 130 },
+      lg: { width: 280, height: 170 }
+    },
+    component: CharacterPanel
   }
 }
