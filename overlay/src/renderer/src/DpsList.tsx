@@ -1,4 +1,6 @@
 import type { DpsSnapshot } from './dps/DpsTracker'
+import { useEntityRegistry } from './sprites/context'
+import { Sprite } from './sprites/Sprite'
 
 function formatNumber(n: number): string {
   return Math.round(n).toLocaleString()
@@ -11,6 +13,8 @@ interface DpsListProps {
 }
 
 function DpsList({ snapshot, maxRows, showHeader }: DpsListProps): React.JSX.Element {
+  const entities = useEntityRegistry()
+
   if (snapshot.targetId === null) {
     return <div className="text-xs text-white/40">No target attacked yet</div>
   }
@@ -18,7 +22,10 @@ function DpsList({ snapshot, maxRows, showHeader }: DpsListProps): React.JSX.Ele
   return (
     <div className="text-sm text-white">
       {showHeader && (
-        <div className="mb-1 truncate text-xs text-white/50">Target: {snapshot.targetName}</div>
+        <div className="mb-1 flex items-center gap-1.5 text-xs text-white/50">
+          <Sprite objectType={entities.objectType(snapshot.targetId)} size={16} />
+          <span className="truncate">Target: {snapshot.targetName}</span>
+        </div>
       )}
       {snapshot.rows.length === 0 ? (
         <div className="text-xs text-white/40">No recent damage</div>

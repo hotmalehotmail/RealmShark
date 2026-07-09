@@ -4,7 +4,8 @@ import {
   type BridgeStatus,
   type MainLogEntry,
   type PacketEnvelope,
-  type SaveSettingsResult
+  type SaveSettingsResult,
+  type SpritePack
 } from '../shared/ipc'
 import type { PanelInstance } from '../shared/panels'
 import type { OverlaySettings } from '../shared/settings'
@@ -49,7 +50,13 @@ const overlayApi = {
     ipcRenderer.on(IPC.mainLogEntry, listener)
     return () => ipcRenderer.removeListener(IPC.mainLogEntry, listener)
   },
-  getBufferedMainLogs: (): Promise<MainLogEntry[]> => ipcRenderer.invoke(IPC.getBufferedMainLogs)
+  getBufferedMainLogs: (): Promise<MainLogEntry[]> => ipcRenderer.invoke(IPC.getBufferedMainLogs),
+  getSpritePack: (): Promise<SpritePack> => ipcRenderer.invoke(IPC.getSpritePack),
+  onSpritePack: (cb: (pack: SpritePack) => void) => {
+    const listener = (_: unknown, pack: SpritePack): void => cb(pack)
+    ipcRenderer.on(IPC.spritePack, listener)
+    return () => ipcRenderer.removeListener(IPC.spritePack, listener)
+  }
 }
 
 export type OverlayApi = typeof overlayApi

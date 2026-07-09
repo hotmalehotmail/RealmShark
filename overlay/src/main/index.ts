@@ -11,6 +11,7 @@ import { ensureBridgeRunning, stopBridge } from './bridgeSupervisor'
 import { openConfigWindow } from './configWindow'
 import { getBufferedMainLogs, installMainConsoleCapture, setMainLogSink } from './consoleCapture'
 import { loadPanelLayout, persistPanelLayout } from './panelLayout'
+import { getSpritePack, initSpritePack, onSpritePackMessage, requestSpritePack } from './spritePack'
 import { loadSettings, persistSettings } from './settings'
 import { createTray, setTrayStatus } from './tray'
 
@@ -153,6 +154,12 @@ app.whenReady().then(() => {
     onOpenSettings: openConfigWindow
   })
 
+  initSpritePack((pack) => {
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.webContents.send(IPC.spritePack, pack)
+    }
+  })
+
   void ensureBridgeRunning(!supportsAttach)
 
   startBridgeClient({
@@ -163,7 +170,9 @@ app.whenReady().then(() => {
     },
     onBatch: (packets) => {
       overlayWindow.webContents.send(IPC.packetBatch, packets)
-    }
+    },
+    onConnected: requestSpritePack,
+    onSpritePack: onSpritePackMessage
   })
 
   ipcMain.handle(IPC.getBridgeStatus, (): BridgeStatus => currentBridgeStatus)
@@ -173,6 +182,8 @@ app.whenReady().then(() => {
   ipcMain.handle(IPC.getSettings, (): OverlaySettings => settings)
 
   ipcMain.handle(IPC.getAppVersion, (): string => app.getVersion())
+
+  ipcMain.handle(IPC.getSpritePack, () => getSpritePack())
 
   ipcMain.handle(IPC.saveSettings, (_event, next: OverlaySettings): SaveSettingsResult => {
     const titleChanged = next.gameWindowTitle !== settings.gameWindowTitle

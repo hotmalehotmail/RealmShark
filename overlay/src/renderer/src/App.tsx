@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import type { BridgeStatus } from '../../shared/ipc'
 import { ingestMainEntry } from './consoleLog'
 import PanelCanvas from './panels/PanelCanvas'
+import { EntityRegistryProvider } from './sprites/EntityRegistry'
+import { SpriteProvider } from './sprites/SpriteProvider'
 
 const STATUS_STYLES: Record<BridgeStatus, string> = {
   connected: 'bg-emerald-500',
@@ -41,6 +43,22 @@ function App(): React.JSX.Element {
     }
   }, [])
 
+  return (
+    <SpriteProvider>
+      <EntityRegistryProvider>
+        <AppShell status={status} interactive={interactive} showAttachToast={showAttachToast} />
+      </EntityRegistryProvider>
+    </SpriteProvider>
+  )
+}
+
+interface AppShellProps {
+  status: BridgeStatus
+  interactive: boolean
+  showAttachToast: boolean
+}
+
+function AppShell({ status, interactive, showAttachToast }: AppShellProps): React.JSX.Element {
   return (
     <div className="relative h-screen w-screen">
       {showAttachToast && !interactive && (

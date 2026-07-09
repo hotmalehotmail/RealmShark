@@ -1,5 +1,5 @@
 import WebSocket from 'ws'
-import type { BridgeStatus } from '../shared/ipc'
+import type { BridgeStatus, SpritePack } from '../shared/ipc'
 
 const BRIDGE_URL = 'ws://127.0.0.1:47474'
 const EXPECTED_SERVICE = 'realmshark-bridge'
@@ -8,6 +8,10 @@ const RECONNECT_DELAY_MS = 2000
 interface BridgeClientHandlers {
   onStatus: (status: BridgeStatus) => void
   onBatch: (packets: unknown[]) => void
+  /** Called once the hello frame is validated, with a fn to send a message upstream. */
+  onConnected?: (send: (msg: unknown) => void) => void
+  /** A non-batch typed control message (currently only the sprite pack). */
+  onSpritePack?: (pack: SpritePack & { upToDate?: boolean }) => void
 }
 
 /**
@@ -40,10 +44,22 @@ function connect(handlers: BridgeClientHandlers): void {
       if (msg.type === 'hello' && msg.service === EXPECTED_SERVICE) {
         verified = true
         handlers.onStatus('connected')
+        handlers.onConnected?.((out) => {
+          try {
+            ws.send(JSON.stringify(out))
+          } catch {
+            // socket already closing; the reconnect will re-request
+          }
+        })
       } else {
         console.error('[bridge-client] unexpected hello frame, closing:', msg)
         ws.close()
       }
+      return
+    }
+
+    if (msg.type === 'spritePack') {
+      handlers.onSpritePack?.(msg as unknown as SpritePack & { upToDate?: boolean })
       return
     }
 
