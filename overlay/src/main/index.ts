@@ -1,19 +1,29 @@
-import { app, BrowserWindow, globalShortcut, nativeImage } from 'electron'
+import { app, BrowserWindow, globalShortcut, ipcMain, nativeImage } from 'electron'
 import { join } from 'path'
 import { electronApp, is } from '@electron-toolkit/utils'
 import { OverlayController, OVERLAY_WINDOW_OPTS } from 'electron-overlay-window'
 import icon from '../../resources/icon.png?asset'
-import { IPC } from '../shared/ipc'
+import { IPC, type SaveSettingsResult } from '../shared/ipc'
+import type { OverlaySettings } from '../shared/settings'
 import { startBridgeClient } from './bridgeClient'
 import { ensureBridgeRunning, stopBridge } from './bridgeSupervisor'
+import { openConfigWindow } from './configWindow'
+import { loadSettings, persistSettings } from './settings'
 import { createTray, setTrayStatus } from './tray'
 
 // electron-overlay-window relies on native window compositing; hardware
 // acceleration can break overlay transparency. https://github.com/electron/electron/issues/25153
 app.disableHardwareAcceleration()
 
-const GAME_WINDOW_TITLE = 'Realm of the Mad God'
-const TOGGLE_HOTKEY = 'Alt+Shift+R'
+// A second launch would spawn its own bridge.jar attempt and leave the first
+// instance's child process orphaned if this one exits uncleanly - only ever
+// allow one overlay (and one supervised bridge process) at a time.
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+}
+
+let settings = loadSettings()
+let currentHotkey = settings.toggleHotkey
 
 let overlayWindow: BrowserWindow
 let isInteractive = false
@@ -35,7 +45,11 @@ function createOverlayWindow(): void {
     overlayWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
-  OverlayController.attachByTitle(overlayWindow, GAME_WINDOW_TITLE, {
+  // electron-overlay-window matches this with an exact strcmp, not a substring
+  // or regex - must match the live window title byte-for-byte, including case.
+  // Also: the library can only be attached once per process, so changing this
+  // requires a restart (see IPC.saveSettings handler below).
+  OverlayController.attachByTitle(overlayWindow, settings.gameWindowTitle, {
     hasTitleBarOnMac: true
   })
 }
@@ -51,25 +65,68 @@ function toggleInteractive(): void {
   overlayWindow.webContents.send(IPC.interactiveChange, isInteractive)
 }
 
+function registerHotkey(accelerator: string): boolean {
+  const ok = globalShortcut.register(accelerator, toggleInteractive)
+  if (ok) currentHotkey = accelerator
+  return ok
+}
+
+app.on('second-instance', () => {
+  overlayWindow?.showInactive()
+})
+
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.realmshark.overlay')
 
   createOverlayWindow()
 
-  globalShortcut.register(TOGGLE_HOTKEY, toggleInteractive)
+  registerHotkey(settings.toggleHotkey)
 
-  createTray(nativeImage.createFromPath(icon), toggleInteractive)
+  createTray(nativeImage.createFromPath(icon), {
+    onToggleOverlay: toggleInteractive,
+    onOpenSettings: openConfigWindow
+  })
 
   void ensureBridgeRunning()
 
   startBridgeClient({
     onStatus: (status) => {
       overlayWindow.webContents.send(IPC.bridgeStatus, status)
-      setTrayStatus(status, toggleInteractive)
+      setTrayStatus(status)
     },
     onBatch: (packets) => {
       overlayWindow.webContents.send(IPC.packetBatch, packets)
     }
+  })
+
+  ipcMain.handle(IPC.getSettings, (): OverlaySettings => settings)
+
+  ipcMain.handle(IPC.saveSettings, (_event, next: OverlaySettings): SaveSettingsResult => {
+    const titleChanged = next.gameWindowTitle !== settings.gameWindowTitle
+    const hotkeyChanged = next.toggleHotkey !== currentHotkey
+
+    let hotkeyRegistered = true
+    if (hotkeyChanged) {
+      globalShortcut.unregister(currentHotkey)
+      hotkeyRegistered = registerHotkey(next.toggleHotkey)
+      if (!hotkeyRegistered) {
+        // Requested accelerator was invalid or already claimed by another app - keep the old one working.
+        registerHotkey(settings.toggleHotkey)
+      }
+    }
+
+    settings = {
+      ...next,
+      toggleHotkey: hotkeyRegistered ? next.toggleHotkey : settings.toggleHotkey
+    }
+    persistSettings(settings)
+
+    return { needsRestart: titleChanged, hotkeyRegistered }
+  })
+
+  ipcMain.handle(IPC.relaunch, () => {
+    app.relaunch()
+    app.exit(0)
   })
 })
 

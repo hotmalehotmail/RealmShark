@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { IPC, type BridgeStatus, type PacketEnvelope } from '../shared/ipc'
+import { IPC, type BridgeStatus, type PacketEnvelope, type SaveSettingsResult } from '../shared/ipc'
+import type { OverlaySettings } from '../shared/settings'
 
 const overlayApi = {
   onBridgeStatus: (cb: (status: BridgeStatus) => void) => {
@@ -16,7 +17,11 @@ const overlayApi = {
     const listener = (_: unknown, interactive: boolean): void => cb(interactive)
     ipcRenderer.on(IPC.interactiveChange, listener)
     return () => ipcRenderer.removeListener(IPC.interactiveChange, listener)
-  }
+  },
+  getSettings: (): Promise<OverlaySettings> => ipcRenderer.invoke(IPC.getSettings),
+  saveSettings: (settings: OverlaySettings): Promise<SaveSettingsResult> =>
+    ipcRenderer.invoke(IPC.saveSettings, settings),
+  relaunch: (): Promise<void> => ipcRenderer.invoke(IPC.relaunch)
 }
 
 export type OverlayApi = typeof overlayApi

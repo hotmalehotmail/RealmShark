@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { BridgeStatus, PacketEnvelope } from '../../shared/ipc'
+import { DEFAULT_SETTINGS } from '../../shared/settings'
 
 const STATUS_STYLES: Record<BridgeStatus, string> = {
   connected: 'bg-emerald-500',
@@ -12,8 +13,10 @@ function App(): React.JSX.Element {
   const [interactive, setInteractive] = useState(false)
   const [packetCount, setPacketCount] = useState(0)
   const [lastPacket, setLastPacket] = useState<PacketEnvelope | null>(null)
+  const [toggleHotkey, setToggleHotkey] = useState(DEFAULT_SETTINGS.toggleHotkey)
 
   useEffect(() => {
+    window.overlay.getSettings().then((settings) => setToggleHotkey(settings.toggleHotkey))
     const offStatus = window.overlay.onBridgeStatus(setStatus)
     const offInteractive = window.overlay.onInteractiveChange(setInteractive)
     const offBatch = window.overlay.onPacketBatch((packets) => {
@@ -43,7 +46,7 @@ function App(): React.JSX.Element {
         </div>
 
         <div className="mt-2 text-xs text-white/50">
-          Alt+Shift+R to {interactive ? 'return input to the game' : 'interact with the overlay'}
+          {toggleHotkey} to {interactive ? 'return input to the game' : 'interact with the overlay'}
         </div>
 
         <div className="mt-3 flex items-baseline justify-between border-t border-white/10 pt-2">
