@@ -1,6 +1,41 @@
 # Dyes & textiles — plan + debug log
 
-## ⏳ CURRENT STATE (v0.9.8) — dyes implemented but NOT rendering; mid-debug
+## ✅ SOLVED (v0.9.16-alpha) — solid dyes render correctly; textiles located
+
+Solid dyes now render their true color. The long debug is resolved. Key correction to
+every earlier assumption: **the dye's color/pattern is NOT in any sprite.** The dye
+object's texture is a generic shared *icon* (proven: Deep Pink 4134 and Honey Dew 4149
+resolve to the exact same rect `lofiObj3:16`). The real color is in the **dye object's
+XML `<Tex1>`** (which the extractor never parsed):
+- **Solid**: `<Tex1>0x01RRGGBB</Tex1>` — e.g. Deep Pink = `0x01FF1493` = (255,20,147).
+- **Textile**: `<Tex1>0x0A00IIII</Tex1>` — high byte `0x0A`(10), low bits = textile index
+  (Large Lemon-Lime = `0x0A000019`, index 25).
+
+**Compositing model (confirmed from `[dye-mask]`):** the `characters_masks` mask marks
+clothing (red channel) / accessory (green channel); the **channel value is the shade
+level** (e.g. 218 and 255). The undyed sprite is literally `referenceColor ×
+(maskValue/255)`, so correct dyeing is `dyeColor × (maskValue/255)` per channel. No
+reference subtraction, no icon sampling.
+
+**What shipped (v0.9.16-alpha):**
+- `bridge/sprites/SpritePackService.buildDyeTable()` scans `assets/xml` for
+  `<Class>Dye</Class>`, parses `<Tex1>`/`<Tex2>`, emits `dyeTable[dyeId]` =
+  `[1,r,g,b]` (solid) or `[10,idx]` (textile).
+- `SpriteProvider.getDyedSprite` recolors the mask region via the shade formula above.
+- Textiles resolve to `null` → render **undyed** for now.
+
+### ▶ NEXT: textiles (v0.9.17-alpha diagnostic in flight)
+
+Textile patterns exist as sprite groups **`textile4x4` / `5x5` / `9x9` / `10x10`**
+(found via `[dye-groups]`). Hypothesis: textile `Tex1` high byte = tile-size group
+(`0x0A`→`textile10x10`), low bits = in-group index. Two unknowns gated by the
+`[dye-textile]` diagnostic: (1) which **atlas** those groups live in — `ImageBuffer`
+only ships 4 (`groundTiles`,`characters`,`characters_masks`,`mapObjects`); if textiles
+are `aId` 5+ we must extract a 5th atlas + ship it; (2) confirm the size→group /
+index mapping. Then: emit a textile table + atlas, tile the pattern into the mask
+region using the same shade formula.
+
+## (historical) ⏳ v0.9.8 — dyes implemented but NOT rendering; mid-debug
 
 Dye compositing IS implemented (v0.9.6) and shipped, but dyes **don't render** on the
 user's character. We're actively debugging. Resume here.

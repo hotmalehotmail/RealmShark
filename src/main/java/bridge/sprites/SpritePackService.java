@@ -177,12 +177,26 @@ public class SpritePackService {
             System.out.println("[dye-groups] failed: " + e);
         }
 
+        // TEMP [dye-textile] Which atlas do the textile groups live in, and does
+        // the textile Tex1 high byte pick the tile-size group (0x0A -> 10x10)
+        // with the low bits as the in-group index? Dump index 25 (equipped Large
+        // Lemon-Lime = 0x0A000019) and index 0 for each textile size group.
+        try {
+            for (String g : new String[]{"textile4x4", "textile5x5", "textile9x9", "textile10x10"}) {
+                System.out.println("[dye-textile] " + sfb.describeSpriteFull(g, 0)
+                    + " || " + sfb.describeSpriteFull(g, 25));
+            }
+        } catch (Exception e) {
+            System.out.println("[dye-textile] failed: " + e);
+        }
+
         // TEMP [dye-xml] Dump the raw <Object> XML for a solid clothing dye, a
         // solid accessory dye, and a textile, to confirm the Tex1 encoding for
         // each. Reads the extracted assets/xml/*.xml on disk.
         try {
-            // Deep Pink Clothing Dye, Alice Blue Accessory Dye, Large Lemon-Lime Cloth
-            String[] types = {"0x1026", "0x1100", "0x122f"};
+            // Deep Pink Clothing Dye, Alice Blue Accessory Dye,
+            // Large Lemon-Lime Cloth (0x0A......), Small UFO Cloth (size?)
+            String[] types = {"0x1026", "0x1100", "0x122f", "0x1367"};
             java.io.File xmlDir = new java.io.File("assets/xml");
             java.io.File[] files = xmlDir.listFiles((d, n) -> n.endsWith("xml"));
             if (files == null) {

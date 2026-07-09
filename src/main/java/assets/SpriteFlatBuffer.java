@@ -230,6 +230,20 @@ public class SpriteFlatBuffer {
         return "groupsWithMask total=" + total + " :: " + sb;
     }
 
+    // TEMP [dye-textile] One sprite's atlas id, rect, and most-common color, so
+    // we can tell which atlas the textile groups live in (do we ship it?) and
+    // eyeball-match a textile index to its cloth by color.
+    public String describeSpriteFull(String name, int index) {
+        HashMap<Integer, Sprite> list = sprites.get(name);
+        if (list == null) return name + ":<no group>";
+        Sprite s = list.get(index);
+        if (s == null) return name + "[" + index + "]:<no index> (size=" + list.size() + ")";
+        return name + "[" + index + "] aId=" + s.aId + " rect=" + s.positionX + "," + s.positionY
+            + " " + s.positionW + "x" + s.positionH
+            + " color=(" + Math.round(s.mostCommonColorR * 255) + ","
+            + Math.round(s.mostCommonColorG * 255) + "," + Math.round(s.mostCommonColorB * 255) + ")";
+    }
+
     // TEMP [dye-groups] All sprite group names and their sizes, to locate the
     // sheet holding textile cloth patterns.
     public String describeAllGroups() {
