@@ -78,6 +78,8 @@ To verify UI changes visually in this sandboxed environment: temporarily add a `
 
 ## Release process (manual, not yet CI'd)
 
+**NEVER cut a new release (tag + `gh release create`) unless the user explicitly asks for it in that message.** Building/packaging locally to verify is fine; tagging, pushing tags, and publishing a GitHub release are not — wait for an explicit "release"/"cut a release"/"ship it". This is separate from and stricter than the general commit/push gate.
+
 1. Rebuild `bridge.jar` (Gradle, see above) if the Java side changed.
 2. `cd overlay && npm run build && npx electron-builder --win --x64`.
 3. `git tag overlay-test-vX.Y <commit>` and `git push origin overlay-test-vX.Y`.
