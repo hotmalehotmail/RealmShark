@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { OverlaySettings } from '../../shared/settings'
+import type { FlashFixMode, OverlaySettings } from '../../shared/settings'
 
 function ConfigWindow(): React.JSX.Element {
   const [settings, setSettings] = useState<OverlaySettings | null>(null)
@@ -48,6 +48,23 @@ function ConfigWindow(): React.JSX.Element {
           onChange={(e) => setSettings({ ...settings, toggleHotkey: e.target.value })}
         />
         <p className="mt-1 text-xs text-white/40">Electron accelerator format, e.g. Alt+Shift+R</p>
+      </div>
+
+      <div>
+        <label className="mb-1 block text-white/70">Alt-tab flash fix (debug)</label>
+        <select
+          className="w-full rounded border border-white/20 bg-neutral-800 px-2 py-1.5"
+          value={settings.flashFix}
+          onChange={(e) => setSettings({ ...settings, flashFix: e.target.value as FlashFixMode })}
+        >
+          <option value="occlusion">Occlusion (keep painting hidden window)</option>
+          <option value="nohide">No-hide (sink instead of hiding)</option>
+          <option value="off">Off (baseline - will flash)</option>
+        </select>
+        <p className="mt-1 text-xs text-white/40">
+          Temporary: trying two fixes for the alt-tab panel flash. Switch, restart, and see which
+          removes it. Windows only.
+        </p>
       </div>
 
       <div className="mt-auto flex items-center gap-3">

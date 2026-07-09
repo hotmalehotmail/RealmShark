@@ -14,7 +14,6 @@ import { loadPanelLayout, persistPanelLayout } from './panelLayout'
 import { getSpritePack, initSpritePack, onSpritePackMessage, requestSpritePack } from './spritePack'
 import { loadSettings, persistSettings } from './settings'
 import { createTray, setTrayStatus } from './tray'
-import { disableWindowAnimations } from './windowAnimations'
 
 // Installed before anything else logs, so bridge-supervisor/bridge-client
 // output (only otherwise visible in a terminal) is captured from process
@@ -50,6 +49,21 @@ let settings = loadSettings()
 let currentHotkey = settings.toggleHotkey
 let currentBridgeStatus: BridgeStatus = 'connecting'
 
+// Anti-flash "occlusion" strategy (Idea 1): electron-overlay-window hides the
+// overlay on game-blur and re-shows it on focus; Chromium stops painting a
+// hidden window, so on re-show it repaints - the alt-tab "flash". Disabling
+// native window occlusion keeps the window painted while hidden so re-showing
+// is instant. Must be set before app-ready, so we read the persisted setting
+// here (changing the setting requires a restart). Merge with any existing
+// disable-features value so we don't clobber Electron's own defaults.
+if (settings.flashFix === 'occlusion') {
+  const existing = app.commandLine.getSwitchValue('disable-features')
+  app.commandLine.appendSwitch(
+    'disable-features',
+    existing ? `${existing},CalculateNativeWinOcclusion` : 'CalculateNativeWinOcclusion'
+  )
+}
+
 let overlayWindow: BrowserWindow
 let isInteractive = false
 
@@ -60,7 +74,10 @@ function createOverlayWindow(): void {
     ...OVERLAY_WINDOW_OPTS,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false
+      sandbox: false,
+      // Part of the 'occlusion' anti-flash strategy (Idea 1): keep the renderer
+      // painting while the window is hidden/backgrounded so re-show is instant.
+      backgroundThrottling: settings.flashFix === 'occlusion' ? false : undefined
     }
   })
 
@@ -68,11 +85,6 @@ function createOverlayWindow(): void {
   // can't hold OS keyboard focus from the outset, not just after the first
   // toggle. See the setFocusable() call in toggleInteractive() for why.
   overlayWindow.setFocusable(false)
-
-  // Stop Windows animating the overlay's show/hide, so alt-tabbing back into
-  // the game doesn't make the panels "flash into place" (electron-overlay-window
-  // hides/re-shows the window on the game's focus changes). No-op off Windows.
-  disableWindowAnimations(overlayWindow)
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     overlayWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
@@ -97,6 +109,8 @@ function createOverlayWindow(): void {
     OverlayController.events.on('detach', () => {
       overlayWindow.webContents.send(IPC.overlayDetach)
     })
+
+    if (settings.flashFix === 'nohide') installNoHideStrategy()
   } else {
     console.log(
       '[overlay] platform has no window-attach support - showing a standalone window for local UI testing'
@@ -105,6 +119,41 @@ function createOverlayWindow(): void {
     overlayWindow.show()
     setTimeout(() => overlayWindow.webContents.send(IPC.attachSuccess), 1000)
   }
+}
+
+/**
+ * Anti-flash "nohide" strategy (Idea 2): the library hides the overlay on
+ * game-blur and re-shows it on focus, and that re-show is what flashes. Instead
+ * of hiding, SINK the overlay (drop always-on-top + go click-through) so it
+ * falls behind a covering window along with the game, then re-raise it on
+ * game-focus - no hide/show, nothing to animate. The real hide() is preserved
+ * for detach (game actually closed), where the overlay should truly disappear.
+ */
+function installNoHideStrategy(): void {
+  const realHide = overlayWindow.hide.bind(overlayWindow)
+  let detaching = false
+
+  // Run before the library's own detach handler (which calls hide()), so a
+  // detach does a real hide rather than a sink.
+  OverlayController.events.prependListener('detach', () => {
+    detaching = true
+  })
+
+  // The library calls hide() on game-blur; sink instead (unless detaching).
+  overlayWindow.hide = (): void => {
+    if (detaching) {
+      realHide()
+      return
+    }
+    overlayWindow.setAlwaysOnTop(false)
+    overlayWindow.setIgnoreMouseEvents(true)
+  }
+
+  // On game-focus the library only re-raises a hidden window; ours stayed
+  // visible, so re-raise it back on top here.
+  OverlayController.events.on('focus', () => {
+    overlayWindow.setAlwaysOnTop(true, 'screen-saver')
+  })
 }
 
 /** Flips the overlay between click-through (game gets input) and interactive (overlay gets input). */
@@ -205,6 +254,8 @@ app.whenReady().then(() => {
   ipcMain.handle(IPC.saveSettings, (_event, next: OverlaySettings): SaveSettingsResult => {
     const titleChanged = next.gameWindowTitle !== settings.gameWindowTitle
     const hotkeyChanged = next.toggleHotkey !== currentHotkey
+    // The flash strategy is applied at window/app startup, so switching it needs a restart.
+    const flashFixChanged = next.flashFix !== settings.flashFix
 
     let hotkeyRegistered = true
     if (hotkeyChanged) {
@@ -222,7 +273,7 @@ app.whenReady().then(() => {
     }
     persistSettings(settings)
 
-    return { needsRestart: titleChanged, hotkeyRegistered }
+    return { needsRestart: titleChanged || flashFixChanged, hotkeyRegistered }
   })
 
   ipcMain.handle(IPC.relaunch, () => {
