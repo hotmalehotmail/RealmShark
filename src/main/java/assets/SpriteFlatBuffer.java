@@ -125,8 +125,9 @@ public class SpriteFlatBuffer {
 
     /** action value for the standing (non-walking/attacking) pose. */
     private static final int STAND_ACTION = 0;
-    /** direction value that faces right. */
-    private static final int RIGHT_DIRECTION = 2;
+    /** direction value that faces right. Confirmed from the players sheet:
+     *  0=right, 2=up, 3=down (left is mirror-derived, not stored). */
+    private static final int RIGHT_DIRECTION = 0;
 
     private static void reportDirections(String name, int direction, int action) {
         if (name == null) return;

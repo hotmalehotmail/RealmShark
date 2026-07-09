@@ -6,8 +6,9 @@ import type { UpdateInfo } from '../shared/ipc'
 
 /**
  * Lightweight self-updater. Polls the GitHub releases of the fork for a newer
- * overlay prerelease (tagged `overlay-test-vX.Y`), and can download that
- * release's NSIS installer and launch it. This deliberately avoids
+ * overlay prerelease (tagged `vX.Y.Z-alpha`, a proper semver tag so GitHub
+ * orders the releases page correctly), and can download that release's NSIS
+ * installer and launch it. This deliberately avoids
  * electron-updater: our releases are unsigned prereleases with custom tags and
  * no `latest.yml`/publish pipeline, which electron-updater doesn't fit without
  * reworking the release process. See docs / the release notes for the tradeoff
@@ -15,7 +16,6 @@ import type { UpdateInfo } from '../shared/ipc'
  */
 
 const REPO = 'hotmalehotmail/RealmShark'
-const TAG_PREFIX = 'overlay-test-v'
 const POLL_INTERVAL_MS = 6 * 60 * 60 * 1000 // 6h - well under GitHub's unauth rate limit
 const INITIAL_DELAY_MS = 10_000 // don't block startup
 
@@ -33,15 +33,17 @@ interface GithubRelease {
   assets?: GithubAsset[]
 }
 
-/** Parse the numeric version out of an `overlay-test-vX.Y[.Z]` tag; null if it doesn't match. */
+/**
+ * Parse the numeric version core out of a release tag; null if it doesn't look
+ * like one of ours. Accepts the current `vX.Y.Z` / `vX.Y.Z-alpha` semver tags
+ * (any prerelease suffix is ignored for ordering, since every release is a
+ * prerelease and we always bump the numeric core) as well as the legacy
+ * `overlay-test-vX.Y.Z` tags, so an older client can still see newer releases.
+ */
 function parseTagVersion(tag: string): number[] | null {
-  if (!tag.startsWith(TAG_PREFIX)) return null
-  const parts = tag
-    .slice(TAG_PREFIX.length)
-    .split('.')
-    .map((p) => parseInt(p, 10))
-  if (parts.length === 0 || parts.some((n) => !Number.isInteger(n))) return null
-  return parts
+  const m = /^(?:overlay-test-)?v(\d+)\.(\d+)(?:\.(\d+))?/.exec(tag)
+  if (!m) return null
+  return [Number(m[1]), Number(m[2]), Number(m[3] ?? 0)]
 }
 
 /** Element-wise numeric compare; missing trailing parts count as 0 (0.9 == 0.9.0). */

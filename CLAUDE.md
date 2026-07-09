@@ -82,16 +82,18 @@ To verify UI changes visually in this sandboxed environment: temporarily add a `
 
 `overlay/package.json`'s `version` is the single source of truth for the release number — it drives both the in-app version (shown in the Status panel via `app.getVersion()`) and the release tag/title below. Bump it *first*; everything else is derived from it, so the tag and the in-app version can't disagree.
 
-1. Bump `overlay/package.json`'s `version` to the new release number.
+**Tag scheme is a plain semver tag `v$VERSION`** (e.g. `v0.9.11-alpha`), NOT the old `overlay-test-v…` prefix. GitHub only sorts the releases page correctly when the tag is recognizable semver; the old prefix made it fall back to lexical order (so `overlay-test-v0.9.10` sorted down next to `0.9.1`). Keep `version` a valid semver prerelease (e.g. `0.9.11-alpha`) so GitHub also auto-treats it as a prerelease. `updater.ts`'s `parseTagVersion` accepts both the new `v…` tags and the legacy prefixed ones (numeric core only), so mixed history still resolves.
+
+1. Bump `overlay/package.json`'s `version` to the new release number (a semver prerelease, e.g. `0.9.11-alpha`).
 2. Rebuild `bridge.jar` (Gradle, see above) if the Java side changed.
 3. `cd overlay && npm run build && npx electron-builder --win --x64`.
 4. Tag and release, deriving the tag/title straight from `package.json` so nothing is hand-typed:
    ```bash
-   VERSION=$(node -p "require('./overlay/package.json').version")   # e.g. 0.8.2
-   TAG="overlay-test-v$VERSION"
+   VERSION=$(node -p "require('./overlay/package.json').version")   # e.g. 0.9.11-alpha
+   TAG="v$VERSION"
    git tag "$TAG" <commit> && git push origin "$TAG"
    gh release create "$TAG" --repo hotmalehotmail/RealmShark --prerelease \
-     --title "Overlay test v$VERSION — ..." --notes "..." \
+     --title "Overlay $TAG — ..." --notes "..." \
      overlay/dist/*-setup.exe#RealmShark-Overlay-Setup.exe build/libs/bridge.jar
    ```
 
