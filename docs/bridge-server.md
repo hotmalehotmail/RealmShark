@@ -407,24 +407,26 @@ envelope with `type:"dps"`, `direction:"internal"`:
 no Npcap**, by emitting synthetic packets through the *same* `Register` pipeline
 the real sniffer uses (`Register.INSTANCE.emitPacketLogs(...)`), so nothing
 downstream can tell the difference. It runs on a daemon thread
-`fake-packet-source` (`FakePacketSource.java:78-82`). Launch it with
+`fake-packet-source` (`FakePacketSource.java:110-114`). Launch it with
 `./gradlew runBridge -Pargs="--fake"` — see [build-and-release.md](build-and-release.md).
 
-### Simulated entities (constants, `FakePacketSource.java:42-72`)
+### Simulated entities (constants, `FakePacketSource.java:49-104`)
 
 | Thing | Value | Purpose |
 | --- | --- | --- |
-| Roster ids | `{1,2,3,4}` | four fake players Alice/Bob/Carol/Dave |
+| Roster ids | `{1,2,3,4}` | four fake players Alice/Bob/Carol/Dave — Bob and Dave's `NAME_STAT` carries a comma-appended title code (`"Bob,a0ca"`) to exercise client-side stripping |
 | Local player | `id 1` (Alice) | "you" |
 | Enemy ids | `{100000,100001}` | two distinct DPS targets |
 | Enemy types | `{1900,1901}` | objectTypes → resolved to names via `IdToAsset` |
 | Pet id | `50` | a summon owned by the local player (minion attribution) |
-| Weapon id | `4000` | what the local player "fires" (needs projectile damage in assets) |
+| Weapon id | `4000` | what the local player "fires" (needs projectile damage in assets); also Alice's INVENTORY_0 |
 | Skin id | `2500` | local player's equipped skin (Character panel) |
-| Equipment | `{4000,4100,4200,4300}` | INVENTORY_0..3 slots |
+| Roster equipment | per-player INVENTORY_0..3 (`ROSTER_EQUIPMENT`, `:80-85`) | every roster member has a full loadout, not just the local player |
+| Weapon swap | id `2` (Bob), cycles `{4001,4010,4020,4030}` | a non-local player's INVENTORY_0 changes every ~10 ticks, exercising other-players' equipment updates |
+| Transient player | id `5`, `"Eve,7f2c"` | joins then leaves on a 24-tick cycle, exercising roster removal via `UpdatePacket.drops` |
 | `FAKE_NO_CREATE_SUCCESS` env | flag | simulate a mid-session attach (no `CreateSuccessPacket`) |
 
-### The emit loop (`FakePacketSource.java:84-136`)
+### The emit loop (`FakePacketSource.java:116-184`)
 
 Before the loop: emit a `MapInfoPacket` (seeds the engine RNG the damage roll
 needs) and, unless `SKIP_CREATE_SUCCESS`, a `CreateSuccessPacket`. Then every
@@ -434,7 +436,10 @@ needs) and, unless `SKIP_CREATE_SUCCESS`, a `CreateSuccessPacket`. Then every
 | --- | --- | --- |
 | `tick % 15 == 0` | `rosterUpdate`, `enemyUpdate`, `petOwnership` | periodic resend so a late-connecting client still gets entity data within seconds |
 | `tick > 0 && tick % 40 == 0` | `mapInfo`, `createSuccess`, `rosterUpdate`, `enemyUpdate`, `petOwnership` | fake **instance reset** — exercises the DPS tracker's reset-on-`MapInfoPacket`, immediately followed by a fresh entity burst |
+| `tick % 24 == 6` | `transientJoin()` | a 5th player ("Eve") joins the instance |
+| `tick % 24 == 18` | `transientLeave()` | "Eve" leaves the instance (`UpdatePacket.drops`), exercising roster removal |
 | every tick | `newTick(tick)` | advancing server clock (`tickTime=300`, `serverRealTimeMS=tick*300`) — the engine's time base; without it every DPS is 0 |
+| `tick > 0 && tick % 10 == 0` | `newTick(tick).status` carries `weaponSwapStatus(tick)` | cycles Bob's INVENTORY_0, exercising a non-local player's equipment updating live |
 | every tick | `localPlayerShoot(bulletId)` + `localPlayerHit(target,bulletId)` | the self-DPS path: outgoing `PlayerShootPacket` (weapon) matched by `EnemyHitPacket` (same `bulletId`); `EnemyHitPacket.mainID` also identifies the local player |
 | every tick | `randomDamage()` | a `DamagePacket` (50–499 dmg) attributed to a random roster member, or ~1-in-5 to the pet |
 
@@ -443,33 +448,42 @@ needs) and, unless `SKIP_CREATE_SUCCESS`, a `CreateSuccessPacket`. Then every
 
 ### What each builder produces
 
-- **`rosterUpdate`** (`:204-228`) — an `UpdatePacket` with four `ObjectData`,
-  each `objectType = 0x0300` (768, the synthetic player class). Non-local players
-  get `playerStats` (a full maxed base+boost stat block + `NAME_STAT` +
-  `EXALTATION_BONUS_DAMAGE`, so the engine can compute a maxed player's damage,
-  `:246-266`). The local player gets `localPlayerStats` (base + `SKIN_ID`,
-  `INVENTORY_0..3`, and `TEX1_STAT=4149`/`TEX2_STAT=4967` dye stats so the
-  Character panel and dye compositing are exercised, `:273-290`; see
-  [dyes-and-textiles.md](dyes-and-textiles.md)).
-- **`enemyUpdate`** (`:307-327`) — an `UpdatePacket` with two `ObjectData`
+- **`rosterUpdate`** (`:252-276`) — an `UpdatePacket` with four `ObjectData`,
+  each `objectType = 0x0300` (768, the synthetic player class). Every roster
+  member gets `playerStats` (a full maxed base+boost stat block + `NAME_STAT` +
+  `EXALTATION_BONUS_DAMAGE` + that player's own `ROSTER_EQUIPMENT` slots, so the
+  engine can compute a maxed player's damage and the Instance panel can render
+  every player's loadout, `:340-364`). The local player additionally gets
+  `localPlayerStats` (+ `SKIN_ID`, and `TEX1_STAT=4149`/`TEX2_STAT=4967` dye
+  stats so the Character panel and dye compositing are exercised, `:372-385`;
+  see [dyes-and-textiles.md](dyes-and-textiles.md)).
+- **`weaponSwapStatus`** (`:283-291`) — a `NewTickPacket.status` entry cycling
+  `SWAP_PLAYER_ID` (Bob)'s `INVENTORY_0`, so a non-local player's equipment
+  updates render live too.
+- **`transientJoin`** / **`transientLeave`** (`:294-311` / `:314-322`) — an
+  `UpdatePacket` adding a 5th player ("Eve"), then dropping her via `drops`, to
+  exercise roster removal.
+- **`enemyUpdate`** (`:402-422`) — an `UpdatePacket` with two `ObjectData`
   carrying `ENEMY_TYPES` and `enemyStats` but **no** `NAME_STAT`, exactly like a
   real monster, so `ObjectNames` names them from their type.
-- **`createSuccess`** (`:139-145`) — assigns the local-player identity
+- **`createSuccess`** (`:187-193`) — assigns the local-player identity
   (`objectId=1, charId=1`).
-- **`localPlayerHit`** (`:152-161`) — outgoing `EnemyHitPacket` with
+- **`localPlayerHit`** (`:200-209`) — outgoing `EnemyHitPacket` with
   `shooterID=mainID=1`, `targetId=enemy`.
-- **`localPlayerShoot`** (`:164-177`) — outgoing `PlayerShootPacket` with
+- **`localPlayerShoot`** (`:212-225`) — outgoing `PlayerShootPacket` with
   `weaponId=4000`.
-- **`petOwnership`** (`:191-201`) — a `ServerPlayerShootPacket` establishing
+- **`petOwnership`** (`:239-249`) — a `ServerPlayerShootPacket` establishing
   `ownerId=50` as a summon whose `summonerId=1` (the local player).
-- **`mapInfo`** (`:330-340`) — increments an internal counter and names the realm
+- **`mapInfo`** (`:425-435`) — increments an internal counter and names the realm
   `FakeRealm<N>`; each one is a fresh instance.
-- **`randomDamage`** (`:347-359`) — a `DamagePacket` toward a random enemy, from a
+- **`randomDamage`** (`:442-454`) — a `DamagePacket` toward a random enemy, from a
   random roster member or (rng 1-in-5) the pet.
 
 Together these exercise per-enemy DPS tracking, local-player focus-target
 attribution, minion attribution, the object-name resolver, the Character panel,
-dye compositing, and periodic instance resets — the full surface without a game.
+dye compositing, per-player equipment (including non-local updates and NAME_STAT
+title-code stripping), roster join/leave, and periodic instance resets — the
+full surface without a game.
 
 ---
 
