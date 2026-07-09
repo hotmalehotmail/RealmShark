@@ -6,7 +6,9 @@ import packets.data.ObjectStatusData;
 import packets.data.StatData;
 import packets.data.WorldPosData;
 import packets.data.enums.StatType;
+import packets.incoming.CreateSuccessPacket;
 import packets.incoming.DamagePacket;
+import packets.incoming.MapInfoPacket;
 import packets.incoming.UpdatePacket;
 import packets.packetcapture.register.Register;
 
@@ -17,17 +19,24 @@ import java.util.Random;
  * pipeline the real sniffer uses, so the bridge and any UI can be developed
  * without the game or Npcap running. Enabled with the {@code --fake} flag.
  * <p>
- * Emits a stable fake player roster once (via an {@link UpdatePacket} carrying
- * NAME_STAT, same shape a real client sees on entering a map), then loops
- * {@link DamagePacket}s attributed to that roster so a DPS meter has
- * consistent player identities to attribute hits to, not just random ids.
+ * Emits a stable fake player roster (via an {@link UpdatePacket} carrying
+ * NAME_STAT, same shape a real client sees on entering a map), a
+ * {@link CreateSuccessPacket} assigning the local player identity to the
+ * first roster member, and loops {@link DamagePacket}s against two distinct
+ * fake enemies attributed to random roster members - enough surface to
+ * exercise per-enemy DPS tracking, local-player focus-target attribution,
+ * and periodic instance resets (a {@link MapInfoPacket} every ~40 ticks).
  */
 public class FakePacketSource {
 
     private static final int[] ROSTER_IDS = {1, 2, 3, 4};
     private static final String[] ROSTER_NAMES = {"Alice", "Bob", "Carol", "Dave"};
+    private static final int LOCAL_PLAYER_ID = ROSTER_IDS[0]; // "you" are Alice
+
+    private static final int[] ENEMY_IDS = {100_000, 100_001};
 
     private final Random rng = new Random();
+    private int mapNumber = 1;
 
     /** Start emitting fake packets on a background daemon thread. */
     public void start() {
@@ -38,12 +47,18 @@ public class FakePacketSource {
 
     private void loop() {
         int tick = 0;
+        Register.INSTANCE.emitPacketLogs(createSuccess());
         while (!Thread.currentThread().isInterrupted()) {
             // Resend the roster periodically (real UpdatePackets only arrive once per
             // object's render-visibility change) so a client that connects even a
             // moment late still picks up names within a few seconds, not never.
             if (tick % 15 == 0) {
                 Register.INSTANCE.emitPacketLogs(rosterUpdate());
+            }
+            // Simulate periodic instance transitions to exercise the DPS tracker's reset.
+            if (tick > 0 && tick % 40 == 0) {
+                Register.INSTANCE.emitPacketLogs(mapInfo());
+                Register.INSTANCE.emitPacketLogs(createSuccess());
             }
             Register.INSTANCE.emitPacketLogs(randomDamage());
             tick++;
@@ -54,6 +69,15 @@ public class FakePacketSource {
                 return;
             }
         }
+    }
+
+    /** Assigns the local-player identity to the first roster member, same as a real CreateSuccessPacket. */
+    private CreateSuccessPacket createSuccess() {
+        CreateSuccessPacket p = new CreateSuccessPacket();
+        p.objectId = LOCAL_PLAYER_ID;
+        p.charId = 1;
+        p.str = "";
+        return p;
     }
 
     /** A one-time UpdatePacket introducing a stable roster of named fake players. */
@@ -85,12 +109,26 @@ public class FakePacketSource {
         return p;
     }
 
-    /** A damage hit attributed to a random member of the fake roster. */
+    /** A fake instance transition, to test that the DPS tracker resets on MapInfoPacket. */
+    private MapInfoPacket mapInfo() {
+        mapNumber++;
+        MapInfoPacket p = new MapInfoPacket();
+        p.width = 64;
+        p.height = 64;
+        p.name = "FakeRealm" + mapNumber;
+        p.displayName = "Fake Realm " + mapNumber;
+        p.realmName = p.displayName;
+        p.versionNumber = "0";
+        return p;
+    }
+
+    /** A damage hit against a random fake enemy, attributed to a random member of the fake roster. */
     private DamagePacket randomDamage() {
         int attacker = ROSTER_IDS[rng.nextInt(ROSTER_IDS.length)];
+        int target = ENEMY_IDS[rng.nextInt(ENEMY_IDS.length)];
 
         DamagePacket p = new DamagePacket();
-        p.targetId = 100_000; // fake enemy, shared by all hits
+        p.targetId = target;
         p.effects = new int[0];
         p.damageAmount = 50 + rng.nextInt(450);
         p.damageProperties = rng.nextBoolean();
