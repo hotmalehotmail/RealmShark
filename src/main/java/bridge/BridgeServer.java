@@ -15,6 +15,11 @@ import java.net.InetSocketAddress;
  */
 public class BridgeServer extends WebSocketServer {
 
+    /** Identifies this server so a client can confirm 47474 isn't some other process. */
+    public static final String SERVICE = "realmshark-bridge";
+    /** Bumped only on breaking changes to the envelope/handshake wire format. */
+    public static final int PROTOCOL_VERSION = 1;
+
     public BridgeServer(int port) {
         super(new InetSocketAddress("127.0.0.1", port));
         setReuseAddr(true);
@@ -28,6 +33,10 @@ public class BridgeServer extends WebSocketServer {
     @Override
     public void onOpen(WebSocket conn, ClientHandshake handshake) {
         System.out.println("[bridge] client connected: " + conn.getRemoteSocketAddress());
+        // Send a hello frame first thing so the client can verify it reached our
+        // bridge (and a compatible protocol) rather than a stray listener on the port.
+        conn.send("{\"type\":\"hello\",\"service\":\"" + SERVICE
+                + "\",\"protocol\":" + PROTOCOL_VERSION + "}");
     }
 
     @Override

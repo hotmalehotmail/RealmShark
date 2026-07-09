@@ -1,0 +1,65 @@
+import WebSocket from 'ws'
+import type { BridgeStatus } from '../shared/ipc'
+
+const BRIDGE_URL = 'ws://127.0.0.1:47474'
+const EXPECTED_SERVICE = 'realmshark-bridge'
+const RECONNECT_DELAY_MS = 2000
+
+interface BridgeClientHandlers {
+  onStatus: (status: BridgeStatus) => void
+  onBatch: (packets: unknown[]) => void
+}
+
+/**
+ * Connects to the RealmShark Java bridge and reconnects on drop. Validates the
+ * hello frame so a stray process squatting on the port is treated as "disconnected"
+ * rather than silently accepted.
+ */
+export function startBridgeClient(handlers: BridgeClientHandlers): void {
+  connect(handlers)
+}
+
+function connect(handlers: BridgeClientHandlers): void {
+  handlers.onStatus('connecting')
+  const ws = new WebSocket(BRIDGE_URL)
+  let verified = false
+
+  ws.on('open', () => {
+    // Wait for the hello frame before trusting this connection.
+  })
+
+  ws.on('message', (raw) => {
+    let msg: Record<string, unknown>
+    try {
+      msg = JSON.parse(raw.toString())
+    } catch {
+      return
+    }
+
+    if (!verified) {
+      if (msg.type === 'hello' && msg.service === EXPECTED_SERVICE) {
+        verified = true
+        handlers.onStatus('connected')
+      } else {
+        console.error('[bridge-client] unexpected hello frame, closing:', msg)
+        ws.close()
+      }
+      return
+    }
+
+    if (Array.isArray(msg.batch)) {
+      handlers.onBatch(msg.batch)
+    }
+  })
+
+  const scheduleReconnect = (): void => {
+    handlers.onStatus('disconnected')
+    setTimeout(() => connect(handlers), RECONNECT_DELAY_MS)
+  }
+
+  ws.on('close', scheduleReconnect)
+  ws.on('error', (err) => {
+    console.error('[bridge-client] error:', err.message)
+    ws.close()
+  })
+}

@@ -1,3 +1,5 @@
+import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
+
 plugins {
     id 'java'
     id 'application'
@@ -43,6 +45,20 @@ task runBridge(type: JavaExec) {
     mainClass = 'bridge.PacketBridge'
     if (project.hasProperty('args')) {
         args project.getProperty('args').split('\\s+')
+    }
+}
+
+// Self-contained fat jar for just the bridge, so the overlay app can bundle
+// and spawn it without the user needing a separate RealmShark build.
+//   ./gradlew bridgeJar
+task bridgeJar(type: ShadowJar) {
+    group = 'application'
+    description = 'Builds a self-contained fat jar for the WebSocket bridge (bridge.PacketBridge).'
+    from sourceSets.main.output
+    configurations = [project.configurations.runtimeClasspath]
+    archiveFileName = 'bridge.jar'
+    manifest {
+        attributes 'Main-Class': 'bridge.PacketBridge'
     }
 }
 

@@ -23,13 +23,13 @@ import java.util.concurrent.TimeUnit;
  *
  * <pre>
  * Usage: java bridge.PacketBridge [--port &lt;n&gt;] [--fake]
- *   --port &lt;n&gt;  port to listen on (default 8080)
+ *   --port &lt;n&gt;  port to listen on (default 47474)
  *   --fake      emit synthetic packets instead of sniffing (no game/Npcap needed)
  * </pre>
  */
 public class PacketBridge {
 
-    private static final int DEFAULT_PORT = 8080;
+    private static final int DEFAULT_PORT = 47474;
     private static final int QUEUE_CAPACITY = 5000;   // drop-oldest guard so capture never blocks
     private static final long FLUSH_INTERVAL_MS = 33; // ~30 flushes/sec batch cadence
 
