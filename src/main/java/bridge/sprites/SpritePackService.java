@@ -143,8 +143,16 @@ public class SpritePackService {
         }
         root.add("table", table);
         root.add("maskTable", maskTable);
-        System.out.println(
-            "[sprite-pack] built " + v + ": table=" + table.size() + " maskTable=" + maskTable.size());
+
+        // dyeTable: dyeId -> the cloth the dye applies, parsed from each Dye
+        // object's <Tex1>/<Tex2> in the extracted XML (the dye object's sprite
+        // is only a generic icon and does not carry the color). Encoding:
+        //   solid  (high byte 0x01): [1, r, g, b]
+        //   textile(high nibble 0xA): [10, textileIndex]
+        JsonObject dyeTable = buildDyeTable();
+        root.add("dyeTable", dyeTable);
+        System.out.println("[sprite-pack] built " + v + ": table=" + table.size()
+            + " maskTable=" + maskTable.size() + " dyeTable=" + dyeTable.size());
 
         // TEMP [dye-diag] Where do character dye masks actually live? Dump the
         // set of sprite groups that carry any mask, plus the per-index mask map
@@ -161,42 +169,20 @@ public class SpritePackService {
             System.out.println("[dye-diag] failed: " + e);
         }
 
-        // TEMP [dye-info] For each observed dye id, dump its object Class/Group
-        // and EVERY texture pair (not just pair 0) with the atlas rect each
-        // resolves to. Reveals whether a dye carries a separate cloth texture
-        // beyond its inventory icon, and what class dyes actually are.
+        // TEMP [dye-groups] All sprite groups + sizes, to locate the sheet that
+        // holds textile patterns (textile Tex1 = 0x0A......, e.g. index 25).
         try {
-            for (int id : new int[]{4134, 4149, 4352, 4655, 4741, 4967}) {
-                if (IdToAsset.getClazz(id) == null && IdToAsset.objectName(id) == null) continue;
-                StringBuilder sb = new StringBuilder();
-                for (int num = 0; num < 8; num++) {
-                    String tn = IdToAsset.getObjectTextureName(id, num);
-                    if (tn == null) break;
-                    int ti = IdToAsset.getObjectTextureIndex(id, num);
-                    int[] d = sfb.getSpriteData(tn, ti);
-                    sb.append(" #").append(num).append("=").append(tn).append(":").append(ti);
-                    if (d != null) {
-                        sb.append("(atlas").append(d[4]).append(" ").append(d[0]).append(",")
-                            .append(d[1]).append(" ").append(d[2]).append("x").append(d[3]).append(")");
-                    } else {
-                        sb.append("(norect)");
-                    }
-                }
-                System.out.println("[dye-info] id=" + id + " name=" + IdToAsset.objectName(id)
-                    + " clazz=" + IdToAsset.getClazz(id) + " group=" + IdToAsset.getIdGroup(id)
-                    + " textures:" + sb);
-            }
+            System.out.println("[dye-groups] " + sfb.describeAllGroups());
         } catch (Exception e) {
-            System.out.println("[dye-info] failed: " + e);
+            System.out.println("[dye-groups] failed: " + e);
         }
 
-        // TEMP [dye-xml] Dump the raw <Object> XML block for a couple of dyes so
-        // we can see whether the actual dye color/pattern is defined in a
-        // <Cloth> element the extractor never parses (moderate fix) or isn't in
-        // the object XML at all (meaning it lives in cloth_bazaar - a bigger
-        // extraction job). Reads the extracted assets/xml/*.xml on disk.
+        // TEMP [dye-xml] Dump the raw <Object> XML for a solid clothing dye, a
+        // solid accessory dye, and a textile, to confirm the Tex1 encoding for
+        // each. Reads the extracted assets/xml/*.xml on disk.
         try {
-            String[] types = {"0x1026", "0x122f"}; // Deep Pink Clothing Dye, Large Lemon-Lime Cloth
+            // Deep Pink Clothing Dye, Alice Blue Accessory Dye, Large Lemon-Lime Cloth
+            String[] types = {"0x1026", "0x1100", "0x122f"};
             java.io.File xmlDir = new java.io.File("assets/xml");
             java.io.File[] files = xmlDir.listFiles((d, n) -> n.endsWith("xml"));
             if (files == null) {
@@ -226,5 +212,69 @@ public class SpritePackService {
         cachedVersion = v;
         cachedPackJson = gson.toJson(root);
         return cachedPackJson;
+    }
+
+    private JsonObject cachedDyeTable;
+
+    /**
+     * Builds {@code dyeId -> cloth} by scanning the extracted object XML for
+     * {@code <Class>Dye</Class>} objects and parsing their {@code <Tex1>} (or
+     * {@code <Tex2>}) packed cloth value. The dye object's own sprite is only a
+     * generic icon, so the color/pattern lives here, not in the atlas.
+     * <p>Encoding of the packed value: high byte {@code 0x01} = solid RGB in the
+     * low 24 bits (emitted as {@code [1, r, g, b]}); high nibble {@code 0xA} =
+     * textile, low 24 bits are the textile index (emitted as {@code [10, idx]}).
+     */
+    private synchronized JsonObject buildDyeTable() {
+        if (cachedDyeTable != null) return cachedDyeTable;
+        JsonObject dyeTable = new JsonObject();
+        java.io.File xmlDir = new java.io.File("assets/xml");
+        java.io.File[] files = xmlDir.listFiles((d, n) -> n.endsWith("xml"));
+        if (files == null) {
+            cachedDyeTable = dyeTable;
+            return dyeTable;
+        }
+        java.util.regex.Pattern objP = java.util.regex.Pattern.compile(
+            "<Object type=\"(0x[0-9a-fA-F]+)\"[^>]*>(.*?)</Object>", java.util.regex.Pattern.DOTALL);
+        java.util.regex.Pattern texP = java.util.regex.Pattern.compile(
+            "<Tex[12]>(0x[0-9a-fA-F]+)</Tex[12]>");
+        for (java.io.File f : files) {
+            String txt;
+            try {
+                txt = new String(Files.readAllBytes(f.toPath()));
+            } catch (Exception e) {
+                continue;
+            }
+            if (!txt.contains("<Class>Dye</Class>")) continue;
+            java.util.regex.Matcher m = objP.matcher(txt);
+            while (m.find()) {
+                String body = m.group(2);
+                if (!body.contains("<Class>Dye</Class>")) continue;
+                java.util.regex.Matcher t = texP.matcher(body);
+                if (!t.find()) continue;
+                long tex;
+                int id;
+                try {
+                    tex = Long.decode(t.group(1));
+                    id = Integer.decode(m.group(1));
+                } catch (Exception e) {
+                    continue;
+                }
+                long high = (tex >> 24) & 0xFF;
+                JsonArray arr = new JsonArray();
+                if (high == 0x01 || high == 0x02) { // solid RGB
+                    arr.add(1);
+                    arr.add((int) ((tex >> 16) & 0xFF));
+                    arr.add((int) ((tex >> 8) & 0xFF));
+                    arr.add((int) (tex & 0xFF));
+                } else { // textile: low 24 bits are the pattern index
+                    arr.add(10);
+                    arr.add((int) (tex & 0xFFFFFF));
+                }
+                dyeTable.add(String.valueOf(id), arr);
+            }
+        }
+        cachedDyeTable = dyeTable;
+        return dyeTable;
     }
 }

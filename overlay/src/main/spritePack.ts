@@ -53,10 +53,10 @@ export function initSpritePack(notify: (pack: SpritePack) => void): void {
  * cheap no-op instead of re-sending the whole (multi-MB) payload.
  */
 export function requestSpritePack(send: (msg: unknown) => void): void {
-  // Force a full refetch if the cached pack predates maskTable support (dye
-  // masks): such a cache matches on version but lacks the mask data, so treat
-  // it as stale by claiming no version.
-  const haveVersion = current.maskTable ? (current.version ?? null) : null
+  // Force a full refetch if the cached pack predates the dye data (maskTable /
+  // dyeTable): such a cache matches on version but lacks it, so treat it as
+  // stale by claiming no version.
+  const haveVersion = current.maskTable && current.dyeTable ? (current.version ?? null) : null
   send({ type: 'spritePackRequest', haveVersion })
 }
 
@@ -77,7 +77,8 @@ export function onSpritePackMessage(msg: SpritePack & { upToDate?: boolean }): v
     version: msg.version,
     atlases: msg.atlases,
     table: msg.table,
-    maskTable: msg.maskTable
+    maskTable: msg.maskTable,
+    dyeTable: msg.dyeTable
   }
   saveToDisk(current)
   notifyRenderer?.(current)

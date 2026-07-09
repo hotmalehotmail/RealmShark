@@ -32,8 +32,6 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
   const cacheRef = useRef<Map<string, string>>(new Map())
   // TEMP dye diagnostic: dedup the [dye] decision log per base+dye combo.
   const dyeDiagRef = useRef<Set<string>>(new Set())
-  // TEMP dye-color diagnostic: dedup the sampled-swatch-pixel log.
-  const dyeColorRef = useRef<Set<string>>(new Set())
   // Bumped when an atlas finishes decoding so consumers re-request (a sprite
   // that returned null because its atlas wasn't loaded yet can now be cropped).
   const [, setGen] = useState(0)
@@ -121,11 +119,14 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
   )
 
   // Render a character sprite with clothing/accessory dyes composited in. Dyes
-  // arrive as objectTypes (Tex1/Tex2); their sprites are in the pack, so we crop
-  // the base sprite + its mask + each dye's sprite and tile the dye pixels into
-  // the masked clothing/accessory regions. Shared by every panel (via <Sprite>
-  // dye props or <CharacterSprite>). Falls back to the plain sprite when there's
-  // no dye or no mask.
+  // arrive as objectTypes (Tex1/Tex2); the dye's real color lives in
+  // pack.dyeTable (parsed from the dye object XML - the dye's own sprite is only
+  // a generic icon). We recolor the mask's clothing (red) / accessory (green)
+  // regions to the dye color, scaled by the mask value so the base sprite's
+  // shading is preserved: the undyed sprite is itself referenceColor x
+  // (maskValue/255), so dyeColor x (maskValue/255) reproduces the same shading.
+  // Falls back to the plain sprite when there's no solid dye or no mask (textile
+  // dyes - encoding [10, idx] - have no pattern shipped yet, so render undyed).
   const getDyedSprite = useCallback(
     (
       baseType: number,
@@ -133,32 +134,41 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       clothingDye?: number | null,
       accessoryDye?: number | null
     ): string | null => {
-      const hasClothing = clothingDye != null && clothingDye > 0
-      const hasAccessory = accessoryDye != null && accessoryDye > 0
+      const dyeColor = (dyeId?: number | null): [number, number, number] | null => {
+        if (dyeId == null || dyeId <= 0) return null
+        const e = pack.dyeTable?.[String(dyeId)]
+        if (!e || e[0] !== 1) return null // solid only; textile (10) not renderable yet
+        return [e[1], e[2], e[3]]
+      }
+      const clothing = dyeColor(clothingDye)
+      const accessory = dyeColor(accessoryDye)
       const baseRect = pack.table?.[String(baseType)]
       const maskRect = pack.maskTable?.[String(baseType)]
 
-      // TEMP dye diagnostic (deduped): surfaces why a dye did/didn't composite.
-      if (hasClothing || hasAccessory) {
+      // TEMP dye diagnostic (deduped): surfaces how each dye resolved.
+      if ((clothingDye ?? 0) > 0 || (accessoryDye ?? 0) > 0) {
         const dk = `${baseType}:${clothingDye ?? 0}:${accessoryDye ?? 0}`
         if (!dyeDiagRef.current.has(dk)) {
           dyeDiagRef.current.add(dk)
+          const desc = (id?: number | null): string => {
+            const e = id ? pack.dyeTable?.[String(id)] : undefined
+            if (!e) return `${id ?? 0}(none)`
+            return e[0] === 1 ? `${id}(solid ${e[1]},${e[2]},${e[3]})` : `${id}(textile ${e[1]})`
+          }
           console.log(
-            `[dye] base=${baseType} ready=${pack.ready} baseInTable=${!!baseRect} ` +
-              `maskInTable=${!!maskRect} ` +
-              `clothing=${clothingDye ?? 0}(inTable=${!!(clothingDye && pack.table?.[String(clothingDye)])}) ` +
-              `accessory=${accessoryDye ?? 0}(inTable=${!!(accessoryDye && pack.table?.[String(accessoryDye)])})`
+            `[dye] base=${baseType} maskInTable=${!!maskRect} ` +
+              `clothing=${desc(clothingDye)} accessory=${desc(accessoryDye)}`
           )
         }
       }
 
-      if (!pack.ready || !pack.table || (!hasClothing && !hasAccessory)) {
+      if (!pack.ready || !pack.table || (!clothing && !accessory)) {
         return getSprite(baseType, size)
       }
       if (!baseRect || !maskRect) return getSprite(baseType, size)
 
-      const key = `dye:${baseType}:${size}:${hasClothing ? clothingDye : 0}:${
-        hasAccessory ? accessoryDye : 0
+      const key = `dye:${baseType}:${size}:${clothing ? clothingDye : 0}:${
+        accessory ? accessoryDye : 0
       }`
       const cached = cacheRef.current.get(key)
       if (cached) return cached
@@ -173,134 +183,33 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       const mask = regionImageData(maskImg, mx, my, Math.min(mw, w), Math.min(mh, h))
       if (!base || !mask) return null
 
-      // TEMP [dye-mask] One-shot: is the mask a binary region flag or a graded
-      // shade-index, and are base clothing-region pixels grayscale (multiply
-      // model) or already colored (replace model)? Dumps distinct R/G mask
-      // values and sample base pixels where the mask marks clothing.
-      if (!dyeColorRef.current.has('mask:' + baseType)) {
-        dyeColorRef.current.add('mask:' + baseType)
-        const rVals = new Set<number>()
-        const gVals = new Set<number>()
-        const baseClothSamples: string[] = []
-        for (let p = 0; p < w * h; p++) {
-          const mi = p * 4
-          if (mask.data[mi + 3] > 0) {
-            rVals.add(mask.data[mi])
-            gVals.add(mask.data[mi + 1])
-          }
-          if (mask.data[mi] >= 128 && baseClothSamples.length < 6 && base.data[mi + 3] > 0) {
-            baseClothSamples.push(
-              `(${base.data[mi]},${base.data[mi + 1]},${base.data[mi + 2]})`
-            )
-          }
-        }
-        const brief = (s: Set<number>): string =>
-          [...s].sort((a, b) => a - b).slice(0, 12).join(',') + (s.size > 12 ? '…' : '')
-        console.log(
-          `[dye-mask] base=${baseType} maskR{${rVals.size}}=[${brief(rVals)}] ` +
-            `maskG{${gVals.size}}=[${brief(gVals)}] baseClothPix=${baseClothSamples.join(' ')}`
-        )
-      }
-
-      // Each dye is just an objectType in the pack; grab its swatch/pattern
-      // pixels. The swatch has transparent padding around the actual color, so
-      // also compute the average of its opaque pixels ("fill") to substitute
-      // wherever a tiled sample lands on that transparent border - otherwise
-      // those pixels get written as opaque black (the "white dye -> black" bug).
-      const dyeRegion = (
-        dyeId: number
-      ): { pixels: ImageData; w: number; h: number; fill: [number, number, number] } | null => {
-        const r = pack.table?.[String(dyeId)]
-        if (!r) return null
-        const img = atlasesRef.current[String(r[0])]
-        if (!img) return null
-        const d = regionImageData(img, r[1], r[2], r[3], r[4])
-        if (!d) return null
-        let sr = 0,
-          sg = 0,
-          sb = 0,
-          n = 0
-        for (let k = 0; k < d.data.length; k += 4) {
-          if (d.data[k + 3] > 0) {
-            sr += d.data[k]
-            sg += d.data[k + 1]
-            sb += d.data[k + 2]
-            n++
-          }
-        }
-        const fill: [number, number, number] = n
-          ? [Math.round(sr / n), Math.round(sg / n), Math.round(sb / n)]
-          : [0, 0, 0]
-        return { pixels: d, w: r[3], h: r[4], fill }
-      }
-      const clothing = hasClothing ? dyeRegion(clothingDye as number) : null
-      const accessory = hasAccessory ? dyeRegion(accessoryDye as number) : null
-
-      // TEMP [dye-color] Log the actual sampled swatch pixels so we can tell
-      // whether the wrong colors are an inversion, a wrong region, or alpha.
-      const sample = (
-        label: string,
-        id: number | null | undefined,
-        d: { pixels: ImageData; w: number; h: number } | null
-      ): void => {
-        const r = id ? pack.table?.[String(id)] : undefined
-        if (!d || !r) {
-          console.log(`[dye-color] ${label}=${id ?? 0} region=${r ? 'yes' : 'MISSING'} pixels=none`)
-          return
-        }
-        const px = (fx: number, fy: number): string => {
-          const sx = Math.min(d.w - 1, Math.floor(d.w * fx))
-          const sy = Math.min(d.h - 1, Math.floor(d.h * fy))
-          const j = (sy * d.w + sx) * 4
-          return `(${d.pixels.data[j]},${d.pixels.data[j + 1]},${d.pixels.data[j + 2]},${d.pixels.data[j + 3]})`
-        }
-        console.log(
-          `[dye-color] ${label}=${id} rect=[atlas${r[0]},${r[1]},${r[2]},${r[3]}x${r[4]}] ` +
-            `center=${px(0.5, 0.5)} topleft=${px(0.1, 0.1)}`
-        )
-      }
-      const ck = `${baseType}:${clothingDye ?? 0}:${accessoryDye ?? 0}`
-      if (!dyeColorRef.current.has(ck)) {
-        dyeColorRef.current.add(ck)
-        sample('clothing', clothingDye, clothing)
-        sample('accessory', accessoryDye, accessory)
-      }
-
       const out = new ImageData(w, h)
       const mStride = mask.width
+      const maskH = mask.height
       for (let py = 0; py < h; py++) {
         for (let px = 0; px < w; px++) {
           const i = (py * w + px) * 4
           const baseA = base.data[i + 3]
-          // Mask channels: red = clothing region, green = accessory region.
-          // (Flash-client convention; verify against a live dyed character and
-          // swap the r/g test here if it's inverted.)
-          const mi = (py * mStride + px) * 4
-          const mr = mask.data[mi]
-          const mg = mask.data[mi + 1]
-          let src: {
-            pixels: ImageData
-            w: number
-            h: number
-            fill: [number, number, number]
-          } | null = null
-          if (baseA > 0) {
-            if (clothing && mr >= 128 && mr >= mg) src = clothing
-            else if (accessory && mg >= 128) src = accessory
-          }
-          if (src) {
-            const si = ((py % src.h) * src.w + (px % src.w)) * 4
-            // Use the swatch pixel where it's opaque; on its transparent padding
-            // fall back to the swatch's average color rather than black.
-            if (src.pixels.data[si + 3] > 0) {
-              out.data[i] = src.pixels.data[si]
-              out.data[i + 1] = src.pixels.data[si + 1]
-              out.data[i + 2] = src.pixels.data[si + 2]
-            } else {
-              out.data[i] = src.fill[0]
-              out.data[i + 1] = src.fill[1]
-              out.data[i + 2] = src.fill[2]
+          // Mask channels: red = clothing region, green = accessory region; the
+          // channel value is the shade level. Recolor to the dye, scaled by it.
+          let color: [number, number, number] | null = null
+          let shade = 0
+          if (baseA > 0 && px < mStride && py < maskH) {
+            const mi = (py * mStride + px) * 4
+            const mr = mask.data[mi]
+            const mg = mask.data[mi + 1]
+            if (clothing && mr > 0 && mr >= mg) {
+              color = clothing
+              shade = mr / 255
+            } else if (accessory && mg > 0) {
+              color = accessory
+              shade = mg / 255
             }
+          }
+          if (color) {
+            out.data[i] = Math.round(color[0] * shade)
+            out.data[i + 1] = Math.round(color[1] * shade)
+            out.data[i + 2] = Math.round(color[2] * shade)
             out.data[i + 3] = baseA // keep the character silhouette's alpha
           } else {
             out.data[i] = base.data[i]

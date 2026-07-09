@@ -230,6 +230,16 @@ public class SpriteFlatBuffer {
         return "groupsWithMask total=" + total + " :: " + sb;
     }
 
+    // TEMP [dye-groups] All sprite group names and their sizes, to locate the
+    // sheet holding textile cloth patterns.
+    public String describeAllGroups() {
+        StringBuilder sb = new StringBuilder("groups=" + sprites.size() + " :: ");
+        for (String k : new java.util.TreeSet<>(sprites.keySet())) {
+            sb.append(k).append('(').append(sprites.get(k).size()).append(") ");
+        }
+        return sb.toString();
+    }
+
     // TEMP [dye-diag] Per-index mask presence within one sprite group, so we can
     // see if the mask is simply on a different index than slot 0.
     public String describeGroupMasks(String name) {

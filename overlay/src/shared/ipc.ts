@@ -85,4 +85,11 @@ export interface SpritePack {
    * composite clothing/accessory dyes onto a character sprite.
    */
   maskTable?: Record<string, [number, number, number, number, number]>
+  /**
+   * dyeId -> the cloth a dye applies (its color/pattern, parsed from the dye
+   * object's XML - the dye's own sprite is only a generic icon). Encoding:
+   *   solid:   [1, r, g, b]
+   *   textile: [10, textileIndex]  (pattern not yet shipped; renders undyed)
+   */
+  dyeTable?: Record<string, number[]>
 }
