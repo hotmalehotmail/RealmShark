@@ -9,11 +9,24 @@ const STATUS_STYLES: Record<BridgeStatus, string> = {
   disconnected: 'bg-red-500'
 }
 
+const MEMORY_POLL_MS = 1000
+
+/** Chrome/Electron-only, non-standard - not in lib.dom.d.ts. */
+interface PerformanceMemory {
+  usedJSHeapSize: number
+}
+
+function usedJsHeapMb(): number | null {
+  const memory = (performance as Performance & { memory?: PerformanceMemory }).memory
+  return memory ? memory.usedJSHeapSize / (1024 * 1024) : null
+}
+
 function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
   const [status, setStatus] = useState<BridgeStatus>('connecting')
   const [packetCount, setPacketCount] = useState(0)
   const [lastPacket, setLastPacket] = useState<PacketEnvelope | null>(null)
   const [toggleHotkey, setToggleHotkey] = useState(DEFAULT_SETTINGS.toggleHotkey)
+  const [heapMb, setHeapMb] = useState<number | null>(() => usedJsHeapMb())
 
   useEffect(() => {
     window.overlay.getSettings().then((settings) => setToggleHotkey(settings.toggleHotkey))
@@ -23,9 +36,11 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
       setPacketCount((n) => n + packets.length)
       if (packets.length > 0) setLastPacket(packets[packets.length - 1])
     })
+    const memoryInterval = setInterval(() => setHeapMb(usedJsHeapMb()), MEMORY_POLL_MS)
     return () => {
       offStatus()
       offBatch()
+      clearInterval(memoryInterval)
     }
   }, [])
 
@@ -47,6 +62,15 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
         <div className="mt-3 flex items-baseline justify-between border-t border-white/10 pt-2">
           <span className="text-white/60">Packets seen</span>
           <span className="font-mono text-base">{packetCount}</span>
+        </div>
+      )}
+
+      {size !== 'sm' && (
+        <div className="flex items-baseline justify-between pt-1">
+          <span className="text-white/60">Memory</span>
+          <span className="font-mono text-base">
+            {heapMb === null ? 'n/a' : `${heapMb.toFixed(1)} MB`}
+          </span>
         </div>
       )}
 
