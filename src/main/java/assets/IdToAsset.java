@@ -188,6 +188,16 @@ public class IdToAsset {
     }
 
     /**
+     * All loaded object type ids. Lets a caller (e.g. the sprite-pack builder)
+     * enumerate every object without exposing the backing map.
+     *
+     * @return a copy of the loaded object type ids.
+     */
+    public static java.util.Set<Integer> objectIds() {
+        return new java.util.HashSet<>(objectID.keySet());
+    }
+
+    /**
      * Method to grab the name of the tile resource.
      * If display name is not present, use the regular name.
      *

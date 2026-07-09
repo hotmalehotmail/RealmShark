@@ -20,9 +20,21 @@ public class BridgeServer extends WebSocketServer {
     /** Bumped only on breaking changes to the envelope/handshake wire format. */
     public static final int PROTOCOL_VERSION = 1;
 
+    /** Handles a message received from a client (e.g. a sprite-pack request). */
+    public interface MessageHandler {
+        void onMessage(WebSocket conn, String message);
+    }
+
+    private MessageHandler messageHandler;
+
     public BridgeServer(int port) {
         super(new InetSocketAddress("127.0.0.1", port));
         setReuseAddr(true);
+    }
+
+    /** Registers the handler for inbound client messages (replaces the receive-only default). */
+    public void setMessageHandler(MessageHandler handler) {
+        this.messageHandler = handler;
     }
 
     @Override
@@ -46,7 +58,11 @@ public class BridgeServer extends WebSocketServer {
 
     @Override
     public void onMessage(WebSocket conn, String message) {
-        // Phase 1: clients are receive-only. Subscription handling comes later.
+        // Clients are broadcast-only except for a few request/response messages
+        // (e.g. the one-time sprite-pack fetch) routed through the handler.
+        if (messageHandler != null) {
+            messageHandler.onMessage(conn, message);
+        }
     }
 
     @Override

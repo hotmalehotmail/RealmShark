@@ -1,5 +1,10 @@
 package bridge;
 
+import bridge.sprites.SpritePackService;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import org.java_websocket.WebSocket;
 import packets.incoming.UpdatePacket;
 import packets.packetcapture.PacketProcessor;
 import packets.packetcapture.register.Register;
@@ -39,10 +44,32 @@ public class PacketBridge {
     private final PacketSerializer serializer = new PacketSerializer();
     private final ObjectNames objectNames = new ObjectNames();
     private final DpsBroadcaster dps = new DpsBroadcaster();
+    private final SpritePackService sprites = new SpritePackService();
     private final BlockingQueue<String> queue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
 
     public PacketBridge(int port) {
         server = new BridgeServer(port);
+        server.setMessageHandler(this::handleClientMessage);
+    }
+
+    /**
+     * Handles a client -> bridge message. The only one today is the one-time
+     * sprite-pack fetch: {@code {"type":"spritePackRequest","haveVersion":"..."}}.
+     * The response is sent directly to the requesting client, not broadcast.
+     */
+    private void handleClientMessage(WebSocket conn, String message) {
+        try {
+            JsonElement parsed = JsonParser.parseString(message);
+            if (!parsed.isJsonObject()) return;
+            JsonObject obj = parsed.getAsJsonObject();
+            JsonElement type = obj.get("type");
+            if (type == null || !"spritePackRequest".equals(type.getAsString())) return;
+            String have = obj.has("haveVersion") && !obj.get("haveVersion").isJsonNull()
+                ? obj.get("haveVersion").getAsString() : null;
+            conn.send(sprites.responseFor(have));
+        } catch (Exception e) {
+            System.err.println("[bridge] bad client message: " + e);
+        }
     }
 
     public static void main(String[] args) {
