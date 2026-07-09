@@ -13,6 +13,7 @@ import packets.incoming.NewTickPacket;
 import packets.incoming.ServerPlayerShootPacket;
 import packets.incoming.UpdatePacket;
 import packets.outgoing.EnemyHitPacket;
+import packets.outgoing.PlayerShootPacket;
 import packets.packetcapture.register.Register;
 
 import java.util.Random;
@@ -51,6 +52,17 @@ public class FakePacketSource {
     // A fake pet owned by the local player, to exercise minion-damage attribution.
     private static final int PET_ID = 50;
 
+    // Weapon the local player "fires" (must exist in the loaded assets/ObjectID.list
+    // with projectile damage) so the engine can compute self-damage from the
+    // outgoing PlayerShoot -> EnemyHit projectile path.
+    private static final int WEAPON_ID = 4000;
+
+    // Set FAKE_NO_CREATE_SUCCESS to simulate a mid-session attach: the engine
+    // never sees CreateSuccessPacket and must fall back to EnemyHitPacket.mainID
+    // to identify the local player (exercises DpsEngine.resolveLocalPlayer).
+    private static final boolean SKIP_CREATE_SUCCESS =
+        System.getenv("FAKE_NO_CREATE_SUCCESS") != null;
+
     private final Random rng = new Random();
     private int mapNumber = 1;
 
@@ -63,7 +75,10 @@ public class FakePacketSource {
 
     private void loop() {
         int tick = 0;
-        Register.INSTANCE.emitPacketLogs(createSuccess());
+        // Enter a map first, like a real client: MapInfoPacket seeds the engine's
+        // RNG, which the weapon-damage roll needs (no seed -> 0-damage shots).
+        Register.INSTANCE.emitPacketLogs(mapInfo());
+        if (!SKIP_CREATE_SUCCESS) Register.INSTANCE.emitPacketLogs(createSuccess());
         while (!Thread.currentThread().isInterrupted()) {
             // Resend the roster and pet-ownership mapping periodically (real
             // UpdatePackets/ServerPlayerShootPackets only arrive on specific
@@ -82,7 +97,7 @@ public class FakePacketSource {
             // don't recur every few seconds like this fake loop's do).
             if (tick > 0 && tick % 40 == 0) {
                 Register.INSTANCE.emitPacketLogs(mapInfo());
-                Register.INSTANCE.emitPacketLogs(createSuccess());
+                if (!SKIP_CREATE_SUCCESS) Register.INSTANCE.emitPacketLogs(createSuccess());
                 Register.INSTANCE.emitPacketLogs(rosterUpdate());
                 Register.INSTANCE.emitPacketLogs(enemyUpdate());
                 Register.INSTANCE.emitPacketLogs(petOwnership());
@@ -91,12 +106,16 @@ public class FakePacketSource {
             // server clock the DPS engine uses as its time base - without it the
             // engine can't measure fight duration, so every computed DPS is 0.
             Register.INSTANCE.emitPacketLogs(newTick(tick));
-            // The local player hitting an enemy, sent every tick like a real
-            // client does during sustained fire. This is what lets the DPS
-            // tracker resolve the local player (EnemyHitPacket.mainID) and the
-            // focus target without depending on the one-shot CreateSuccessPacket.
-            // Swap targets every ~20 ticks to exercise focus-target switching.
-            Register.INSTANCE.emitPacketLogs(localPlayerHit(ENEMY_IDS[(tick / 20) % ENEMY_IDS.length]));
+            // The local player firing then landing a hit, every tick like a real
+            // client during sustained fire: the outgoing PlayerShoot creates the
+            // projectile (its damage computed from the weapon + player stats), and
+            // the matching EnemyHit (same bulletId) applies it. This is the actual
+            // self-DPS path, and EnemyHitPacket.mainID also identifies the local
+            // player. Swap targets every ~20 ticks to exercise focus switching.
+            short bulletId = (short) (tick % 100);
+            int target = ENEMY_IDS[(tick / 20) % ENEMY_IDS.length];
+            Register.INSTANCE.emitPacketLogs(localPlayerShoot(bulletId));
+            Register.INSTANCE.emitPacketLogs(localPlayerHit(target, bulletId));
             Register.INSTANCE.emitPacketLogs(randomDamage());
             tick++;
             try {
@@ -122,14 +141,30 @@ public class FakePacketSource {
      * client sends on every one of its own hits. mainID (and shooterID, for a
      * direct player shot) is the local player's objectId; targetId is the enemy.
      */
-    private EnemyHitPacket localPlayerHit(int target) {
+    private EnemyHitPacket localPlayerHit(int target, short bulletId) {
         EnemyHitPacket p = new EnemyHitPacket();
         p.time = 0;
-        p.bulletId = (short) rng.nextInt(256);
+        p.bulletId = bulletId;
         p.shooterID = LOCAL_PLAYER_ID;
         p.targetId = target;
         p.kill = false;
         p.mainID = LOCAL_PLAYER_ID;
+        return p;
+    }
+
+    /** The local player firing WEAPON_ID - the outgoing packet the engine turns into a damage-carrying projectile. */
+    private PlayerShootPacket localPlayerShoot(short bulletId) {
+        PlayerShootPacket p = new PlayerShootPacket();
+        p.time = 0;
+        p.bulletId = bulletId;
+        p.weaponId = WEAPON_ID;
+        p.projectileId = 0;
+        p.startingPos = new WorldPosData();
+        p.angle = 0;
+        p.isBurst = false;
+        p.patternIdx = 0;
+        p.attackType = 0;
+        p.playerPosition = new WorldPosData();
         return p;
     }
 

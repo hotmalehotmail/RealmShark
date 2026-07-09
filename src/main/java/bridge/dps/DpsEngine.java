@@ -106,6 +106,35 @@ public class DpsEngine {
     }
 
     /**
+     * Resolve the local player from a live signal rather than only the one-shot
+     * CreateSuccessPacket, so self-DPS works on a mid-session attach. tomato's
+     * engine only ever set worldPlayerId from CreateSuccessPacket (missed if we
+     * start capturing after map load), which left `player` null and every
+     * self-shot projectile at 0 damage. EnemyHitPacket.mainID is the local
+     * player and arrives on every hit; the player Entity already exists in
+     * entityList (created from NewTick stats), we just weren't pointing at it.
+     *
+     * @param candidateId the local player's objectId (EnemyHitPacket.mainID).
+     */
+    private void resolveLocalPlayer(int candidateId) {
+        if (candidateId <= 0) return;
+        if (worldPlayerId <= 0) worldPlayerId = candidateId;
+        if (player != null || worldPlayerId <= 0) return;
+        Entity e = entityList.get(worldPlayerId);
+        if (e == null) return; // stats not seen yet; a later hit will resolve it
+        player = e;
+        playerList.put(worldPlayerId, e);
+        try {
+            e.setUser(charId);
+        } catch (Throwable ignored) {
+            // Base-stat calc needs the full stat set; if incomplete now, a later
+            // hit retries. The broadcaster's guard already isolates this.
+        }
+        System.out.println(
+            "[dps-engine] resolved local player id=" + worldPlayerId + " (from EnemyHitPacket.mainID)");
+    }
+
+    /**
      * Sets the time of the server.
      *
      * @param serverRealTimeMS Server time in milliseconds.
@@ -417,6 +446,11 @@ public class DpsEngine {
      * @param p Info about what entity was hit by what projectile.
      */
     public void enemtyHit(EnemyHitPacket p) {
+        // Make sure we know who the local player is even on a mid-session attach
+        // (no CreateSuccessPacket seen) - otherwise our own projectiles are all
+        // 0 damage and self-DPS never appears.
+        resolveLocalPlayer(p.mainID);
+
         // Attempt a reliable map lookup first using shooter (owner) + bulletId.
         Projectile projectile = null;
         int shooterIdCandidate = p.shooterID;
