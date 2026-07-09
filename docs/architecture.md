@@ -312,13 +312,15 @@ send (`spritePack.ts:55`). Routed by `PacketBridge.handleClientMessage`
 | --- | --- |
 | assets not ready | `{"type":"spritePack","ready":false}` |
 | client already current | `{"type":"spritePack","ready":true,"upToDate":true,"version":"v…"}` |
-| full pack | `{"type":"spritePack","ready":true,"version":"v…","atlases":{…},"table":{…},"maskTable":{…},"dyeTable":{…}}` |
+| full pack | `{"type":"spritePack","ready":true,"version":"v…","atlases":{…},"table":{…},"maskTable":{…},"dyeTable":{…},"animTable":{…}}` |
 
 The full pack keys: `atlases` = `atlasId("1".."4") → data:image/png;base64,…`;
 `table` = `objectType → [atlasId,x,y,w,h]`; `maskTable` = `objectType →
 [3,x,y,w,h]`; `dyeTable` = `dyeId → [1,r,g,b]` (solid) or
-`[10,atlasId,x0,y0,w0,h0,...]` (textile, one 4-tuple per animation frame). The
-`table`/`maskTable`/`dyeTable` semantics are documented in
+`[10,atlasId,x0,y0,w0,h0,...]` (textile, one 4-tuple per animation frame);
+`animTable` = `objectType → flat 9-ints/frame [x,y,w,h,aId,mx,my,mw,mh]` for
+animated (idle) character sprites. The
+`table`/`maskTable`/`dyeTable`/`animTable` semantics are documented in
 [dyes-and-textiles.md](dyes-and-textiles.md); the TS mirror is `SpritePack` in
 `overlay/src/shared/ipc.ts:74`.
 
@@ -334,7 +336,7 @@ re-asking. The client handles a top-level `spritePack` message
 > `"v" + characters.png.lastModified()` (`SpritePackService.java:58`). A game
 > update re-extracts the atlas, changing the mtime, which invalidates the cache.
 > Separately, `spritePack.ts:59` forces a full refetch if a cached pack predates
-> `maskTable`/`dyeTable` even when the version matches.
+> `maskTable`/`dyeTable`/`animTable` even when the version matches.
 
 ### Message summary
 

@@ -279,34 +279,40 @@ bitmaps go in `atlasesRef`; a `setGen` bump (`SpriteProvider.tsx:69`) re-renders
 consumers so a sprite that returned `null` before its atlas finished decoding is
 retried.
 
-`getSprite(objectType, size)` (`SpriteProvider.tsx:83-108`): look up
-`pack.table[objectType]` → `[atlasId,x,y,w,h]`, crop to a `size×size` canvas with
+`getSprite(objectType, size)` (`SpriteProvider.tsx:164-189`): look up the current frame's rect (from
+`pack.animTable[objectType]` for an animated idle sprite, else `pack.table[objectType]`)
+→ `[atlasId,x,y,w,h]`, crop to a `size×size` canvas with
 `imageSmoothingEnabled=false` (nearest-neighbour, preserving the pixel-art look),
-return `canvas.toDataURL()`, memoised by `"objectType:size"`. Returns `null` when
+return `canvas.toDataURL()`, memoised by `"objectType:size:frame"`. Returns `null` when
 the pack isn't ready, the objectType is absent, or the atlas hasn't decoded yet.
 
 `getDyedSprite(baseType, size, clothingDye?, accessoryDye?)`
-(`SpriteProvider.tsx:120-257`) composites clothing/accessory dyes onto a character
+(`SpriteProvider.tsx:204-361`) composites clothing/accessory dyes onto a character
 sprite using the pack's `maskTable` + `dyeTable`. The full compositing model
 (mask channels = region + shade, textile sub-pixel tiling via `TEXTILE_SUB=5`,
 solid vs. textile `dyeTable` encoding) is documented in **`dyes-and-textiles.md`**
 — not repeated here. Key contract: it **falls back to `getSprite`** when the pack
 isn't ready, there's no dye, or the base type has no mask
-(`SpriteProvider.tsx:151-154`), and memoises by
-`"dye:baseType:size:clothingDye:accessoryDye:clothingFrame:accessoryFrame"` (the
-frame indices only vary for animated textiles — see `dyes-and-textiles.md`).
+(`SpriteProvider.tsx:217,227`), and memoises by
+`"dye:baseType:size:clothingDye:accessoryDye:baseFrame:clothingFrame:accessoryFrame"`
+(the base frame only varies for an animated idle character; the dye frames only
+vary for animated textiles — see `dyes-and-textiles.md`).
 
-Both functions are exposed via `SpriteContext` (`context.ts:6-30`); panels call
+Both functions (plus `isAnimated`/`frameMs`) are exposed via `SpriteContext` (`context.ts:6-37`); panels call
 them through `useSprites()` or the `<Sprite>` component.
 
 ### `Sprite` and `CharacterSprite`
 
 `Sprite` (`sprites/Sprite.tsx`) takes an `objectType` (+ optional `size`, dyes,
 `className`). It picks `getDyedSprite` when a dye is present else `getSprite`
-(`Sprite.tsx:37-41`), and renders an `<img style={{imageRendering:'pixelated'}}>`.
+(`Sprite.tsx:51-53`), and renders an `<img style={{imageRendering:'pixelated'}}>`.
 When the lookup returns `null` (no real pack / undecoded atlas) it renders a
 **deterministic HSL placeholder chip** so an unresolved objectType is still a
-stable coloured box (`Sprite.tsx:16-19,55-67`).
+stable coloured box (`Sprite.tsx:16-19,67-79`). It also ticks its own animation
+clock: `isAnimated(objectType, clothingDye, accessoryDye)` (from `SpriteContext`)
+says whether this particular sprite has an idle-frame or textile-frame animation,
+and only then does a local `setInterval` at `frameMs` re-render it
+(`Sprite.tsx:37-45`) — static sprites and event-driven panels never tick.
 
 `CharacterSprite` (`sprites/CharacterSprite.tsx`) takes an **`objectId`** and
 resolves everything from the entity registry: base type is the equipped `skin` if

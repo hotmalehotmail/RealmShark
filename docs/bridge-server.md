@@ -206,7 +206,7 @@ conn.send(sprites.responseFor(have));
 (`bridge/sprites/SpritePackService.java:71-81`): a not-ready frame
 (`{"type":"spritePack","ready":false}`), a tiny up-to-date ack when the client's
 `haveVersion` matches the current version, or the full multi-MB pack. What's in
-that pack (atlases, `table`, `maskTable`, `dyeTable`) is documented in
+that pack (atlases, `table`, `maskTable`, `dyeTable`, `animTable`) is documented in
 [asset-pipeline.md](asset-pipeline.md) and [dyes-and-textiles.md](dyes-and-textiles.md).
 Parse failures are caught and logged, never propagated.
 

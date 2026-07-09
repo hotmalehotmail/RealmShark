@@ -420,9 +420,10 @@ bridge replies { type:'spritePack', ... } → onSpritePackMessage
 `requestSpritePack` (`spritePack.ts:55`) sends the version we already hold so an
 unchanged version is a cheap no-op instead of re-shipping a multi-MB payload.
 
-> **Non-obvious fact.** `haveVersion` is only sent when the cache **has both
-> `maskTable` and `dyeTable`** (`spritePack.ts:59`). A cache that predates the dye
-> feature matches on version but lacks that data; claiming `haveVersion = null`
+> **Non-obvious fact.** `haveVersion` is only sent when the cache **has
+> `maskTable`, `dyeTable`, and `animTable`** (`spritePack.ts:59`). A cache that
+> predates the dye/animation features matches on version but lacks that data;
+> claiming `haveVersion = null`
 > forces a full refetch so old caches self-heal. `getSpritePack()` serves the
 > `IPC.getSpritePack` handle synchronously from memory.
 

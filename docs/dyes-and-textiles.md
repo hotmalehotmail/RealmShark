@@ -64,9 +64,9 @@ For a **textile**, the high byte is the **tile-size group**: `0x0A`(10) →
 - **solid:** `[1, r, g, b]`
 - **textile:** `[10, atlasId, x0,y0,w0,h0, x1,y1,w1,h1, …]` — one 4-tuple **per
   animation frame**, resolved via
-  `SpriteFlatBuffer.getSpriteFrames("textile"+size+"x"+size, index)`. A static
-  cloth is a single frame; an animated cloth has several (see "Animated
-  textiles" below).
+  `SpriteFlatBuffer.getAnimationFrames("textile"+size+"x"+size, index)`. A static
+  cloth is a single frame; an animated cloth has several (see "Sprite
+  animation" below).
 
 This `dyeTable` is added to the sprite-pack JSON alongside `table`
 (objectType → rect), `maskTable` (objectType → dye-mask rect), and `atlases`.
@@ -168,12 +168,13 @@ pixels exact, which matters both for the dye colour and the base sprite.
 | File | Role |
 | --- | --- |
 | `src/main/java/assets/AssetExtractor.java` | Extracts object XML (`assets/xml`) + atlases; only parses `<Texture>` (not `<Tex1>`). |
-| `src/main/java/bridge/sprites/SpritePackService.java` | `buildDyeTable()` parses `<Tex1>` from `assets/xml`; emits `table`/`maskTable`/`dyeTable`/`atlases`. |
-| `src/main/java/assets/SpriteFlatBuffer.java` | Sprite/mask rects from the flatbuffer; `getSpriteFrames` (all textile animation frames); representative facing-frame selection for character sprites. |
-| `overlay/src/shared/ipc.ts` | `SpritePack` type incl. `dyeTable` / `maskTable`. |
-| `overlay/src/main/spritePack.ts` | Caches the pack; persists `dyeTable`/`maskTable`; forces a refetch when a cache predates them. |
+| `src/main/java/bridge/sprites/SpritePackService.java` | `buildDyeTable()` parses `<Tex1>` from `assets/xml`; emits `table`/`maskTable`/`dyeTable`/`animTable`/`atlases`. |
+| `src/main/java/assets/SpriteFlatBuffer.java` | Sprite/mask rects from the flatbuffer; `getAnimationFrames` (all frames of the representative animation, for character idle sprites and textiles); representative facing-frame selection via `framePreference`. |
+| `overlay/src/shared/ipc.ts` | `SpritePack` type incl. `dyeTable` / `maskTable` / `animTable`. |
+| `overlay/src/main/spritePack.ts` | Caches the pack; persists `dyeTable`/`maskTable`/`animTable`; forces a refetch when a cache predates them. |
 | `overlay/src/renderer/src/sprites/EntityRegistry.tsx` | Tracks `clothingDye`(32)/`accessoryDye`(33) per objectId from the packet stream. |
-| `overlay/src/renderer/src/sprites/SpriteProvider.tsx` | `getDyedSprite` — the compositor (`TEXTILE_SUB` + the textile animation clock live here). |
+| `overlay/src/renderer/src/sprites/SpriteProvider.tsx` | `getDyedSprite`/`getSprite` — the compositor and per-frame lookup (`TEXTILE_SUB` lives here). |
+| `overlay/src/renderer/src/sprites/Sprite.tsx` | `<Sprite>` — ticks its own animation clock (`isAnimated`) only when the sprite actually animates. |
 | `overlay/src/renderer/src/sprites/CharacterSprite.tsx` | `<CharacterSprite objectId>` — resolves skin/class + dyes and renders via `<Sprite>`. |
 | `overlay/src/shared/settings.ts` | `textileAnimMs` — textile animation frame duration. |
 

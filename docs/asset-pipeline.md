@@ -293,9 +293,10 @@ A static block reads `spritesheetf` into
 Public resolvers, all keyed by `(sheetName, index)` and returning ints:
 
 - `getSpriteData` → `{x, y, w, h, aId}` — the atlas rect + which atlas (`:163-171`).
-- `getSpriteFrames` → all animation frames for a textile `(name, index)` as
-  `{x, y, w, h, aId}[]`, ordered by `set` (falls back to a 1-frame array for
-  non-textile groups) — see [dyes-and-textiles.md](dyes-and-textiles.md).
+- `getAnimationFrames` → all frames of the representative animation (idle,
+  right-facing for characters) for a `(name, index)` as
+  `{x, y, w, h, aId, maskX, maskY, maskW, maskH}[]`, ordered by `set` (falls
+  back to a 1-frame array when not animated) — see [dyes-and-textiles.md](dyes-and-textiles.md).
 - `getMaskSpriteData` → `{maskX, maskY, maskW, maskH}` or **null** when the
   sprite has no dye mask (`:182-191`).
 - `getSpriteColor` → the sprite's most-common colour (`:200-205`).
@@ -387,6 +388,9 @@ early not-ready reply still receive the real sprites.
   same `IdToAsset → SpriteFlatBuffer.getSpriteData` chain (`:114-128`).
 - `maskTable` — `objectType → [3, x, y, w, h]` only for objects that have a dye
   mask (atlas 3 = `characters_masks`), via `getMaskSpriteData` (`:130-139`).
+- `animTable` — `objectType → flat 9-ints/frame [x,y,w,h,aId,mx,my,mw,mh]` for
+  animated (idle) character sprites, via `getAnimationFrames`; only present
+  for objectTypes with more than one frame.
 - `dyeTable` — `dyeId → cloth`, built by `buildDyeTable` (`:152-153`).
 
 **The dye table.** `buildDyeTable(sfb)` (`:175-243`) is the one piece that reads
@@ -395,7 +399,7 @@ the XML directly: it regex-scans `assets/xml/*.xml` for `<Object>`s containing
 dye id either `[1, r, g, b]` (solid, high byte `0x01`/`0x02`) or
 `[10, atlasId, x0,y0,w0,h0, ...]` (textile, high byte = tile-size group, one
 4-tuple per animation frame, resolved via
-`SpriteFlatBuffer.getSpriteFrames("textile<N>x<N>", idx)`). The full encoding, the
+`SpriteFlatBuffer.getAnimationFrames("textile<N>x<N>", idx)`). The full encoding, the
 mask-compositing model, and the renderer side are documented in
 [dyes-and-textiles.md](dyes-and-textiles.md) — not repeated here.
 
