@@ -47,13 +47,18 @@ jobs:
           fi
           TEXT="$(printf 'Work item from GitHub issue #%s in %s (label: %s).\nTitle: %s\n\n%s' \
             "$ISSUE_NUMBER" "$REPO" "$LABEL" "$ISSUE_TITLE" "${ISSUE_BODY:-}")"
-          BODY="$(jq -n --arg t "$TEXT" '{text:$t}')"
+          # Write the compact JSON body to a file with jq. Doing this as a direct
+          # command (not `BODY=$(jq ...)`) means a jq failure aborts under set -e
+          # instead of silently leaving an empty body, and --data @file with
+          # single-line JSON sends exactly these bytes.
+          jq -nc --arg t "$TEXT" '{text: $t}' > /tmp/fire.json
+          echo "request body bytes: $(wc -c < /tmp/fire.json)"
           RESP="$(curl -sS -X POST "$FIRE_URL" \
             -H "Authorization: Bearer $FIRE_TOKEN" \
             -H "anthropic-beta: experimental-cc-routine-2026-04-01" \
             -H "anthropic-version: 2023-06-01" \
             -H "Content-Type: application/json" \
-            --data "$BODY")"
+            --data @/tmp/fire.json)"
           # `|| true` so a non-JSON response (HTML error page, empty body) doesn't
           # abort the step under `set -e` before the else-branch can report it.
           URL="$(printf '%s' "$RESP" | jq -r '.claude_code_session_url // empty' 2>/dev/null || true)"
