@@ -8,7 +8,7 @@ name: gatekeeper
 # no GATEKEEPER_TOKEN / PAT is needed; the built-in token suffices.
 #
 # It doesn't evaluate the checks itself: it ARMS GitHub native auto-merge on the PR,
-# and branch protection (required checks = the two ci jobs + review-verdict) does the
+# and branch protection (required checks: the ci jobs + review-verdict) does the
 # actual "wait for green, then merge". A failing review-verdict just leaves auto-merge
 # waiting (the fix loop, §6, drives re-fires); its escalation sets `agent:needs-human`,
 # which this job refuses to re-arm past.
@@ -30,6 +30,7 @@ jobs:
     # Only PR-triggered ci/review runs, and only agent branches.
     if: >
       github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
       startsWith(github.event.workflow_run.head_branch, 'claude/')
     steps:
       - name: Arm native auto-merge if the PR is eligible

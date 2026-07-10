@@ -74,8 +74,12 @@ jobs:
             echo "PR targets the default branch ($DEFAULT); review.yml changes are legitimate here. OK."
             exit 0
           fi
-          git fetch origin "$DEFAULT"
-          if git diff --quiet "origin/$DEFAULT" -- .github/workflows/review.yml; then
+          # Explicit refspec so refs/remotes/origin/$DEFAULT is guaranteed to exist:
+          # checkout@v4 uses a narrow PR refspec, so a bare `git fetch origin $DEFAULT`
+          # may only move FETCH_HEAD, leaving `origin/$DEFAULT` a "bad revision" (exit
+          # 128) — which, as an `if` condition, would masquerade as "differs".
+          git fetch --no-tags origin "+refs/heads/$DEFAULT:refs/remotes/origin/$DEFAULT"
+          if git diff --quiet "refs/remotes/origin/$DEFAULT" -- .github/workflows/review.yml; then
             echo "review.yml matches origin/$DEFAULT. OK."
           else
             echo "::error::review.yml differs from the default branch ($DEFAULT). A stale review.yml makes claude-code-action silently skip reviews on this branch's PRs. Land review.yml changes via a PR into $DEFAULT, then sync this branch."
