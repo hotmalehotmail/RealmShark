@@ -26,7 +26,8 @@ on:
     types: [completed]
 
 permissions:
-  contents: read # read PR/reviews/status
+  contents: read # read PR files/branches
+  statuses: read # read the review-verdict commit status (NOT covered by contents; unlisted scopes default to none)
   issues: write # labels, assignee, escalation comment (PR labels/assignees go through the issues API)
   pull-requests: write # comment, disable auto-merge
 
@@ -76,22 +77,33 @@ jobs:
             exit 0
           fi
 
-          # 3. Round count: non-dismissed CHANGES_REQUESTED reviews. The review that just
-          #    fired this run is included, so ROUNDS is 1 on the first change-request, etc.
-          #    Emit one line per matching review and count with wc -l — NOT `-q length`,
-          #    which under --paginate runs per-page and concatenates a count per page.
+          # 3. Round count: non-dismissed CHANGES_REQUESTED reviews FROM THE REVIEW AGENT.
+          #    review.yml posts via GITHUB_TOKEN, so its reviews carry login
+          #    "github-actions[bot]" — filtering to it means only automated attempts burn
+          #    the budget; a human maintainer's change-request doesn't trigger escalation.
+          #    (dismissed reviews drop to state DISMISSED, so they're already excluded.)
+          #    The review that just fired this run is included, so ROUNDS is 1 on the first
+          #    change-request, etc. Emit one line per match and count with wc -l — NOT
+          #    `-q length`, which under --paginate runs per-page and concatenates a count.
           ROUNDS="$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" \
-                      -q '.[] | select(.state=="CHANGES_REQUESTED") | .id' 2>/dev/null | wc -l | tr -d ' ')"
+                      -q '.[] | select(.state=="CHANGES_REQUESTED" and .user.login=="github-actions[bot]") | .id' 2>/dev/null | wc -l | tr -d ' ')"
           echo "PR #$PR: change-request round $ROUNDS (cap $MAX_FIX_ROUNDS)."
 
           if [ "$ROUNDS" -ge $((MAX_FIX_ROUNDS + 1)) ]; then
             # ---- ESCALATE (§6.2): stop looping, flag the human. Halt by inaction — we
             #      neither re-fire nor push, so nothing re-runs; the PR sits at its last
             #      failing verdict (unmergeable) until a human unblocks it. ----
+            # Idempotent: if the PR is already frozen, don't re-comment/re-mention/re-assign
+            # on every subsequent failing review — a human is already on it.
+            LABELS="$(gh pr view "$PR" --repo "$REPO" --json labels -q '.labels[].name' 2>/dev/null || true)"
+            if printf '%s\n' "$LABELS" | grep -qx 'agent:needs-human'; then
+              echo "PR #$PR already frozen (agent:needs-human) — not re-escalating."
+              exit 0
+            fi
             echo "Automated budget spent ($ROUNDS > $MAX_FIX_ROUNDS) — escalating."
             ensure_label "agent:needs-human" "B60205" "Agent loop stalled — needs a maintainer"
-            # Clear any loop:* visibility labels from prior rounds.
-            LOOP_LABELS="$(gh pr view "$PR" --repo "$REPO" --json labels -q '.labels[].name' | grep '^loop:' || true)"
+            # Clear any loop:* visibility labels from prior rounds (reuse the labels above).
+            LOOP_LABELS="$(printf '%s\n' "$LABELS" | grep '^loop:' || true)"
             for L in $LOOP_LABELS; do gh pr edit "$PR" --repo "$REPO" --remove-label "$L" >/dev/null 2>&1 || true; done
             # Disable any pending auto-merge so it can't merge while the human looks (harmless if none).
             gh pr merge "$PR" --repo "$REPO" --disable-auto >/dev/null 2>&1 || true
