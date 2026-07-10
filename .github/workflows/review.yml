@@ -1,8 +1,11 @@
 name: review
 
 # Independent agent review (full-spec §02, net 2). Reviews every PR for BOTH
-# correctness and code quality, and posts its findings directly onto the PR
-# (inline review comments + a summary) — visible feedback, not a no-op.
+# correctness and code quality, posts its findings directly onto the PR (inline
+# review comments + a summary), AND publishes a machine-readable `review-verdict`
+# commit status (success = APPROVE, failure = REQUEST_CHANGES) — the gate the
+# gatekeeper/fix-loop read. If the review skips (see the guard below) no status is
+# posted, so a required `review-verdict` check fails closed rather than reading green.
 #
 # Auth: a Claude subscription OAuth token (CLAUDE_CODE_OAUTH_TOKEN, from
 # `claude setup-token`) + the Claude GitHub App. Needs id-token: write.
@@ -18,6 +21,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  statuses: write # to publish the review-verdict commit status
   id-token: write # claude-code-action mints an OIDC token to get its GitHub App token
 
 jobs:
@@ -61,9 +65,14 @@ jobs:
             (critical / high / medium / low), each tied to a file and line where possible.
             Skip pure formatting that eslint/prettier already handles.
 
+            Decide a verdict from your findings:
+            - Any finding of severity `critical` or `high` → verdict = FAIL, review event = "REQUEST_CHANGES".
+            - Otherwise                                     → verdict = PASS, review event = "APPROVE"
+              (low/medium findings still go in the body/comments as non-blocking notes).
+
             Then POST the review to the PR (do not just print it). Write /tmp/review.json:
               {
-                "event": "COMMENT",
+                "event": "<APPROVE or REQUEST_CHANGES, per the verdict above>",
                 "body": "<2-4 sentence summary; include any findings not tied to a line>",
                 "comments": [
                   { "path": "<file>", "line": <line number in the NEW version of the file>,
@@ -78,5 +87,14 @@ jobs:
             If that call errors (e.g. a line is outside the diff), fall back to posting all
             findings as one comment so nothing is lost:
               gh pr comment ${{ github.event.pull_request.number }} --body-file /tmp/review.md
-            Always post something — if there are genuinely no issues, post a brief summary
-            saying the change looks good.
+
+            FINALLY, publish the verdict as a commit status on the PR head SHA — this is the
+            machine-readable gate the gatekeeper and fix-loop read. Run exactly (state is
+            "success" for a PASS/APPROVE, "failure" for a FAIL/REQUEST_CHANGES):
+              gh api --method POST \
+                "repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }}" \
+                -f state="<success|failure>" \
+                -f context="review-verdict" \
+                -f description="<one-line reason, e.g. 'clean' or '2 high-severity findings'>"
+            Always post BOTH the review and the status. If there are genuinely no issues,
+            APPROVE with a brief positive summary and post state=success.

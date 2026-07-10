@@ -21,8 +21,15 @@ export const IPC = {
   checkForUpdate: 'check-for-update',
   downloadUpdate: 'download-update',
   updateAvailable: 'update-available',
-  updateProgress: 'update-progress'
+  updateProgress: 'update-progress',
+  reportBug: 'report-bug'
 } as const
+
+/** Result of an IPC.reportBug call: where the capture bundle was written on disk. */
+export interface BugReportResult {
+  /** Absolute path of the JSON capture (version + recent packets + logs) to attach. */
+  file: string
+}
 
 /** A newer overlay release found on GitHub. */
 export interface UpdateInfo {

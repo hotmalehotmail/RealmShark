@@ -32,6 +32,7 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
   const [checking, setChecking] = useState(false)
   const [downloadPct, setDownloadPct] = useState<number | null>(null)
   const [checkMsg, setCheckMsg] = useState('')
+  const [bugMsg, setBugMsg] = useState('')
 
   useEffect(() => {
     window.overlay.getSettings().then((settings) => setToggleHotkey(settings.toggleHotkey))
@@ -69,6 +70,16 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
   const installUpdate = (): void => {
     setDownloadPct(0)
     void window.overlay.downloadUpdate() // app restarts itself when the installer runs
+  }
+
+  const reportBug = async (): Promise<void> => {
+    setBugMsg('Capturing…')
+    try {
+      await window.overlay.reportBug()
+      setBugMsg('Capture saved — drag it into the issue')
+    } catch {
+      setBugMsg('Capture failed')
+    }
   }
 
   return (
@@ -134,6 +145,18 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
               {checkMsg && <span className="text-xs text-white/40">{checkMsg}</span>}
             </div>
           )}
+        </div>
+      )}
+
+      {size !== 'sm' && (
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <button
+            onClick={reportBug}
+            className="shrink-0 rounded bg-white/10 px-2 py-0.5 text-xs hover:bg-white/20"
+          >
+            Report bug
+          </button>
+          {bugMsg && <span className="truncate text-xs text-white/40">{bugMsg}</span>}
         </div>
       )}
 
