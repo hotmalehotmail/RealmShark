@@ -45,25 +45,15 @@ jobs:
             gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "⚙️ \`$LABEL\` applied, but the build-agent routine isn't wired up yet (missing ROUTINE_FIRE_URL / ROUTINE_FIRE_TOKEN secrets). See docs/build-agent-routine.md."
             exit 0
           fi
-          TEXT="$(printf 'Work item from GitHub issue #%s in %s (label: %s).\nTitle: %s\n\n%s' \
-            "$ISSUE_NUMBER" "$REPO" "$LABEL" "$ISSUE_TITLE" "${ISSUE_BODY:-}")"
-          # Write the compact JSON body to a file with jq. Doing this as a direct
-          # command (not `BODY=$(jq ...)`) means a jq failure aborts under set -e
-          # instead of silently leaving an empty body, and --data @file with
-          # single-line JSON sends exactly these bytes.
-          jq -nc --arg t "$TEXT" '{text: $t}' > /tmp/fire.json
-          echo "request body bytes: $(wc -c < /tmp/fire.json)"
-          curl -sS -X POST "$FIRE_URL" \
+          # DECISIVE PROBE: exact docs-shaped request with a minimal hardcoded body.
+          echo "probing /fire with a minimal hardcoded body..."
+          RESP="$(curl -sS -X POST "$FIRE_URL" \
             -H "Authorization: Bearer $FIRE_TOKEN" \
-            -H "anthropic-beta: experimental-cc-routine-2026-04-01" \
             -H "anthropic-version: 2023-06-01" \
+            -H "anthropic-beta: experimental-cc-routine-2026-04-01" \
             -H "Content-Type: application/json" \
-            --data @/tmp/fire.json -v >/tmp/resp.json 2>/tmp/curl.log || true
-          echo "--- request headers curl sent (Authorization redacted) ---"
-          grep -E '^> ' /tmp/curl.log | grep -iv '^> authorization' || true
-          echo "--- response status line ---"
-          grep -E '^< HTTP' /tmp/curl.log || true
-          RESP="$(cat /tmp/resp.json)"
+            -d '{"text":"probe from implement.yml"}')"
+          echo "probe response: $RESP"
           echo "curl exit: $?"
           # `|| true` so a non-JSON response (HTML error page, empty body) doesn't
           # abort the step under `set -e` before the else-branch can report it.
