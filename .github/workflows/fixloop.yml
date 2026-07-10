@@ -25,6 +25,16 @@ on:
     workflows: [review]
     types: [completed]
 
+# Serialize per head branch: two review runs completing close together (rapid double
+# push, reopen+synchronize) must not spawn two fixloop runs that both read the same
+# ROUNDS and both re-fire the agent against one branch (racing sessions, wasted budget,
+# double escalation). cancel-in-progress: false queues rather than cancels — an
+# in-flight re-fire should finish, not be killed. (The gatekeeper needs no such guard:
+# arming auto-merge is idempotent; re-firing an agent is not.)
+concurrency:
+  group: fixloop-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
 permissions:
   contents: read # read PR files/branches
   statuses: read # read the review-verdict commit status (NOT covered by contents; unlisted scopes default to none)
@@ -87,9 +97,18 @@ jobs:
           #    `-q length`, which under --paginate runs per-page and concatenates a count.
           ROUNDS="$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" \
                       -q '.[] | select(.state=="CHANGES_REQUESTED" and .user.login=="github-actions[bot]") | .id' 2>/dev/null | wc -l | tr -d ' ')"
-          echo "PR #$PR: change-request round $ROUNDS (cap $MAX_FIX_ROUNDS)."
 
-          if [ "$ROUNDS" -ge $((MAX_FIX_ROUNDS + 1)) ]; then
+          # Defensive backstop against a runaway. ROUNDS keys on the reviewer's login; if
+          # review.yml ever posted under a different identity that filter would match
+          # nothing, ROUNDS would stay 0, and the loop would re-fire forever. Also cap on
+          # the TOTAL non-dismissed CHANGES_REQUESTED reviews (any author) as a hard
+          # ceiling, so a misconfig or heavy human back-and-forth can't loop unbounded.
+          TOTAL="$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" \
+                     -q '.[] | select(.state=="CHANGES_REQUESTED") | .id' 2>/dev/null | wc -l | tr -d ' ')"
+          HARD_CEILING=$((MAX_FIX_ROUNDS * 2))
+          echo "PR #$PR: agent change-request round $ROUNDS (cap $MAX_FIX_ROUNDS); total change-requests $TOTAL (ceiling $HARD_CEILING)."
+
+          if [ "$ROUNDS" -ge $((MAX_FIX_ROUNDS + 1)) ] || [ "$TOTAL" -ge "$HARD_CEILING" ]; then
             # ---- ESCALATE (§6.2): stop looping, flag the human. Halt by inaction — we
             #      neither re-fire nor push, so nothing re-runs; the PR sits at its last
             #      failing verdict (unmergeable) until a human unblocks it. ----
@@ -108,6 +127,10 @@ jobs:
             # Disable any pending auto-merge so it can't merge while the human looks (harmless if none).
             gh pr merge "$PR" --repo "$REPO" --disable-auto >/dev/null 2>&1 || true
 
+            # First page (no --paginate): `last` picks the newest CHANGES_REQUESTED body.
+            # Safe here — HARD_CEILING escalates well before a PR could reach the 30-review
+            # page boundary, so the newest review is always on page 1. (Can't --paginate a
+            # `... | last` aggregate: like `length`, it would run per-page and concatenate.)
             SUMMARY="$(gh api "repos/$REPO/pulls/$PR/reviews" \
                         -q '[.[] | select(.state=="CHANGES_REQUESTED")] | last | .body' 2>/dev/null || true)"
             MENTION=""; ASSIGN=0
