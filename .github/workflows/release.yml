@@ -39,9 +39,11 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22 # overlay/package.json engines: node >=22.12.0
           cache: npm
           cache-dependency-path: overlay/package-lock.json
+      # Full install here (native rebuild included) — the Windows packaging step
+      # needs the compiled addon, and windows-latest has the build tools for it.
       - name: Install overlay deps
         working-directory: overlay
         run: npm ci

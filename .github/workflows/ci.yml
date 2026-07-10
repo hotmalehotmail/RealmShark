@@ -25,10 +25,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22 # overlay/package.json engines: node >=22.12.0
           cache: npm
           cache-dependency-path: overlay/package-lock.json
-      - run: npm ci
+      # --ignore-scripts skips the electron-builder native rebuild (postinstall):
+      # typecheck + lint don't need the compiled X11 addon, and the Linux runner
+      # lacks the libxcb headers electron-overlay-window wants.
+      - run: npm ci --ignore-scripts
       - run: npm run typecheck
       - run: npm run lint
 
