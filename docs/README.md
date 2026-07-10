@@ -68,6 +68,28 @@ moving parts, each with its own doc below.
 - **[dyes-and-textiles.md](dyes-and-textiles.md)** — how equipped dyes (solid
   colours and woven textiles) are decoded and composited onto character sprites.
 
+## Autonomous dev loop (CI / agents)
+
+- **[dev-loop-full-spec.html](dev-loop-full-spec.html)** — the end-to-end design
+  spec (v5) for the issue-driven, mostly-hands-off dev loop: topology, how the
+  layers hand off, what file enforces each rule, which model does what, worked
+  feature/bug runs, and cost. This is the **design intent** the workflows cite as
+  "full-spec §02/§03" — a point-in-time plan, not current-state docs, so parts
+  describe behaviour not yet built (e.g. the review→builder fix loop and
+  `gatekeeper.yml` auto-merge are still stubs).
+- **[dev-loop-mechanisms.md](dev-loop-mechanisms.md)** — the per-step **mechanism
+  ledger**: for every stage, exactly what *drives* it and what *enforces* it,
+  whether it's built, and — for the unbuilt parts (fix loop, gatekeeper, review
+  verdict, branch protection) — a precise spec including the 3-attempt cap and the
+  human-escalation/resume flow. Reconciles the design intent above with the repo's
+  actual state and gives the critical-path build order. A styled, viewable version
+  is at [dev-loop-mechanisms.html](dev-loop-mechanisms.html) (same content).
+- **[build-agent-routine.md](build-agent-routine.md)** — how a labeled issue
+  becomes a PR: `implement.yml` fires the build-agent Routine over its `/fire`
+  endpoint, and the one-time account-side setup.
+- **[doc-sync.md](doc-sync.md)** — the `post-commit` hook that keeps these docs in
+  sync as a backstop.
+
 ---
 
 > These docs describe the shipped implementation. They are written for both human

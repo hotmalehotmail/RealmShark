@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dev Loop — Mechanisms &amp; Enforcement</title>
+<style>
+  :root {
+    --bg: #F3F5F8; --surface: #FFFFFF; --surface-2: #EAEDF2; --border: #DCE0E8;
+    --border-strong: #C3CAD5; --ink: #191C22; --ink-2: #495060; --ink-3: #6C7484;
+    --accent: #3E63DD; --accent-ink: #2B44A8; --accent-soft: rgba(62,99,221,0.09);
+    --agent: #3E63DD; --agent-soft: rgba(62,99,221,0.11);
+    --human: #B7791F; --human-soft: rgba(183,121,31,0.13);
+    --ci: #1F9E63; --ci-soft: rgba(31,158,99,0.12);
+    --anthropic: #C2632E; --anthropic-soft: rgba(194,99,46,0.12);
+    --strong: #1F9E63; --mid: #B7791F; --weak: #C4472E;
+    --weak-soft: rgba(196,71,46,0.12);
+    --mono-bg: #EDEFF4; --mono-ink: #33405C;
+    --shadow: 0 1px 2px rgba(20,26,40,0.05), 0 6px 20px rgba(20,26,40,0.06);
+    --sans: -apple-system, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: "SF Mono", "JetBrains Mono", "Cascadia Code", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
+    --measure: 74ch; --maxw: 1140px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0F1116; --surface: #181B22; --surface-2: #20242D; --border: #2A2F3A;
+      --border-strong: #3A424F; --ink: #E6E9F0; --ink-2: #A7AFBE; --ink-3: #767E8D;
+      --accent: #6E8BEE; --accent-ink: #97ACF5; --accent-soft: rgba(110,139,238,0.14);
+      --agent: #6E8BEE; --agent-soft: rgba(110,139,238,0.15);
+      --human: #E0A94A; --human-soft: rgba(224,169,74,0.15);
+      --ci: #46C088; --ci-soft: rgba(70,192,136,0.15);
+      --anthropic: #E08A54; --anthropic-soft: rgba(224,138,84,0.15);
+      --strong: #46C088; --mid: #E0A94A; --weak: #E8705A; --weak-soft: rgba(232,112,90,0.16);
+      --mono-bg: #232833; --mono-ink: #B7C3DE;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 26px rgba(0,0,0,0.34);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #F3F5F8; --surface: #FFFFFF; --surface-2: #EAEDF2; --border: #DCE0E8;
+    --border-strong: #C3CAD5; --ink: #191C22; --ink-2: #495060; --ink-3: #6C7484;
+    --accent: #3E63DD; --accent-ink: #2B44A8; --accent-soft: rgba(62,99,221,0.09);
+    --agent: #3E63DD; --agent-soft: rgba(62,99,221,0.11); --human: #B7791F;
+    --human-soft: rgba(183,121,31,0.13); --ci: #1F9E63; --ci-soft: rgba(31,158,99,0.12);
+    --anthropic: #C2632E; --anthropic-soft: rgba(194,99,46,0.12);
+    --strong: #1F9E63; --mid: #B7791F; --weak: #C4472E; --weak-soft: rgba(196,71,46,0.12);
+    --mono-bg: #EDEFF4; --mono-ink: #33405C;
+    --shadow: 0 1px 2px rgba(20,26,40,0.05), 0 6px 20px rgba(20,26,40,0.06);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0F1116; --surface: #181B22; --surface-2: #20242D; --border: #2A2F3A;
+    --border-strong: #3A424F; --ink: #E6E9F0; --ink-2: #A7AFBE; --ink-3: #767E8D;
+    --accent: #6E8BEE; --accent-ink: #97ACF5; --accent-soft: rgba(110,139,238,0.14);
+    --agent: #6E8BEE; --agent-soft: rgba(110,139,238,0.15); --human: #E0A94A;
+    --human-soft: rgba(224,169,74,0.15); --ci: #46C088; --ci-soft: rgba(70,192,136,0.15);
+    --anthropic: #E08A54; --anthropic-soft: rgba(224,138,84,0.15);
+    --strong: #46C088; --mid: #E0A94A; --weak: #E8705A; --weak-soft: rgba(232,112,90,0.16);
+    --mono-bg: #232833; --mono-ink: #B7C3DE;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 26px rgba(0,0,0,0.34);
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans);
+    font-size: 16px; line-height: 1.62; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  header.site { position: sticky; top: 0; z-index: 20;
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    backdrop-filter: saturate(1.4) blur(10px); border-bottom: 1px solid var(--border); }
+  header.site .row { display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; padding: 13px 24px; max-width: var(--maxw); margin: 0 auto; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 640; letter-spacing: -0.01em; }
+  .brand .dot { width: 11px; height: 11px; border-radius: 3px; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  header.site .ctx { font-family: var(--mono); font-size: 0.78rem; color: var(--ink-3); }
+
+  .hero { padding: 52px 0 20px; }
+  .eyebrow { font-family: var(--mono); font-size: 0.72rem; text-transform: uppercase;
+    letter-spacing: 0.16em; color: var(--accent-ink); font-weight: 600; margin: 0 0 18px; }
+  h1 { font-size: clamp(2rem, 4.2vw, 2.9rem); line-height: 1.06; letter-spacing: -0.025em;
+    font-weight: 720; margin: 0 0 20px; text-wrap: balance; max-width: 22ch; }
+  .lede { font-size: 1.13rem; color: var(--ink-2); max-width: var(--measure); margin: 0; line-height: 1.55; }
+  .lede b { color: var(--ink); font-weight: 600; }
+
+  .toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 30px 0 4px; }
+  .toc a { font-family: var(--mono); font-size: 0.78rem; text-decoration: none; color: var(--ink-2);
+    border: 1px solid var(--border); background: var(--surface); padding: 6px 11px; border-radius: 20px; }
+  .toc a:hover { border-color: var(--accent); color: var(--accent-ink); }
+
+  section { padding: 40px 0; border-top: 1px solid var(--border); scroll-margin-top: 64px; }
+  .sec-head { display: flex; align-items: baseline; gap: 14px; margin: 0 0 6px; }
+  .sec-num { font-family: var(--mono); font-size: 0.82rem; color: var(--accent-ink); font-weight: 600; padding-top: 6px; }
+  h2 { font-size: clamp(1.4rem, 3vw, 1.85rem); line-height: 1.12; letter-spacing: -0.02em; font-weight: 680; margin: 0; text-wrap: balance; }
+  .sec-sub { color: var(--ink-2); max-width: var(--measure); margin: 12px 0 22px; }
+  p { max-width: var(--measure); color: var(--ink-2); }
+  p b, li b { color: var(--ink); font-weight: 600; }
+  h3 { font-size: 1.06rem; font-weight: 650; letter-spacing: -0.01em; margin: 26px 0 6px; color: var(--ink); }
+  ul { max-width: var(--measure); } li { margin: 5px 0; color: var(--ink-2); }
+  a { color: var(--accent-ink); }
+
+  code { font-family: var(--mono); font-size: 0.85em; background: var(--mono-bg); color: var(--mono-ink);
+    padding: 0.12em 0.44em; border-radius: 5px; border: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+  code.branch { color: var(--accent-ink); }
+
+  /* status pills */
+  .st { font-family: var(--mono); font-size: 0.66rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.05em; padding: 2px 8px; border-radius: 20px; white-space: nowrap; display: inline-flex; gap: 5px; align-items: center; }
+  .st::before { content: ""; width: 7px; height: 7px; border-radius: 50%; }
+  .st.built { color: var(--strong); background: var(--ci-soft); } .st.built::before { background: var(--strong); }
+  .st.partial { color: var(--mid); background: var(--human-soft); } .st.partial::before { background: var(--mid); }
+  .st.unbuilt { color: var(--weak); background: var(--weak-soft); } .st.unbuilt::before { background: var(--weak); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 6px 0 20px; align-items: center; }
+
+  /* drive / enforce block */
+  .mech { display: grid; grid-template-columns: 92px 1fr; gap: 8px 16px; margin: 16px 0 4px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; box-shadow: var(--shadow); max-width: var(--measure); }
+  .mech dt { font-family: var(--mono); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; padding-top: 3px; }
+  .mech dt.d { color: var(--agent); } .mech dt.e { color: var(--ci); } .mech dt.s { color: var(--ink-3); }
+  .mech dd { margin: 0; font-size: 0.92rem; color: var(--ink-2); }
+  .mech dd b { color: var(--ink); }
+
+  .tobuild { border: 1px solid var(--border); border-left: 3px solid var(--human); background: var(--human-soft);
+    border-radius: 10px; padding: 14px 18px; margin: 18px 0; max-width: var(--measure); }
+  .tobuild .tag { font-family: var(--mono); font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--human); font-weight: 700; }
+  .tobuild p, .tobuild ul { color: var(--ink); } .tobuild p { margin: 6px 0; }
+
+  .callout { border: 1px solid var(--border); border-left: 3px solid var(--accent); background: var(--accent-soft);
+    border-radius: 10px; padding: 14px 18px; margin: 18px 0; max-width: var(--measure); }
+  .callout .tag { font-family: var(--mono); font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent-ink); font-weight: 700; }
+  .callout p { margin: 6px 0 0; color: var(--ink); }
+  .callout.warn { border-left-color: var(--weak); background: var(--weak-soft); } .callout.warn .tag { color: var(--weak); }
+
+  .tablewrap { overflow-x: auto; margin: 18px 0; border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; min-width: 680px; background: var(--surface); font-size: 0.87rem; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  thead th { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-3); font-weight: 600; background: var(--surface-2); }
+  tbody tr:last-child td { border-bottom: none; }
+  td b { color: var(--ink); font-weight: 600; }
+
+  pre { font-family: var(--mono); font-size: 0.79rem; line-height: 1.55; background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; overflow-x: auto; margin: 14px 0; color: var(--ink); max-width: 100%; }
+  pre .cm { color: var(--ink-3); } pre .kw { color: var(--accent-ink); }
+
+  /* numbered escalation steps */
+  .steps { display: grid; gap: 0; margin: 14px 0; max-width: var(--measure); }
+  .step { display: grid; grid-template-columns: 40px 1fr; gap: 16px; padding: 14px 0; border-top: 1px dashed var(--border); }
+  .step:first-child { border-top: none; }
+  .step .n { font-family: var(--mono); font-size: 0.82rem; font-weight: 700; color: var(--accent-ink);
+    width: 34px; height: 34px; display: grid; place-items: center; border-radius: 9px; background: var(--accent-soft);
+    border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent); }
+  .step .t { font-weight: 620; letter-spacing: -0.01em; font-size: 0.97rem; color: var(--ink); margin-bottom: 2px; }
+  .step p { margin: 0; font-size: 0.9rem; }
+
+  .path { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+  .path .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; box-shadow: var(--shadow); }
+  .path .card h4 { margin: 0 0 6px; font-size: 0.98rem; font-weight: 650; color: var(--ink); }
+  .path .card p { font-size: 0.9rem; margin: 6px 0; }
+
+  footer { border-top: 1px solid var(--border); padding: 28px 0 60px; color: var(--ink-3); font-size: 0.85rem; }
+  @media (max-width: 720px) {
+    .path { grid-template-columns: 1fr; }
+    .mech { grid-template-columns: 74px 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="row">
+    <div class="brand"><span class="dot"></span> RealmShark · Dev Loop Mechanisms</div>
+    <div class="ctx">drive · enforce · status &nbsp;|&nbsp; verified 2026-07-10</div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="hero">
+    <p class="eyebrow">Companion to the Full Spec — mechanism ledger</p>
+    <h1>What drives each step, what enforces it, and what's still missing.</h1>
+    <p class="lede">For every stage of the autonomous loop: the exact trigger that <b>drives</b> it, the exact gate that <b>enforces</b> it, whether it's <b>built</b>, and — where it isn't — precisely what to build, down to triggers, tokens, state, and the human-escalation flow. Verified against the repo (<code>bridge</code> default, <code>staging</code> integration).</p>
+
+    <div class="legend">
+      <span class="st built">Built</span>
+      <span class="st partial">Partial</span>
+      <span class="st unbuilt">Unbuilt</span>
+      <span style="color:var(--ink-3);font-size:0.85rem;">— <b style="color:var(--ink-2)">Drives</b> = what causes it to run · <b style="color:var(--ink-2)">Enforces</b> = what makes its rule unskippable</span>
+    </div>
+
+    <nav class="toc">
+      <a href="#glance">At a glance</a>
+      <a href="#s1">1 Kickoff</a>
+      <a href="#s2">2 Fire</a>
+      <a href="#s3">3 Build</a>
+      <a href="#s4">4 CI</a>
+      <a href="#s5">5 Review</a>
+      <a href="#s6">6 Fix loop</a>
+      <a href="#s7">7 Gatekeeper</a>
+      <a href="#s8">8 Release</a>
+      <a href="#cross">Cross-cutting</a>
+      <a href="#order">Build order</a>
+    </nav>
+  </div>
+
+  <!-- AT A GLANCE -->
+  <section id="glance">
+    <div class="sec-head"><span class="sec-num">00</span><h2>Status at a glance</h2></div>
+    <p class="sec-sub">The left half of the pipeline — issue in, reviewed PR out — is built. The entire "closes itself" right half (verdict → fix loop → auto-merge) is not.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>#</th><th>Stage</th><th>Drives</th><th>Enforces</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td><b>Issue + label kickoff</b></td><td><code>issues: labeled</code> → <code>implement.yml</code></td><td>maintainer-only labels; <code>/fire</code> secrets</td><td><span class="st built">Built</span></td></tr>
+          <tr><td>2</td><td><b>Routine fire → session</b></td><td><code>implement.yml</code> <code>curl /fire</code></td><td>per-routine bearer token</td><td><span class="st built">Built</span></td></tr>
+          <tr><td>3</td><td><b>Build agent → branch + PR</b></td><td>routine session (Opus 4.8)</td><td>App push scope; <code>claude/*</code> convention</td><td><span class="st built">Built</span></td></tr>
+          <tr><td>4</td><td><b>CI ground-truth checks</b></td><td><code>pull_request</code> → <code>ci.yml</code></td><td>branch-protection required checks</td><td><span class="st built">Built</span></td></tr>
+          <tr><td>5</td><td><b>Independent review</b></td><td><code>pull_request</code> → <code>review.yml</code></td><td>workflow-validation guard</td><td><span class="st built">Built</span> verdict live</td></tr>
+          <tr><td>6</td><td><b>Fix loop (re-fire, capped)</b></td><td>—</td><td>—</td><td><span class="st unbuilt">Unbuilt</span></td></tr>
+          <tr><td>7</td><td><b>Gatekeeper auto-merge</b></td><td><code>workflow_run</code> → arm auto-merge</td><td>native auto-merge + required checks</td><td><span class="st built">Built</span> verified (#19)</td></tr>
+          <tr><td>8</td><td><b>Release (ship button)</b></td><td><code>workflow_dispatch</code> → <code>release.yml</code></td><td>manual-only dispatch</td><td><span class="st built">Built</span></td></tr>
+          <tr><td>—</td><td><b>Branch protection</b></td><td>—</td><td>required checks (+ push restriction)</td><td><span class="st built">Built</span> verdict required · push-restrict N/A (user repo)</td></tr>
+          <tr><td>—</td><td><b>Workflow-parity guard</b></td><td><code>ci</code> job on each PR</td><td>required check (both branches)</td><td><span class="st built">Built</span> verified</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 1 -->
+  <section id="s1">
+    <div class="sec-head"><span class="sec-num">01</span><h2>Issue + label kickoff</h2></div>
+    <dl class="mech">
+      <dt class="d">Drives</dt><dd>A maintainer applies <code>agent:build</code>/<code>agent:fix</code>. <code>implement.yml</code> runs <code>on: issues: [labeled]</code>, gated by <code>if: label.name == 'agent:build' || 'agent:fix'</code>. Opening an issue alone does nothing.</dd>
+      <dt class="e">Enforces</dt><dd><b>Label application is maintainer-only</b> — it needs write/triage permission, so a stranger's issue can't start an agent. This is the loop's security boundary. Secondly, <code>implement.yml</code> no-ops if <code>ROUTINE_FIRE_URL</code>/<code>ROUTINE_FIRE_TOKEN</code> are unset.</dd>
+      <dt class="s">Status</dt><dd><span class="st built">Built</span> — verified on issue #10. Untrusted issue fields go through env vars, never interpolated into the shell.</dd>
+    </dl>
+    <div class="callout warn"><span class="tag">Watch-out</span><p>A trailing newline in either secret silently 400s <code>/fire</code> with a misleading "could not parse request body as JSON". Set them with <code>printf&nbsp;%s</code>, never <code>echo</code>.</p></div>
+  </section>
+
+  <!-- 2 -->
+  <section id="s2">
+    <div class="sec-head"><span class="sec-num">02</span><h2>Routine fire → cloud session</h2></div>
+    <dl class="mech">
+      <dt class="d">Drives</dt><dd><code>implement.yml</code> POSTs <code>{"text": "&lt;issue as work item&gt;"}</code> to <code>/v1/claude_code/routines/&lt;trig&gt;/fire</code> (headers <code>anthropic-version</code> + <code>anthropic-beta: experimental-cc-routine-2026-04-01</code>). A <code>200</code> returns <code>claude_code_session_url</code>, commented back on the issue.</dd>
+      <dt class="e">Enforces</dt><dd>The per-routine bearer token (<code>sk-ant-oat01-…</code>) scopes the call to exactly one routine. Auto Mode's tool allowlist bounds what the session may do unattended.</dd>
+      <dt class="s">Status</dt><dd><span class="st built">Built</span> — setup in <code>build-agent-routine.md</code>.</dd>
+    </dl>
+  </section>
+
+  <!-- 3 -->
+  <section id="s3">
+    <div class="sec-head"><span class="sec-num">03</span><h2>Build agent → branch + PR</h2></div>
+    <dl class="mech">
+      <dt class="d">Drives</dt><dd>The cloud session (Claude Code, Opus 4.8) runs the routine prompt: read <code>CLAUDE.md</code>, branch <code class="branch">claude/&lt;slug&gt;</code> off <code>origin/staging</code>, implement, self-check, open a PR into <code>staging</code> with <code>Closes #N</code> + an Assumptions block.</dd>
+      <dt class="e">Enforces</dt><dd>Commits under the Claude GitHub App identity. The <code class="branch">claude/*</code> prefix is the convention every downstream gate keys on. The prompt forbids touching <code>bridge</code>, <code>.github/workflows/</code>, or publishing releases.</dd>
+      <dt class="s">Status</dt><dd><span class="st built">Built</span> — verified on PR #19.</dd>
+    </dl>
+    <div class="tobuild"><span class="tag">To build for the fix loop</span><p>The prompt only knows how to open a <i>new</i> branch/PR. It needs a second "operate on an existing branch" mode so the same agent can push fixes to the PR under review — specified in §6.</p></div>
+  </section>
+
+  <!-- 4 -->
+  <section id="s4">
+    <div class="sec-head"><span class="sec-num">04</span><h2>CI ground-truth checks</h2></div>
+    <dl class="mech">
+      <dt class="d">Drives</dt><dd><code>ci.yml</code> runs <code>on: pull_request: branches: [staging, bridge]</code>. Two jobs: <code>overlay — typecheck + lint</code> and <code>bridge — compile + fat jar</code> (<code>gradle bridgeJar</code>, Gradle 7.4.2).</dd>
+      <dt class="e">Enforces</dt><dd>Branch protection lists both job names as <b>required status checks</b> (verified). A PR can't merge until both are green.</dd>
+      <dt class="s">Status</dt><dd><span class="st built">Built</span> — <b>PR #18</b> landed the JUnit DPS test module + a <code>gradle&nbsp;test</code> step in the <code>bridge — compile + fat jar</code> job (same context, so required checks unchanged). The ground-truth gate now includes behavioral tests on both branches.</dd>
+    </dl>
+  </section>
+
+  <!-- 5 -->
+  <section id="s5">
+    <div class="sec-head"><span class="sec-num">05</span><h2>Independent review</h2></div>
+    <dl class="mech">
+      <dt class="d">Drives</dt><dd><code>review.yml</code> runs <code>on: pull_request: [opened, synchronize, reopened]</code>. It invokes <code>claude-code-action@v1</code> (Opus 4.8, <code>CLAUDE_CODE_OAUTH_TOKEN</code>), reads the diff, posts a review via <code>POST .../pulls/{n}/reviews</code>.</dd>
+      <dt class="e">Enforces</dt><dd>The action's <b>workflow-validation guard</b>: it runs only if <code>review.yml</code> is byte-identical to the copy on the <b>default branch</b>. A PR can't rewrite the reviewer to rubber-stamp itself.</dd>
+      <dt class="s">Status</dt><dd><span class="st built">Built</span> — verified live on PR #22 (<code>review-verdict = success</code>). Both former gaps are closed (below).</dd>
+    </dl>
+    <p><b>Both problems now closed:</b></p>
+    <ul>
+      <li><b>Machine-readable verdict — done.</b> The prompt chooses <code>REQUEST_CHANGES</code> (any high/critical) or <code>APPROVE</code>, and publishes a <code>review-verdict</code> commit status. Downstream can gate on it; the fix loop has its "changes requested" signal.</li>
+      <li><b>No longer green-on-skip.</b> The verdict is a <i>separate</i> <code>review-verdict</code> status, not the job's exit code — a validation-skip posts no status, so a required check fails closed instead of reading "approved".</li>
+    </ul>
+    <div class="tobuild"><span class="tag">Built in PR #21 — the review verdict (linchpin for §6 &amp; §7)</span>
+      <p style="margin-top:0"><i>Merged to <code>staging</code> + promoted to <code>bridge</code> in lockstep; verified by the <code>review-verdict = success</code> status on PR #22. How it works:</i></p>
+      <p><b>Decision rule (prompt):</b> any <code>high</code>/<code>critical</code> finding → <code>event: REQUEST_CHANGES</code>; else <code>event: COMMENT</code> + status <code>success</code> (low/medium still listed, non-blocking). <b>Not <code>APPROVE</code></b> — the Actions bot can't submit APPROVE reviews (the call fails and drops the summary; found live on #22/#19, fixed in #23). We gate on the status, not an approval.</p>
+      <p><b>Explicit status check (the gate):</b> final step posts a commit status on the PR head SHA —</p>
+      <pre><span class="kw">gh</span> api -X POST repos/{repo}/statuses/{sha} \
+  -f state=success|failure -f context=review-verdict</pre>
+      <p><b>Fail-closed by construction:</b> if the review skips or errors, <b>no <code>review-verdict</code> status is posted</b>, so a branch-protection rule requiring it leaves the PR <b>blocked</b> — the correct inverse of today's "green on skip". Then add <code>review-verdict</code> to required checks.</p>
+    </div>
+  </section>
+
+  <!-- 6 -->
+  <section id="s6">
+    <div class="sec-head"><span class="sec-num">06</span><h2>Fix loop — review requests changes → re-fire the builder (capped)</h2></div>
+    <p class="sec-sub"><span class="st unbuilt">Unbuilt</span> &nbsp; The largest gap and the one most easily hand-waved, so it's specified in full. Nothing today triggers on review events. Depends on §5's verdict and §3's existing-branch mode.</p>
+
+    <h3>6.1 · Normal (converging) path — exactly what happens</h3>
+    <p><b>Trigger (Option B — <code>workflow_run</code>, chosen deliberately).</b> A new <code>fixloop.yml</code> fires when the <b>review workflow completes</b>, then reads the verdict:</p>
+    <pre><span class="kw">on:</span>
+  workflow_run:
+    workflows: [review]
+    types: [completed]</pre>
+    <p>It pulls the PR's head branch + SHA from the <code>workflow_run</code> payload, ignores anything whose head isn't <code class="branch">claude/*</code>, reads the <code>review-verdict</code> status on that SHA, and acts <b>only if it is <code>failure</code></b>; a <code>success</code> verdict is a no-op (the gatekeeper handles it).</p>
+    <div class="callout"><span class="tag">Why <code>workflow_run</code>, not <code>pull_request_review</code></span><p>The obvious trigger is the reviewer's <code>REQUEST_CHANGES</code>. But the reviewer posts that with the built-in <code>GITHUB_TOKEN</code>, and <b>GitHub's recursion guard suppresses workflow triggers for events caused by <code>GITHUB_TOKEN</code></b> — so a <code>pull_request_review</code> trigger would silently never fire. <code>workflow_run</code> is GitHub's "chain off another workflow" event and fires regardless of token. Net: <b>no non-default token is needed anywhere in the loop</b> (§6.4).</p></div>
+    <p><b>Round counting (stateless — no fragile label state).</b> <code>rounds = count of non-dismissed CHANGES_REQUESTED reviews</code> via <code>GET .../pulls/{n}/reviews</code>. The firing review is included, so <code>rounds</code> is 1 on the first change-request, 2 on the second… A <code>loop:&lt;n&gt;</code> label is set purely for human visibility.</p>
+    <p><b>Cap.</b> <code>MAX_FIX_ROUNDS = 3</code>. If <code>rounds ≤ 3</code> → <b>re-fire</b> (automated attempt #<code>rounds</code>). If <code>rounds ≥ 4</code> → <b>escalate</b> (§6.2).</p>
+    <p><b>Re-fire — exact behavior.</b> The job <code>curl</code>s the same <code>/fire</code> endpoint with a <b>FIX-MODE work item</b>: <i>"FIX MODE. PR #n, head <code class="branch">claude/slug</code>, base staging. Check out that branch, read the full PR conversation (review comments AND any maintainer comments) for guidance, address every unresolved comment below, and PUSH to the same branch — do NOT open a new PR. If a comment is wrong, reply to it instead of changing code."</i> plus the verbatim review comments. The agent's push emits <code>synchronize</code> → <b>CI and review re-run automatically</b> → a fresh verdict.</p>
+    <p><b>Convergence.</b> As soon as a round returns a passing verdict (<code>review-verdict = success</code>), §7 merges. So: request-changes → re-fire → push → re-review → … → pass → auto-merge, bounded at 3 automated attempts.</p>
+
+    <h3>6.2 · Escalation — exactly how it stops and how you're flagged</h3>
+    <p>When <code>rounds ≥ 4</code>, <code>fixloop.yml</code> does not re-fire. In one job, using the built-in <code>GITHUB_TOKEN</code> (with <code>issues: write</code> + <code>pull-requests: write</code> — these actions don't cascade, so no special token):</p>
+    <div class="steps">
+      <div class="step"><div class="n">1</div><div><div class="t">Stops the loop by inaction</div><p>It doesn't re-fire and doesn't push → no <code>synchronize</code> → nothing re-runs. The PR sits at its last <code>CHANGES_REQUESTED</code> → <code>review-verdict = failure</code> → not mergeable. There is no kill switch because there is nothing left running to kill.</p></div></div>
+      <div class="step"><div class="n">2</div><div><div class="t">Labels &amp; freezes it</div><p>Adds <code>agent:needs-human</code>, removes <code>loop:*</code>, and runs <code>gh pr merge {n} --disable-auto</code> so it can't merge behind your back while you look.</p></div></div>
+      <div class="step"><div class="n">3</div><div><div class="t">Flags you — three native notifications</div><p>Posts a PR comment <code>@</code>-mentioning <code>MAINTAINER_HANDLE</code> (with the latest reviewer summary, the still-unresolved findings, and links to all 3 attempt reviews as an audit trail), <b>and</b> assigns the PR to you. The mention and the assignment each generate a GitHub notification → email + web + mobile. That's how you learn it's stuck without watching.</p></div></div>
+      <div class="step"><div class="n">4</div><div><div class="t">Exits 0</div><p>Escalation is a normal outcome, not a CI failure.</p></div></div>
+    </div>
+
+    <h3>6.3 · Your input &amp; resume — exactly what you do and what happens next</h3>
+    <div class="path">
+      <div class="card">
+        <h4>(a) Steer the agent</h4>
+        <p>You apply the <code>agent:retry</code> label — optionally after dropping a comment with your steer. A small <code>resume.yml</code> runs <code>on: pull_request: [labeled]</code> with <code>if: label.name == 'agent:retry'</code> and:</p>
+        <p>• <b>no auth filter needed</b> — applying a label needs write permission, so GitHub already guarantees a maintainer (same gate as kickoff §1);<br>
+        • <b>resets the budget</b> by <b>dismissing</b> the outstanding <code>CHANGES_REQUESTED</code> reviews (<code>PUT .../reviews/{id}/dismissals</code>) — since §6.1 counts only non-dismissed ones, <code>rounds</code> cleanly resets to 0;<br>
+        • removes <code>agent:retry</code> + <code>agent:needs-human</code>, clears the assignee;<br>
+        • <b>re-fires FIX MODE</b> — the prompt reads the PR thread, so any comment you left is picked up as guidance (nothing parsed from the label). Then it's the normal §6.1 loop again.</p>
+      </div>
+      <div class="card">
+        <h4>(b) Take over the code</h4>
+        <p>You push commits to the <code class="branch">claude/*</code> branch (or edit in the UI). Your push fires <code>synchronize</code> → CI + review re-run on your commit.</p>
+        <p>If the new review <code>APPROVE</code>s, §7 merges it. A step in <code>review.yml</code> removes <code>agent:needs-human</code> whenever it posts a <code>success</code> verdict, so the "stuck" state clears itself once the PR is healthy.</p>
+        <p><i>(Your pushes re-run review because they're not made with the default <code>GITHUB_TOKEN</code> — see tokens, below.)</i></p>
+      </div>
+    </div>
+    <div class="callout key" style="border-left-color:var(--strong);background:var(--ci-soft)"><span class="tag" style="color:var(--strong)">Resolution — both paths</span><p>Terminal state is identical to any PR: green CI + <code>review-verdict = success</code> → gatekeeper auto-merges to <code>staging</code> → <code>Closes #N</code> closes the issue → all <code>loop:*</code>/<code>agent:*</code> working labels removed on merge. No residue once resolved.</p></div>
+
+    <h3>6.4 · What must be built for §6</h3>
+    <ul>
+      <li><code>fixloop.yml</code> (<code>on: workflow_run</code> of <code>review</code> → read <code>review-verdict</code> → round count, re-fire, or escalate) — new. Runs on <code>GITHUB_TOKEN</code>.</li>
+      <li><code>resume.yml</code> (<code>on: pull_request</code> labeled <code>agent:retry</code> → dismiss reviews → re-fire) — new.</li>
+      <li>A repo label <code>agent:retry</code> (maintainer-applied resume trigger) — new.</li>
+      <li>FIX-MODE branch in the routine prompt + FIX-MODE work-item construction — edit + new.</li>
+      <li>Repo variable <code>MAINTAINER_HANDLE</code> (escalation @-mention/assignee) — new.</li>
+      <li><b>Conflict → rebase FIX MODE</b> — the branch in §6.5.</li>
+      <li>§5 verdict — hard dependency.</li>
+      <li><b>No <code>GATEKEEPER_TOKEN</code> / PAT</b> — the <code>workflow_run</code> trigger sidesteps the recursion guard, and re-fires go through the routine (<code>app/claude</code> pushes, which already re-trigger CI/review). The loop runs on <code>GITHUB_TOKEN</code> + the existing <code>ROUTINE_FIRE_TOKEN</code>.</li>
+    </ul>
+
+    <h3>6.5 · Merge conflicts — nothing force-merges; it stalls, then rebases</h3>
+    <p>A <code class="branch">claude/*</code> PR that conflicts with <code>staging</code> is <code>mergeable: false</code> / <code>mergeStateStatus: DIRTY</code>. <b>GitHub's native auto-merge refuses a conflicted PR and disables itself</b>, so a conflict never produces a bad merge — the PR just stalls. Handling:</p>
+    <ul>
+      <li>When the gatekeeper (§7) finds an otherwise-green PR <code>DIRTY</code>, it does <b>not</b> merge — it re-fires the builder in <b>FIX MODE with a rebase instruction</b>: <i>"merge <code>origin/staging</code> into <code class="branch">claude/slug</code>, resolve the conflicts, push — don't open a new PR."</i> (reuses the §6.1 path).</li>
+      <li>The push → <code>synchronize</code> → CI + review re-run on the resolved tree → a fresh verdict, exactly like a normal fix round.</li>
+      <li>It counts against the <b>same <code>MAX_FIX_ROUNDS</code> cap</b> and escalates via §6.2 if the agent can't resolve it in budget — a genuinely hard conflict lands on your desk instead of looping.</li>
+    </ul>
+    <p style="font-size:0.9rem"><i>Optional hardening: branch protection's "require branches up to date" (<code>strict</code>, currently off) surfaces staleness earlier by forcing a rebase before every merge — but it only surfaces conflicts, it doesn't resolve them.</i></p>
+  </section>
+
+  <!-- 7 -->
+  <section id="s7">
+    <div class="sec-head"><span class="sec-num">07</span><h2>Gatekeeper auto-merge</h2></div>
+    <dl class="mech">
+      <dt class="d">Drives</dt><dd>On CI + review completing for a <code class="branch">claude/*</code> PR into <code>staging</code>, <code>gatekeeper.yml</code> arms native auto-merge with no human.</dd>
+      <dt class="e">Enforces</dt><dd>GitHub won't let a bot's <i>approval</i> satisfy protection, so protection requires <b>status checks</b> and the gatekeeper flips on native auto-merge once they pass.</dd>
+      <dt class="s">Status</dt><dd><span class="st built">Built &amp; verified</span> — PR #19 (<code class="branch">claude/dps-formatter → staging</code>) <b>auto-merged with zero human action</b>: gatekeeper skipped non-agent branches, armed auto-merge on #19, native auto-merge merged once all 4 required checks went green.</dd>
+    </dl>
+    <div class="tobuild"><span class="tag">How it works</span>
+      <ul>
+        <li><b>Trigger:</b> <code>on: workflow_run</code> completion of <code>ci</code> + <code>review</code>. Guard: same-repo, head <code class="branch">claude/*</code>, base <code>staging</code>.</li>
+        <li><b>Gate:</b> merge only if both <code>ci</code> contexts = success <b>and</b> <code>review-verdict</code> = success <b>and</b> no <code>agent:needs-human</code> label.</li>
+        <li><b>Action:</b> <code>gh pr merge {n} --squash --auto</code> with the built-in <code>GITHUB_TOKEN</code> — <code>--auto</code> hands off to native auto-merge. (It <i>can</i> merge here: 0 required approvals, no push restrictions, and the staging merge doesn't cascade, so the recursion guard is a non-issue.)</li>
+        <li><b>On verdict = failure:</b> nothing; §6 owns that path.</li>
+        <li><b>On conflict (DIRTY):</b> don't merge — re-fire the rebase FIX MODE (§6.5).</li>
+        <li><b>Prerequisites:</b> enable the repo's <b>"Allow auto-merge"</b> setting (a toggle, not a token). <b>No <code>GATEKEEPER_TOKEN</code>.</b> A non-default token is only needed if you later add automation that must react to the staging merge — none today.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 8 -->
+  <section id="s8">
+    <div class="sec-head"><span class="sec-num">08</span><h2>Release — the human ship button</h2></div>
+    <dl class="mech">
+      <dt class="d">Drives</dt><dd><code>release.yml</code> runs <b>only</b> <code>on: workflow_dispatch</code> (<code>channel: alpha|beta</code>). On <code>windows-latest</code>: build <code>bridge.jar</code>, <code>electron-builder --win --x64</code>, read the version from <code>overlay/package.json</code>, <code>gh release create v$VERSION --prerelease</code> with installer + jar.</dd>
+      <dt class="e">Enforces</dt><dd>The manual-dispatch-only trigger <i>is</i> the release gate — nothing publishes without a human press, encoding never-release-without-an-ask. Version comes from <code>package.json</code> (single source of truth), bumped by a human first.</dd>
+      <dt class="s">Status</dt><dd><span class="st built">Built</span>. Two optional TODOs remain.</dd>
+    </dl>
+    <div class="tobuild"><span class="tag">To build (optional)</span>
+      <ul>
+        <li><b>Release-notes "captain":</b> a preceding <code>claude-haiku-4-5</code> job drafts notes from the Conventional Commits since the last tag, wired into <code>gh release create --notes-file</code>. Today notes are static.</li>
+        <li><b>Auto version-bump</b> before tagging (kept manual by design for now).</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- CROSS-CUTTING -->
+  <section id="cross">
+    <div class="sec-head"><span class="sec-num">09</span><h2>Cross-cutting</h2></div>
+
+    <h3>Branch protection</h3>
+    <p>Per spec §03 it should enforce: required checks = ci <b>+ review</b>, 0 approvals, restricted push. Actual, verified on both <code>staging</code> and <code>bridge</code>:</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Setting</th><th>Spec</th><th>Actual</th><th>Gap</th></tr></thead>
+        <tbody>
+          <tr><td>Required checks</td><td>ci + review</td><td>ci (2) <b>+ review-verdict</b></td><td><span class="st built">Done</span> added on both branches (verified gating #19/#23)</td></tr>
+          <tr><td>Required approvals</td><td>0</td><td>0</td><td><span class="st built">OK</span></td></tr>
+          <tr><td>Restrict who can push</td><td>yes</td><td><b>none</b></td><td><span class="st partial">N/A</span> push restrictions aren't available on <b>user-owned</b> repos (org only); mitigated — agents open PRs, required checks gate merges</td></tr>
+          <tr><td>Enforce for admins</td><td>implied</td><td><b>off</b></td><td><span class="st partial">By design</span> kept off as the owner escape hatch</td></tr>
+          <tr><td>Force pushes</td><td>off</td><td>off</td><td><span class="st built">OK</span></td></tr>
+          <tr><td>Strict (up-to-date)</td><td>—</td><td>off</td><td><span class="st partial">Weak</span> lets stale branches merge</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Manual overrides &amp; the escape hatch</h3>
+    <p>You're the owner, and <b><code>enforce_admins</code> is off</b> on both branches (verified), so you bypass every gate — required checks, a failing <code>review-verdict</code>, an <code>agent:needs-human</code> freeze, all of it. Two hatches:</p>
+    <ul>
+      <li><b>Force-merge a blocked PR</b> (clean history): <code>gh pr merge &lt;n&gt; --admin --squash</code>. UI equivalent: the "Merge without waiting for requirements to be met" button, visible to you because admin-enforcement is off.</li>
+      <li><b>Land a commit directly</b>, skipping PR + CI + review: <code>git push origin &lt;branch&gt;:staging</code> — works because you're an admin and <code>restrictions: none</code>. The deliberate "I've decided, ship it" hatch; nothing validated it.</li>
+    </ul>
+    <div class="callout"><span class="tag">Constraint &amp; tradeoff</span><p><b>Force-pushes are blocked for everyone</b> (<code>allow_force_pushes: false</code>) — normal pushes only. And these overrides exist <b>only while <code>enforce_admins</code> is off</b>: turn it on to stop anyone bypassing the loop and you lose the one-command hatch (you'd toggle protection off, act, toggle back). <b>Recommendation: keep <code>enforce_admins</code> off</b> — the loop's guarantees are for the agents; you overriding is a conscious human decision, not a hole an agent can exploit (agents can't apply labels or push to protected branches).</p></div>
+
+    <h3>Merging outside / fork PRs</h3>
+    <p>Anyone can open a PR (public repo), but a <b>fork</b> PR can't earn an automated <code>review-verdict</code>: a <code>pull_request</code> from a fork gets <b>no secrets</b>, so <code>claude-code-action</code> has no token and the reviewer can't run. The required check stays absent → the fork PR is <b>fail-closed unmergeable</b> through the normal path (a safety property, not a dead end). To land a good outside contribution, in increasing cleanliness:</p>
+    <ul>
+      <li><b>Admin-merge</b> — <code>gh pr merge &lt;n&gt; --admin --squash</code>. Bypasses <i>all</i> requirements (incl. CI) — review it yourself first. For tiny, self-evident PRs.</li>
+      <li><b>Manually stamp the verdict</b> after you review: <code>gh api -X POST repos/&lt;repo&gt;/statuses/&lt;sha&gt; -f state=success -f context=review-verdict</code>. Merges through the normal button, and unlike <code>--admin</code>, CI still had to be green — you only substitute for the one check a fork can't produce.</li>
+      <li><b>Adopt as an internal branch (preferred).</b> Pull their commits onto a same-repo branch, where secrets <i>are</i> available so the real reviewer runs:
+        <pre><span class="kw">gh</span> pr checkout &lt;n&gt;
+<span class="kw">git</span> push origin HEAD:contrib/&lt;feature&gt;
+<span class="kw">gh</span> pr create --base staging --head contrib/&lt;feature&gt; --body "Supersedes #&lt;n&gt;, thanks @&lt;author&gt;"</pre>
+        Git preserves the author's credit; the internal PR gets a genuine <code>review-verdict</code> and merges normally. Close the fork PR pointing at it. <b>The only path that actually runs the review agent on their code</b> — use it for anything non-trivial.</li>
+    </ul>
+
+    <h3>Tokens &amp; secrets</h3>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Secret / variable</th><th>Purpose</th><th>Present?</th></tr></thead>
+        <tbody>
+          <tr><td><code>ROUTINE_FIRE_URL/TOKEN</code></td><td>§1 kickoff <code>/fire</code></td><td><span class="st built">Yes</span></td></tr>
+          <tr><td><code>CLAUDE_CODE_OAUTH_TOKEN</code></td><td>§5 review (draws on Max, not metered API)</td><td><span class="st built">Yes</span></td></tr>
+          <tr><td><code>MAINTAINER_HANDLE</code> (var)</td><td>§6 escalation @-mention / assignee</td><td><span class="st built">Set</span> (hotmalehotmail)</td></tr>
+          <tr><td><s><code>GATEKEEPER_TOKEN</code></s></td><td><b>Not needed</b> — see below</td><td>—</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout"><span class="tag">No GATEKEEPER_TOKEN (why the plan dropped it)</span><p>GitHub's recursion guard means <code>GITHUB_TOKEN</code>-caused events don't trigger further workflows. The only place that bit this design was the fix-loop trigger — so we chose the <code>workflow_run</code> trigger (§6.1), which fires regardless of token. Nothing in §6/§7 then needs elevated credentials: the gatekeeper merges on <code>GITHUB_TOKEN</code> (0 approvals, no push restrictions, staging merge doesn't cascade). A non-default token only becomes necessary if you later add automation that must react to an automation-made merge/push — none today.</p></div>
+
+    <h3>Workflow-parity guard — keeps review from silently breaking</h3>
+    <p><span class="st built">Built &amp; verified</span> &nbsp; §5's guard keys off the <i>default branch</i>, so the instant a workflow change lands on <code>bridge</code> without <code>staging</code> being synced, every <code>staging</code>-based agent PR skips review — silently, with a green check (the exact failure fixed 2026-07-10).</p>
+    <div class="tobuild"><span class="tag">How it works</span>
+      <p>A <code>workflow parity</code> job in <code>ci.yml</code> on every PR into <code>staging</code>/<code>bridge</code>. PRs into the <b>default branch</b> pass trivially (review.yml changes are legit there); anywhere else it fails if the merge result's <code>review.yml</code> differs from the default's:</p>
+      <pre><span class="kw">git</span> fetch --no-tags origin "+refs/heads/$DEFAULT:refs/remotes/origin/$DEFAULT"
+<span class="kw">git</span> diff --quiet "refs/remotes/origin/$DEFAULT" -- .github/workflows/review.yml \
+  || { echo "::error::review.yml differs — reviews will skip"; exit 1; }</pre>
+      <p><b>Required on both branches</b>, so the silent skip is now a loud, blocking failure. (The explicit refspec dodges a <code>checkout@v4</code> false-positive — a review finding on PR #25.) Verified on the trivial path and a real <code>→ staging</code> sync PR.</p>
+    </div>
+  </section>
+
+  <!-- BUILD ORDER -->
+  <section id="order">
+    <div class="sec-head"><span class="sec-num">10</span><h2>Build order (critical path)</h2></div>
+    <p class="sec-sub">Each item unlocks the next. Do them in this order.</p>
+    <div class="steps">
+      <div class="step"><div class="n">1</div><div><div class="t">Merge PR #18 &nbsp;<span class="st built">Done</span></div><p>Merged to <code>bridge</code>, synced to <code>staging</code>. CI now runs <code>gradle test</code>; §4 fully built.</p></div></div>
+      <div class="step"><div class="n">2</div><div><div class="t">Review verdict (§5) &nbsp;<span class="st built">Done &amp; verified</span></div><p><code>REQUEST_CHANGES</code>/<code>APPROVE</code> + a <code>review-verdict</code> status. PR #21 on both branches; <code>review-verdict = success</code> seen on PR #22. Unlocks both §6 and §7.</p></div></div>
+      <div class="step"><div class="n">3</div><div><div class="t">Branch protection &nbsp;<span class="st built">Done</span></div><p>Require <code>review-verdict</code> — added on both branches (verified gating #19/#23). Push restriction N/A on a user repo. En route: passing reviews post <code>COMMENT</code> not <code>APPROVE</code> (bot can't approve · PR #23).</p></div></div>
+      <div class="step"><div class="n">4</div><div><div class="t">Set MAINTAINER_HANDLE + enable "Allow auto-merge" &nbsp;<span class="st built">Done</span></div><p>Variable set; auto-merge enabled; no PAT.</p></div></div>
+      <div class="step"><div class="n">5</div><div><div class="t">Gatekeeper (§7) &nbsp;<span class="st built">Done &amp; verified</span></div><p><code>on: workflow_run</code>, auto-merge via <code>GITHUB_TOKEN</code>. PR #19 auto-merged with zero human action (PR #25). <b>The happy path now closes.</b></p></div></div>
+      <div class="step"><div class="n">6</div><div><div class="t">Fix loop (§6)</div><p><code>fixloop.yml</code> + <code>resume.yml</code> + FIX-MODE prompt. The loop now closes for the iterate path, with the 3-attempt cap and escalation above.</p></div></div>
+      <div class="step"><div class="n">7</div><div><div class="t">Workflow-parity guard &nbsp;<span class="st built">Done &amp; verified</span></div><p><code>workflow parity</code> ci job, required on both branches (PR #25).</p></div></div>
+      <div class="step"><div class="n">8</div><div><div class="t">Release captain (§8, optional)</div><p>Drafted notes.</p></div></div>
+    </div>
+    <div class="callout key" style="border-left-color:var(--strong);background:var(--ci-soft)"><span class="tag" style="color:var(--strong)">After 1–6</span><p>The spec's claim holds literally: a labeled issue produces a merged, tested change with two human touches — write the issue, press ship — and any PR the agent can't get past review within 3 tries lands on your desk with a full audit trail instead of merging or silently stalling.</p></div>
+  </section>
+
+  <footer>
+    RealmShark autonomous dev loop · mechanism ledger · companion to <code>dev-loop-full-spec.html</code>. Verified against the repo on 2026-07-10 (default branch <code>bridge</code>).
+  </footer>
+
+</div>
+</body>
+</html>
