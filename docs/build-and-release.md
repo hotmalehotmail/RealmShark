@@ -103,7 +103,7 @@ export PATH="$JAVA_HOME/bin:$PATH"
 
 The overlay lives in `overlay/` and is built with **electron-vite** (three
 targets) and type-checked/linted separately. Run all npm commands from `overlay/`.
-The current version is `0.9.23-alpha` (`overlay/package.json:3`).
+The current version is `0.9.26-alpha` (`overlay/package.json:3`).
 
 ### npm scripts (`overlay/package.json:7-21`)
 
@@ -182,8 +182,8 @@ the React / React-hooks / React-refresh plugins, ignoring `node_modules`, `dist`
 | `npmRebuild` | `false` | `:25` |
 | Output dir | `dist/` (electron-builder default; not overridden) | — |
 
-With the current `name`/`version` (`realmshark-overlay` / `0.9.23-alpha`), the
-installer is `overlay/dist/realmshark-overlay-0.9.23-alpha-setup.exe`.
+With the current `name`/`version` (`realmshark-overlay` / `0.9.26-alpha`), the
+installer is `overlay/dist/realmshark-overlay-0.9.26-alpha-setup.exe`.
 
 ### Bundling the bridge jar
 
