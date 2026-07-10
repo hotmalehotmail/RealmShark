@@ -1,0 +1,66 @@
+name: implement
+
+# Kickoff bridge (full-spec §02). When a maintainer labels an issue
+# `agent:build` (feature) or `agent:fix` (bug), fire the build-agent Routine on
+# Anthropic's cloud via its API trigger, passing the issue as the work item, and
+# comment the watchable session link back on the issue.
+#
+# Why a bridge: Claude Code Routines' native GitHub triggers only support
+# pull_request/release events — not issues — so we detect the labeled issue here
+# (only maintainers can apply labels on a public repo, which is the gate) and
+# fire the routine over its HTTP /fire endpoint.
+#
+# Setup (one-time): create the routine at https://claude.ai/code/routines with an
+# API trigger, then add these two repo secrets:
+#   ROUTINE_FIRE_URL   — the routine's per-routine /fire endpoint URL
+#   ROUTINE_FIRE_TOKEN — the bearer token generated for that trigger
+# See docs/build-agent-routine.md for the full walkthrough and the routine prompt.
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  issues: write # to comment the session link (or a setup hint) back on the issue
+
+jobs:
+  dispatch:
+    if: github.event.label.name == 'agent:build' || github.event.label.name == 'agent:fix'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire the build-agent routine
+        env:
+          # Untrusted issue fields go through env vars (never interpolated into
+          # the script body) to avoid shell injection.
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          LABEL: ${{ github.event.label.name }}
+          REPO: ${{ github.repository }}
+          FIRE_URL: ${{ secrets.ROUTINE_FIRE_URL }}
+          FIRE_TOKEN: ${{ secrets.ROUTINE_FIRE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FIRE_URL:-}" ] || [ -z "${FIRE_TOKEN:-}" ]; then
+            gh issue comment "$ISSUE_NUMBER" --body "⚙️ \`$LABEL\` applied, but the build-agent routine isn't wired up yet (missing ROUTINE_FIRE_URL / ROUTINE_FIRE_TOKEN secrets). See docs/build-agent-routine.md."
+            exit 0
+          fi
+          TEXT="$(printf 'Work item from GitHub issue #%s in %s (label: %s).\nTitle: %s\n\n%s' \
+            "$ISSUE_NUMBER" "$REPO" "$LABEL" "$ISSUE_TITLE" "${ISSUE_BODY:-}")"
+          BODY="$(jq -n --arg t "$TEXT" '{text:$t}')"
+          RESP="$(curl -sS -X POST "$FIRE_URL" \
+            -H "Authorization: Bearer $FIRE_TOKEN" \
+            -H "anthropic-beta: experimental-cc-routine-2026-04-01" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "Content-Type: application/json" \
+            --data "$BODY")"
+          URL="$(printf '%s' "$RESP" | jq -r '.claude_code_session_url // empty')"
+          if [ -n "$URL" ]; then
+            gh issue comment "$ISSUE_NUMBER" --body "🤖 Build agent started for this issue — [watch the session]($URL)."
+          else
+            gh issue comment "$ISSUE_NUMBER" --body "⚠️ Couldn't start the build agent. Routine response:
+          \`\`\`
+          $RESP
+          \`\`\`"
+            exit 1
+          fi
