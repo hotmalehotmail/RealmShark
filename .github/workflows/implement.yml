@@ -53,12 +53,16 @@ jobs:
           # single-line JSON sends exactly these bytes.
           jq -nc --arg t "$TEXT" '{text: $t}' > /tmp/fire.json
           echo "request body bytes: $(wc -c < /tmp/fire.json)"
+          echo "first bytes (hex): $(head -c 16 /tmp/fire.json | od -An -tx1 | tr -s ' ')"
+          echo "url length: ${#FIRE_URL} ; token length: ${#FIRE_TOKEN}"
           RESP="$(curl -sS -X POST "$FIRE_URL" \
             -H "Authorization: Bearer $FIRE_TOKEN" \
             -H "anthropic-beta: experimental-cc-routine-2026-04-01" \
             -H "anthropic-version: 2023-06-01" \
             -H "Content-Type: application/json" \
+            -w $'\nHTTP_STATUS:%{http_code}' \
             --data @/tmp/fire.json)"
+          echo "curl exit: $?"
           # `|| true` so a non-JSON response (HTML error page, empty body) doesn't
           # abort the step under `set -e` before the else-branch can report it.
           URL="$(printf '%s' "$RESP" | jq -r '.claude_code_session_url // empty' 2>/dev/null || true)"
