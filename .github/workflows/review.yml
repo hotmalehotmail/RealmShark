@@ -67,12 +67,16 @@ jobs:
 
             Decide a verdict from your findings:
             - Any finding of severity `critical` or `high` → verdict = FAIL, review event = "REQUEST_CHANGES".
-            - Otherwise                                     → verdict = PASS, review event = "APPROVE"
-              (low/medium findings still go in the body/comments as non-blocking notes).
+            - Otherwise                                     → verdict = PASS, review event = "COMMENT".
+              Use COMMENT, NOT APPROVE, for a pass: the GitHub Actions bot cannot submit
+              APPROVE reviews (the call fails and your summary is dropped). The pass/fail
+              signal is carried by the review-verdict status below, not by an approval
+              (required approvals are 0). Low/medium findings still go in the body/comments
+              as non-blocking notes.
 
             Then POST the review to the PR (do not just print it). Write /tmp/review.json:
               {
-                "event": "<APPROVE or REQUEST_CHANGES, per the verdict above>",
+                "event": "<COMMENT or REQUEST_CHANGES, per the verdict above>",
                 "body": "<2-4 sentence summary; include any findings not tied to a line>",
                 "comments": [
                   { "path": "<file>", "line": <line number in the NEW version of the file>,
@@ -90,11 +94,11 @@ jobs:
 
             FINALLY, publish the verdict as a commit status on the PR head SHA — this is the
             machine-readable gate the gatekeeper and fix-loop read. Run exactly (state is
-            "success" for a PASS/APPROVE, "failure" for a FAIL/REQUEST_CHANGES):
+            "success" for a PASS/COMMENT, "failure" for a FAIL/REQUEST_CHANGES):
               gh api --method POST \
                 "repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }}" \
                 -f state="<success|failure>" \
                 -f context="review-verdict" \
                 -f description="<one-line reason, e.g. 'clean' or '2 high-severity findings'>"
             Always post BOTH the review and the status. If there are genuinely no issues,
-            APPROVE with a brief positive summary and post state=success.
+            post a COMMENT review with a brief positive summary and post state=success.
