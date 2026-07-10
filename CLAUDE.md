@@ -89,9 +89,29 @@ This gives a fully working dev loop — real panels, real IPC, synthetic packet 
 
 To verify UI changes visually in this sandboxed environment: temporarily add a `setTimeout(() => toggleInteractive(), 1500)` in `main/index.ts`'s non-`supportsAttach` branch (so the panel canvas mounts without a real hotkey press), run `npm run dev` in the background, get the Electron window's position via `osascript` (`System Events` → `position of window 1`), and `screencapture -R<x>,<y>,<w>,<h>` that exact region — a full-screen screenshot usually just shows the desktop since the window is small and positioned arbitrarily. Revert the temporary toggle afterward. The same pattern (temporary `console-message` relay in `main/index.ts` + `console.log` in the code under test) is the way to get renderer-side diagnostics into the terminal, since Electron doesn't surface renderer console output by default.
 
-## Release process (manual, not yet CI'd)
+## Autonomous agent dev-loop (branches, CI, agents)
 
-**NEVER cut a new release (tag + `gh release create`) unless the user explicitly asks for it in that message.** Building/packaging locally to verify is fine; tagging, pushing tags, and publishing a GitHub release are not — wait for an explicit "release"/"cut a release"/"ship it". This is separate from and stricter than the general commit/push gate.
+This repo runs an issue-driven, mostly-hands-off development loop. The moving parts:
+
+**Branch model.** `feature/*` / `fix/*` → `staging` (integration; alpha prereleases) → `bridge` (stable trunk; beta releases). **`bridge` is the GitHub default branch and the base for PRs** — not the stale `origin/main` or the upstream `realmshark` mirror. `staging` and `bridge` are both protected: the `ci` checks are required, 0 human approvals.
+
+**Kickoff.** File a GitHub Issue via the forms (`.github/ISSUE_TEMPLATE/`), then a maintainer applies `agent:build` (feature) or `agent:fix` (bug). Those maintainer-only labels are the trigger — opening an issue alone does nothing (the repo is public, so any stranger can open one). The bug form's **repro-capture** field is load-bearing: the fix agent runs headless with no game, so it needs a replayable packet capture (via `FakePacketSource`) to reproduce a live-client bug and write a regression test.
+
+**CI / gates** (`.github/workflows/`):
+- `ci.yml` — the required merge gate: overlay `typecheck`+`lint` and `gradle bridgeJar`. Gradle 7.4.2 is pinned via `gradle/actions/setup-gradle` (no committed wrapper — `gradle/` is gitignored and Shadow 7.0.0 breaks on Gradle 9). Overlay job installs with `npm ci --ignore-scripts` (skips the native rebuild the Linux runner can't do) on Node 22.
+- `review.yml` — an independent `code-review` agent (Opus 4.8) on each PR, authed via the `CLAUDE_CODE_OAUTH_TOKEN` secret (a Claude subscription token) and the Claude GitHub App. Needs `id-token: write`. It only runs when `review.yml` is byte-identical to the default branch (a security guard), so it cannot review the PR that introduces or changes it.
+- `gatekeeper.yml` — auto-merge to `staging` once `ci` + the review verdict are green. **Disabled stub (`if: false`)** pending the review-verdict → status-check wiring + a merge token.
+- `release.yml` — the human ship button (see Release process below).
+
+**Where it runs.** Build/review agents run on Anthropic's cloud (Claude Code sessions / the action); the repo, CI, and releases on GitHub (Actions is free on this public repo); the alpha soak against the live game on the Windows PC.
+
+**Commit posture.** Working on a `feature/*`/`fix/*` branch and opening a PR into `staging`/`bridge` is the normal way to land changes — pushing branch commits and opening PRs here does **not** need a separate ask. Never commit directly to `bridge`/`staging` (they're protected — use a PR). The release gate below is the one thing that stays strict.
+
+## Release process
+
+A CI release path exists: `.github/workflows/release.yml` (`workflow_dispatch`, channel `alpha`|`beta`) builds `bridge.jar` + the Windows installer on a `windows-latest` runner and publishes a prerelease. The manual recipe below still works and documents exactly what that workflow does.
+
+**NEVER cut a new release (tag + `gh release create`, or dispatching `release.yml`) unless the user explicitly asks for it in that message.** Building/packaging locally to verify is fine; tagging, pushing tags, dispatching the release workflow, and publishing a GitHub release are not — wait for an explicit "release"/"cut a release"/"ship it". This gate is stricter than the commit/PR posture above: branch commits and PRs are fine unasked, but publishing a release is not.
 
 `overlay/package.json`'s `version` is the single source of truth for the release number — it drives both the in-app version (shown in the Status panel via `app.getVersion()`) and the release tag/title below. Bump it *first*; everything else is derived from it, so the tag and the in-app version can't disagree.
 
