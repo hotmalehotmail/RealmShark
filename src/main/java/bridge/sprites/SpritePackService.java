@@ -37,7 +37,7 @@ public class SpritePackService {
     private final Gson gson = new Gson();
     private String cachedVersion;
     private String cachedPackJson;
-    private boolean clothDumped = false; // TEMP one-shot guard for [cloth-bazaar]
+    private boolean diagDumped = false; // TEMP one-shot guard for [asset-inv]
 
     /** True once real object assets are loaded and the character atlas exists on disk. */
     public synchronized boolean ready() {
@@ -169,13 +169,18 @@ public class SpritePackService {
             + " maskTable=" + maskTable.size() + " dyeTable=" + dyeTable.size()
             + " animTable=" + animTable.size());
 
-        // TEMP [cloth-bazaar] One-shot dump of the cloth_bazaar asset (discarded
-        // by normal extraction) to reverse-engineer per-cloth scroll/rotate data.
-        // Off the pack-build path (re-parses the large resources.assets).
-        if (!clothDumped) {
-            clothDumped = true;
-            new Thread(() -> assets.resextractor.UnityExtractor.dumpClothBazaar(
-                assets.AssetExtractor.assetFile()), "cloth-bazaar-dump").start();
+        // TEMP [asset-inv] One-shot consolidated hunt for the per-cloth textile
+        // scroll/rotate data (cloth_bazaar was a dead end - it's a map file).
+        // (1) Full embedded-asset inventory: re-parses resources.assets off the
+        // pack-build path, so on a background thread. (2) Full sprite-group
+        // inventory (unfiltered animation stats). Both print [asset-inv] lines.
+        if (!diagDumped) {
+            diagDumped = true;
+            new Thread(() -> {
+                assets.resextractor.UnityExtractor.dumpAssetInventory(
+                    assets.AssetExtractor.assetFile());
+                assets.SpriteFlatBuffer.dumpAllGroups();
+            }, "asset-inv-dump").start();
         }
 
         // TEMP [dye-anim] Scan character (player/skin) and textile groups for
@@ -214,6 +219,7 @@ public class SpritePackService {
     private synchronized JsonObject buildDyeTable(SpriteFlatBuffer sfb) {
         if (cachedDyeTable != null) return cachedDyeTable;
         JsonObject dyeTable = new JsonObject();
+        int[] xmlDump = {0}; // TEMP [asset-inv] # of textile-dye bodies printed
         java.io.File xmlDir = new java.io.File("assets/xml");
         java.io.File[] files = xmlDir.listFiles((d, n) -> n.endsWith("xml"));
         if (files == null) {
@@ -262,6 +268,14 @@ public class SpritePackService {
                     // per frame (a static cloth is just a single frame).
                     int size = (int) high;
                     int idx = (int) (tex & 0xFFFFFF);
+                    // TEMP [asset-inv] Print the full <Object> body of the first
+                    // few textile dyes to reveal any schema field beyond Tex1
+                    // (e.g. an animation/scroll-direction attribute we ignore).
+                    if (xmlDump[0] < 6) {
+                        xmlDump[0]++;
+                        System.out.println("[asset-inv] textile-dye type=" + m.group(1)
+                            + " tex=" + t.group(1) + " body=" + body.trim());
+                    }
                     int[][] frames = null;
                     try {
                         frames = sfb.getAnimationFrames("textile" + size + "x" + size, idx);

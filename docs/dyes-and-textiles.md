@@ -203,29 +203,42 @@ rendering work. Animated textiles do **not** yet animate. Confirmed live:
 
 **Where the scroll direction is (and isn't).** Ruled out: the sprite flatbuffer
 (no animation field), the dye object XML (`Class`/`Texture`/`Mask`/`Tex1` only),
-and `Tex1` itself (`[size byte][24-bit index]`, no spare field). The remaining
-candidate is **`cloth_bazaar`** — an embedded TextAsset the extractor reads and
-**discards** (it's in `TextAsset.NON_XML_FILES`, so `UnityExtractor.extractXml`
-skips it). A per-cloth animation table is exactly what a cloth-definition file
-would hold.
+and `Tex1` itself (`[size byte][24-bit index]`, no spare field).
 
-**Next step (do this first next session).** 0.9.25-alpha added a one-shot
-`UnityExtractor.dumpClothBazaar()` (called from `SpritePackService`, guarded by
-`clothDumped`, on a background thread) that re-reads `resources.assets` and
-prints `cloth_bazaar`'s **size + ASCII preview + hex preview** as `[cloth-bazaar]`
-log lines. **Get those lines from a live run**, then:
-1. If it's text (JSON/XML/CSV-ish) → parse `clothId → animationType` directly.
-   If binary → work out the record layout from the hex.
-2. Emit a per-cloth `animType` (e.g. scroll-N/E/S/W / rotate) in `dyeTable` (or a
-   new table).
-3. In `getDyedSprite`, offset the pattern tiling by `time × speed` in the cloth's
-   direction (or rotate the sample) — reuse the per-`<Sprite>` tick.
+- **`cloth_bazaar` is a DEAD END (proven).** The 0.9.25-alpha `[cloth-bazaar]`
+  dump ran live: it's a **map file for the in-game "Cloth Bazaar" market area**,
+  not cloth data — `{"width":37,"height":37,"data":"<zlib+base64 tile array>",
+  "dict":[…ground/objs/regions…]}`. Decoding `data` gives 2738 B = 37×37 × 2 =
+  a grid of 16-bit tile indices (0–14, matching the 15-entry `dict`). Pure name
+  collision (the *market map* ≠ cloth dyes). Zero animation info.
+- **Upstream `tomato`/`potato` have no prior art** — they never reference
+  `textile`/`cloth`/`Tex1`/`dye`; they're DPS/stat overlays only.
 
-If `cloth_bazaar` turns out **not** to hold it, the last candidate is exhausted
-and we decide whether it's worth chasing (a global fixed scroll is the fallback).
+**Next step (do this first next session): widen the hunt, one live run.**
+0.9.26-alpha replaced the cloth-bazaar dump with a consolidated `[asset-inv]`
+diagnostic (one-shot, guarded by `diagDumped`, off the pack-build path):
+1. `UnityExtractor.dumpAssetInventory()` — lists **every** embedded TextAsset
+   (name + size), flags the `NON_XML_FILES`-discarded ones `[DISCARDED]`, and
+   prints a ~96-char ASCII **sniff** of each discarded one's start. Finds any
+   textile/cloth/dye asset we've never enumerated (by content, not just name).
+2. `SpriteFlatBuffer.dumpAllGroups()` — lists **every** sprite group (static
+   index count + **unfiltered** animation stats: `animIndices`/`multiFrameIndices`
+   /`maxFrames`). Closes the blind spot in `decodeSheet` where `animFrames` only
+   keeps `player*`/`textile*` groups — an animated cloth group under any other
+   name would otherwise be invisible.
+3. `buildDyeTable` prints the **full `<Object>` body** of the first 6 textile
+   dyes, to reveal any schema field beyond `Tex1` (an ignored animation/direction
+   attribute).
 
-**Temporary diagnostics to remove once done** (grep `[dye-anim]`, `[cloth-bazaar]`,
-`dumpClothBazaar`, `clothDumped`, `describeAnimatedIndices`).
+**Get the `[asset-inv]` lines from a live run**, then: if an asset/field turns up
+→ parse `clothId → animType`, emit it in `dyeTable`, and scroll/rotate the tiling
+in `getDyedSprite` (offset by `time × speed` in the cloth's direction, reusing the
+per-`<Sprite>` tick). If **nothing** turns up, every data source is exhausted →
+it's procedural in the client, and the fallback is a **global fixed scroll**.
+
+**Temporary diagnostics to remove once done** (grep `[dye-anim]`, `[asset-inv]`,
+`dumpAssetInventory`, `dumpAllGroups`, `animCountsAll`, `diagDumped`,
+`describeAnimatedIndices`).
 
 ## Gotchas / history
 

@@ -24,6 +24,12 @@ public class SpriteFlatBuffer {
     private static final HashMap<String, HashMap<Integer, java.util.List<Sprite>>> animFrames =
         new HashMap<>();
 
+    // TEMP [asset-inv] Frame count per animated (group,index) for EVERY animated
+    // group (no player*/textile* filter), so dumpAllGroups() can reveal animated
+    // groups the normal animFrames map drops. Populated in decodeSheet.
+    private static final HashMap<String, HashMap<Integer, Integer>> animCountsAll =
+        new HashMap<>();
+
     /**
      * Static class used to load the flat buffer file.
      */
@@ -96,6 +102,12 @@ public class SpriteFlatBuffer {
             int direction = (int) animatedSheet.direction();
             int action = (int) animatedSheet.action();
             sprite.setAnimationVars(sprite.index, direction, action, animatedSheet.set());
+
+            // TEMP [asset-inv] Count frames for EVERY animated group (unfiltered).
+            if (name != null) {
+                animCountsAll.computeIfAbsent(name, k -> new HashMap<>())
+                    .merge(sprite.index(), 1, Integer::sum);
+            }
 
             // Keep every frame for character (player/skin) and textile groups so
             // their idle/cloth animations can cycle.
@@ -252,6 +264,33 @@ public class SpriteFlatBuffer {
             }
         }
         return name + ": indices=" + group.size() + " animatedIndices=" + animated + examples;
+    }
+
+    // TEMP [asset-inv] Print the full sprite-group inventory: every group in the
+    // static `sprites` map (name + index count) and, for animated groups, the
+    // unfiltered frame stats from animCountsAll (distinct indices + how many have
+    // >1 frame). Reveals any animated group the player*/textile* filter drops and
+    // whether a textile/cloth group we've never scanned actually has frames.
+    public static void dumpAllGroups() {
+        java.util.TreeSet<String> names = new java.util.TreeSet<>(sprites.keySet());
+        names.addAll(animCountsAll.keySet());
+        System.out.println("[asset-inv] sprite groups: " + names.size());
+        for (String n : names) {
+            HashMap<Integer, Sprite> stat = sprites.get(n);
+            int staticIdx = stat == null ? 0 : stat.size();
+            HashMap<Integer, Integer> ac = animCountsAll.get(n);
+            int animIdx = 0, multiFrame = 0, maxFrames = 0;
+            if (ac != null) {
+                animIdx = ac.size();
+                for (int c : ac.values()) {
+                    if (c > 1) multiFrame++;
+                    if (c > maxFrames) maxFrames = c;
+                }
+            }
+            System.out.println("[asset-inv]   " + n + ": staticIndices=" + staticIdx
+                + " animIndices=" + animIdx + " multiFrameIndices=" + multiFrame
+                + " maxFrames=" + maxFrames);
+        }
     }
 
     /**

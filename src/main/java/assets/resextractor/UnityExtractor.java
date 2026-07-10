@@ -130,38 +130,46 @@ public class UnityExtractor {
         }
     }
 
-    // TEMP [cloth-bazaar] Dump the raw cloth_bazaar TextAsset (which the normal
-    // extraction discards - it's in NON_XML_FILES) so we can reverse-engineer
-    // the per-cloth animation (scroll direction / rotate) format. Prints its
-    // size, a printable-ASCII preview, and a hex preview of the start.
-    public static void dumpClothBazaar(File resourcesAssets) {
+    // TEMP [asset-inv] Enumerate EVERY embedded TextAsset (name + size), flagging
+    // which the normal extraction discards (NON_XML_FILES), and print a short
+    // ASCII sniff of each discarded one's start. cloth_bazaar turned out to be a
+    // map file, not cloth data; this widens the search to find whatever asset (if
+    // any) actually holds per-cloth textile-animation data.
+    public static void dumpAssetInventory(File resourcesAssets) {
         if (resourcesAssets == null || !resourcesAssets.exists()) {
-            System.out.println("[cloth-bazaar] resources.assets not found");
+            System.out.println("[asset-inv] resources.assets not found");
             return;
         }
+        java.util.Set<String> discard = new java.util.HashSet<>(
+            java.util.Arrays.asList(TextAsset.NON_XML_FILES));
         try {
             Resources res = new Resources(resourcesAssets);
-            for (TextAsset t : res.assetTextAsset) {
-                if (!"cloth_bazaar".equals(t.name)) continue;
+            System.out.println("[asset-inv] textAssets: " + res.assetTextAsset.size());
+            // Stable, sorted-by-name listing so the log is easy to scan.
+            java.util.List<TextAsset> list = new java.util.ArrayList<>(res.assetTextAsset);
+            list.sort((a, b) -> String.valueOf(a.name).compareTo(String.valueOf(b.name)));
+            for (TextAsset t : list) {
+                int size = t.m_Script == null ? 0 : t.m_Script.length;
+                boolean dropped = discard.contains(t.name);
+                System.out.println("[asset-inv]   " + t.name + ": size=" + size
+                    + (dropped ? " [DISCARDED]" : ""));
+            }
+            // For discarded (non-XML) assets, sniff the start so a textile/cloth
+            // definition reveals itself by its content, not just its name.
+            for (TextAsset t : list) {
+                if (!discard.contains(t.name)) continue;
                 byte[] b = t.m_Script;
-                System.out.println("[cloth-bazaar] size=" + b.length + " bytes");
-                int n = Math.min(b.length, 1500);
+                if (b == null) continue;
+                int n = Math.min(b.length, 96);
                 StringBuilder ascii = new StringBuilder();
                 for (int i = 0; i < n; i++) {
                     int c = b[i] & 0xFF;
                     ascii.append(c >= 32 && c < 127 ? (char) c : '.');
                 }
-                System.out.println("[cloth-bazaar] ascii[0.." + n + "]=" + ascii);
-                int hn = Math.min(b.length, 384);
-                StringBuilder hex = new StringBuilder();
-                for (int i = 0; i < hn; i++) hex.append(String.format("%02x", b[i]));
-                System.out.println("[cloth-bazaar] hex[0.." + hn + "]=" + hex);
-                return;
+                System.out.println("[asset-inv]   sniff " + t.name + "=" + ascii);
             }
-            System.out.println("[cloth-bazaar] not found among "
-                + res.assetTextAsset.size() + " text assets");
         } catch (Throwable t) {
-            System.out.println("[cloth-bazaar] dump failed: " + t);
+            System.out.println("[asset-inv] dump failed: " + t);
         }
     }
 }
