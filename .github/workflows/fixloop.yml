@@ -27,8 +27,8 @@ on:
 
 # Serialize per head branch: two review runs completing close together (rapid double
 # push, reopen+synchronize) must not spawn two fixloop runs that both read the same
-# ROUNDS and both re-fire the agent against one branch (racing sessions, wasted budget,
-# double escalation). cancel-in-progress: false queues rather than cancels — an
+# prior-re-fire count and both re-fire the agent against one branch (racing sessions,
+# wasted budget, double escalation). cancel-in-progress: false queues rather than cancels — an
 # in-flight re-fire should finish, not be killed. (The gatekeeper needs no such guard:
 # arming auto-merge is idempotent; re-firing an agent is not.)
 concurrency:
@@ -87,28 +87,23 @@ jobs:
             exit 0
           fi
 
-          # 3. Round count: non-dismissed CHANGES_REQUESTED reviews FROM THE REVIEW AGENT.
-          #    review.yml posts via GITHUB_TOKEN, so its reviews carry login
-          #    "github-actions[bot]" — filtering to it means only automated attempts burn
-          #    the budget; a human maintainer's change-request doesn't trigger escalation.
-          #    (dismissed reviews drop to state DISMISSED, so they're already excluded.)
-          #    The review that just fired this run is included, so ROUNDS is 1 on the first
-          #    change-request, etc. Emit one line per match and count with wc -l — NOT
-          #    `-q length`, which under --paginate runs per-page and concatenates a count.
-          ROUNDS="$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" \
-                      -q '.[] | select(.state=="CHANGES_REQUESTED" and .user.login=="github-actions[bot]") | .id' 2>/dev/null | wc -l | tr -d ' ')"
+          # 3. Round count: count THIS workflow's OWN prior FIX-MODE re-fire comments on the
+          #    PR (self-authored, tagged with a hidden marker). This is the robust round
+          #    signal — it does NOT depend on the review posting a CHANGES_REQUESTED review.
+          #    review.yml falls back to a plain PR comment (no review object) when its
+          #    POST /reviews call 422s — routine when an inline comment lands on a line
+          #    outside the diff — yet still posts verdict=failure. Counting *reviews* would
+          #    then stay 0 and the loop would re-fire forever. Our re-fire comment is posted
+          #    exactly once per successful attempt, so this increments every round no matter
+          #    how the review was delivered. Count with wc -l — NOT `-q length`, which under
+          #    --paginate runs per-page and concatenates a count per page.
+          PRIOR_REFIRES="$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+                             -q '.[] | select(.user.login=="github-actions[bot]" and (.body|contains("<!-- fixloop:refire -->"))) | .id' \
+                             2>/dev/null | wc -l | tr -d ' ')"
+          ATTEMPT=$((PRIOR_REFIRES + 1))
+          echo "PR #$PR: $PRIOR_REFIRES prior re-fire(s) — this would be automated attempt $ATTEMPT of $MAX_FIX_ROUNDS."
 
-          # Defensive backstop against a runaway. ROUNDS keys on the reviewer's login; if
-          # review.yml ever posted under a different identity that filter would match
-          # nothing, ROUNDS would stay 0, and the loop would re-fire forever. Also cap on
-          # the TOTAL non-dismissed CHANGES_REQUESTED reviews (any author) as a hard
-          # ceiling, so a misconfig or heavy human back-and-forth can't loop unbounded.
-          TOTAL="$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" \
-                     -q '.[] | select(.state=="CHANGES_REQUESTED") | .id' 2>/dev/null | wc -l | tr -d ' ')"
-          HARD_CEILING=$((MAX_FIX_ROUNDS * 2))
-          echo "PR #$PR: agent change-request round $ROUNDS (cap $MAX_FIX_ROUNDS); total change-requests $TOTAL (ceiling $HARD_CEILING)."
-
-          if [ "$ROUNDS" -ge $((MAX_FIX_ROUNDS + 1)) ] || [ "$TOTAL" -ge "$HARD_CEILING" ]; then
+          if [ "$PRIOR_REFIRES" -ge "$MAX_FIX_ROUNDS" ]; then
             # ---- ESCALATE (§6.2): stop looping, flag the human. Halt by inaction — we
             #      neither re-fire nor push, so nothing re-runs; the PR sits at its last
             #      failing verdict (unmergeable) until a human unblocks it. ----
@@ -119,7 +114,7 @@ jobs:
               echo "PR #$PR already frozen (agent:needs-human) — not re-escalating."
               exit 0
             fi
-            echo "Automated budget spent ($ROUNDS > $MAX_FIX_ROUNDS) — escalating."
+            echo "Automated budget spent ($PRIOR_REFIRES re-fires >= $MAX_FIX_ROUNDS) — escalating."
             ensure_label "agent:needs-human" "B60205" "Agent loop stalled — needs a maintainer"
             # Clear any loop:* visibility labels from prior rounds (reuse the labels above).
             LOOP_LABELS="$(printf '%s\n' "$LABELS" | grep '^loop:' || true)"
@@ -127,10 +122,12 @@ jobs:
             # Disable any pending auto-merge so it can't merge while the human looks (harmless if none).
             gh pr merge "$PR" --repo "$REPO" --disable-auto >/dev/null 2>&1 || true
 
-            # First page (no --paginate): `last` picks the newest CHANGES_REQUESTED body.
-            # Safe here — HARD_CEILING escalates well before a PR could reach the 30-review
-            # page boundary, so the newest review is always on page 1. (Can't --paginate a
-            # `... | last` aggregate: like `length`, it would run per-page and concatenate.)
+            # Best-effort latest reviewer summary for the escalation comment. First page
+            # (no --paginate): `last` picks the newest CHANGES_REQUESTED body — safe because
+            # the loop escalates after 3 attempts, far below the 30-review page boundary.
+            # (Can't --paginate a `... | last` aggregate: like `length` it runs per-page and
+            # concatenates.) May be empty if review used the comment-fallback path; the
+            # PR conversation still has the findings, which is what a human reads anyway.
             SUMMARY="$(gh api "repos/$REPO/pulls/$PR/reviews" \
                         -q '[.[] | select(.state=="CHANGES_REQUESTED")] | last | .body' 2>/dev/null || true)"
             MENTION=""; ASSIGN=0
@@ -149,8 +146,8 @@ jobs:
             exit 0
           fi
 
-          # loop:<rounds> label for human visibility only (not read back).
-          ensure_label "loop:$ROUNDS" "FBCA04" "Fix-loop automated attempt #$ROUNDS"
+          # loop:<attempt> label for human visibility only (not read back).
+          ensure_label "loop:$ATTEMPT" "FBCA04" "Fix-loop automated attempt #$ATTEMPT"
 
           # Gather the unresolved findings for the work item: latest reviewer summary +
           # every inline review comment. The FIX-MODE agent also reads the full PR
@@ -173,7 +170,10 @@ jobs:
             --data @/tmp/fire.json)"
           URL="$(printf '%s' "$RESP" | jq -r '.claude_code_session_url // empty' 2>/dev/null || true)"
           if [ -n "$URL" ]; then
-            gh pr comment "$PR" --repo "$REPO" --body "🔧 Review requested changes — re-fired the build agent in **FIX MODE** (attempt $ROUNDS/$MAX_FIX_ROUNDS). [Watch the session]($URL)."
+            # The trailing HTML-comment marker is how the NEXT run counts this attempt
+            # (see PRIOR_REFIRES above) — it's invisible in the rendered comment. Only the
+            # success path is marked, so a failed fire doesn't consume an attempt.
+            gh pr comment "$PR" --repo "$REPO" --body "🔧 Review requested changes — re-fired the build agent in **FIX MODE** (attempt $ATTEMPT/$MAX_FIX_ROUNDS). [Watch the session]($URL). <!-- fixloop:refire -->"
           else
             gh pr comment "$PR" --repo "$REPO" --body "$(printf '⚠️ Review requested changes but the FIX MODE re-fire failed. Routine response:\n```\n%s\n```' "$RESP")"
             exit 1
