@@ -49,6 +49,5 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 7.4.2
+      - run: gradle test        # JUnit DPS tests — the ground-truth net
       - run: gradle bridgeJar
-      # TODO: once a JUnit test module exists (DPS engine is the first target),
-      #       add a `gradle test` step here — that's the real ground-truth net.

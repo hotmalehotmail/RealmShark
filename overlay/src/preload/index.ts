@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import {
   IPC,
   type BridgeStatus,
+  type BugReportResult,
   type MainLogEntry,
   type PacketEnvelope,
   type SaveSettingsResult,
@@ -76,7 +77,9 @@ const overlayApi = {
     const listener = (_: unknown, progress: UpdateProgress): void => cb(progress)
     ipcRenderer.on(IPC.updateProgress, listener)
     return () => ipcRenderer.removeListener(IPC.updateProgress, listener)
-  }
+  },
+  /** Capture a bug report (version + recent packets + logs) and open the issue form. */
+  reportBug: (): Promise<BugReportResult> => ipcRenderer.invoke(IPC.reportBug)
 }
 
 export type OverlayApi = typeof overlayApi
