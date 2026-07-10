@@ -1,0 +1,414 @@
+<title>RealmShark Autonomous Dev Loop — Full Spec</title>
+<style>
+  :root {
+    --bg: #F3F5F8; --surface: #FFFFFF; --surface-2: #EAEDF2; --border: #DCE0E8;
+    --border-strong: #C3CAD5; --ink: #191C22; --ink-2: #495060; --ink-3: #6C7484;
+    --accent: #3E63DD; --accent-ink: #2B44A8; --accent-soft: rgba(62,99,221,0.09);
+    --agent: #3E63DD; --agent-soft: rgba(62,99,221,0.11);
+    --human: #B7791F; --human-soft: rgba(183,121,31,0.13);
+    --ci: #1F9E63; --ci-soft: rgba(31,158,99,0.12);
+    --anthropic: #C2632E; --anthropic-soft: rgba(194,99,46,0.12);
+    --strong: #1F9E63; --mid: #B7791F; --weak: #C4472E; --crit: #C4472E;
+    --mono-bg: #EDEFF4; --mono-ink: #33405C;
+    --shadow: 0 1px 2px rgba(20,26,40,0.05), 0 6px 20px rgba(20,26,40,0.06);
+    --sans: -apple-system, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: "SF Mono", "JetBrains Mono", "Cascadia Code", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
+    --measure: 70ch; --maxw: 1140px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0F1116; --surface: #181B22; --surface-2: #20242D; --border: #2A2F3A;
+      --border-strong: #3A424F; --ink: #E6E9F0; --ink-2: #A7AFBE; --ink-3: #767E8D;
+      --accent: #6E8BEE; --accent-ink: #97ACF5; --accent-soft: rgba(110,139,238,0.14);
+      --agent: #6E8BEE; --agent-soft: rgba(110,139,238,0.15);
+      --human: #E0A94A; --human-soft: rgba(224,169,74,0.15);
+      --ci: #46C088; --ci-soft: rgba(70,192,136,0.15);
+      --anthropic: #E08A54; --anthropic-soft: rgba(224,138,84,0.15);
+      --strong: #46C088; --mid: #E0A94A; --weak: #E8705A; --crit: #E8705A;
+      --mono-bg: #232833; --mono-ink: #B7C3DE;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 26px rgba(0,0,0,0.34);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #F3F5F8; --surface: #FFFFFF; --surface-2: #EAEDF2; --border: #DCE0E8;
+    --border-strong: #C3CAD5; --ink: #191C22; --ink-2: #495060; --ink-3: #6C7484;
+    --accent: #3E63DD; --accent-ink: #2B44A8; --accent-soft: rgba(62,99,221,0.09);
+    --agent: #3E63DD; --agent-soft: rgba(62,99,221,0.11); --human: #B7791F;
+    --human-soft: rgba(183,121,31,0.13); --ci: #1F9E63; --ci-soft: rgba(31,158,99,0.12);
+    --anthropic: #C2632E; --anthropic-soft: rgba(194,99,46,0.12);
+    --strong: #1F9E63; --mid: #B7791F; --weak: #C4472E; --crit: #C4472E;
+    --mono-bg: #EDEFF4; --mono-ink: #33405C;
+    --shadow: 0 1px 2px rgba(20,26,40,0.05), 0 6px 20px rgba(20,26,40,0.06);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0F1116; --surface: #181B22; --surface-2: #20242D; --border: #2A2F3A;
+    --border-strong: #3A424F; --ink: #E6E9F0; --ink-2: #A7AFBE; --ink-3: #767E8D;
+    --accent: #6E8BEE; --accent-ink: #97ACF5; --accent-soft: rgba(110,139,238,0.14);
+    --agent: #6E8BEE; --agent-soft: rgba(110,139,238,0.15); --human: #E0A94A;
+    --human-soft: rgba(224,169,74,0.15); --ci: #46C088; --ci-soft: rgba(70,192,136,0.15);
+    --anthropic: #E08A54; --anthropic-soft: rgba(224,138,84,0.15);
+    --strong: #46C088; --mid: #E0A94A; --weak: #E8705A; --crit: #E8705A;
+    --mono-bg: #232833; --mono-ink: #B7C3DE;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 26px rgba(0,0,0,0.34);
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans);
+    font-size: 16px; line-height: 1.62; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  header.site { position: sticky; top: 0; z-index: 20;
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    backdrop-filter: saturate(1.4) blur(10px); border-bottom: 1px solid var(--border); }
+  header.site .row { display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; padding: 13px 24px; max-width: var(--maxw); margin: 0 auto; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 640; letter-spacing: -0.01em; }
+  .brand .dot { width: 11px; height: 11px; border-radius: 3px; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  header.site .ctx { font-family: var(--mono); font-size: 0.78rem; color: var(--ink-3); }
+
+  .hero { padding: 56px 0 24px; }
+  .eyebrow { font-family: var(--mono); font-size: 0.72rem; text-transform: uppercase;
+    letter-spacing: 0.16em; color: var(--accent-ink); font-weight: 600; margin: 0 0 18px; }
+  h1 { font-size: clamp(2rem, 4.2vw, 2.9rem); line-height: 1.06; letter-spacing: -0.025em;
+    font-weight: 720; margin: 0 0 20px; text-wrap: balance; max-width: 20ch; }
+  .lede { font-size: 1.14rem; color: var(--ink-2); max-width: var(--measure); margin: 0; line-height: 1.55; }
+  .lede b { color: var(--ink); font-weight: 600; }
+
+  .toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 32px 0 4px; }
+  .toc a { font-family: var(--mono); font-size: 0.78rem; text-decoration: none; color: var(--ink-2);
+    border: 1px solid var(--border); background: var(--surface); padding: 6px 11px; border-radius: 20px; }
+  .toc a:hover { border-color: var(--accent); color: var(--accent-ink); }
+
+  section { padding: 42px 0; border-top: 1px solid var(--border); scroll-margin-top: 64px; }
+  .sec-head { display: flex; align-items: baseline; gap: 14px; margin: 0 0 8px; }
+  .sec-num { font-family: var(--mono); font-size: 0.82rem; color: var(--accent-ink); font-weight: 600; padding-top: 6px; }
+  h2 { font-size: clamp(1.45rem, 3vw, 1.9rem); line-height: 1.12; letter-spacing: -0.02em; font-weight: 680; margin: 0; text-wrap: balance; }
+  .sec-sub { color: var(--ink-2); max-width: var(--measure); margin: 12px 0 24px; }
+  p { max-width: var(--measure); }
+  section p { color: var(--ink-2); }
+  section p b, li b { color: var(--ink); font-weight: 600; }
+  h3 { font-size: 1.1rem; font-weight: 650; letter-spacing: -0.01em; margin: 28px 0 6px; }
+
+  code, .chip { font-family: var(--mono); font-size: 0.85em; background: var(--mono-bg); color: var(--mono-ink);
+    padding: 0.12em 0.44em; border-radius: 5px; border: 1px solid color-mix(in srgb, var(--border) 70%, transparent); white-space: nowrap; }
+  .chip.branch { color: var(--accent-ink); }
+
+  .callout { border: 1px solid var(--border); border-left: 3px solid var(--accent); background: var(--accent-soft);
+    border-radius: 10px; padding: 16px 18px; margin: 22px 0; max-width: var(--measure); }
+  .callout .tag { font-family: var(--mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent-ink); font-weight: 600; }
+  .callout p { margin: 6px 0 0; color: var(--ink); }
+  .callout.warn { border-left-color: var(--human); background: var(--human-soft); }
+  .callout.warn .tag { color: var(--human); }
+  .callout.key { border-left-color: var(--strong); background: var(--ci-soft); }
+  .callout.key .tag { color: var(--strong); }
+
+  /* Topology cards */
+  .topo { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 20px 0 6px; }
+  .loc { background: var(--surface); border: 1px solid var(--border); border-radius: 13px; padding: 16px 18px; box-shadow: var(--shadow); }
+  .loc .lh { display: flex; align-items: center; gap: 9px; margin-bottom: 4px; }
+  .loc .badge { width: 11px; height: 11px; border-radius: 3px; }
+  .loc.a .badge { background: var(--anthropic); } .loc.g .badge { background: var(--ci); } .loc.w .badge { background: var(--human); }
+  .loc h4 { margin: 0; font-size: 0.98rem; font-weight: 650; letter-spacing: -0.01em; }
+  .loc .sub { font-family: var(--mono); font-size: 0.68rem; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; }
+  .loc ul { margin: 0; padding-left: 17px; }
+  .loc li { font-size: 0.88rem; color: var(--ink-2); margin: 5px 0; }
+  .loc li b { color: var(--ink); }
+
+  /* Pipeline */
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; margin: 4px 0 22px; }
+  .actor { display: inline-flex; align-items: center; gap: 8px; font-size: 0.85rem; color: var(--ink-2); }
+  .actor .swatch { width: 12px; height: 12px; border-radius: 4px; }
+  .actor.agent .swatch { background: var(--agent); } .actor.human .swatch { background: var(--human); } .actor.ci .swatch { background: var(--ci); }
+  .actor b { color: var(--ink); font-weight: 600; }
+  .pipe { display: flex; flex-direction: column; gap: 0; margin: 8px 0 4px; }
+  .stage { position: relative; display: grid; grid-template-columns: 150px 1fr; gap: 20px; padding: 14px 0 16px; }
+  .stage:not(:last-child)::after { content: ""; position: absolute; left: 75px; top: 42px; bottom: -2px; width: 2px; background: var(--border-strong); }
+  .stage .lane { display: flex; flex-direction: column; align-items: flex-start; gap: 7px; position: relative; z-index: 1; }
+  .stage .node { font-family: var(--mono); font-size: 0.77rem; font-weight: 600; padding: 6px 10px; border-radius: 8px;
+    border: 1px solid var(--border-strong); background: var(--surface); box-shadow: var(--shadow); white-space: nowrap; }
+  .actorchip { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 0.64rem;
+    text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; padding: 3px 7px; border-radius: 20px; }
+  .actorchip.agent { color: var(--agent); background: var(--agent-soft); } .actorchip.human { color: var(--human); background: var(--human-soft); } .actorchip.ci { color: var(--ci); background: var(--ci-soft); }
+  .stage .body .t { font-weight: 620; letter-spacing: -0.01em; margin: 0 0 3px; font-size: 0.98rem; color: var(--ink); }
+  .stage .body p { margin: 0; font-size: 0.88rem; color: var(--ink-2); max-width: 62ch; }
+  .stage .body .xfer { font-family: var(--mono); font-size: 0.74rem; color: var(--ink-3); margin-top: 5px; display: block; }
+  .stage .body .xfer b { color: var(--accent-ink); font-weight: 600; }
+
+  /* Tables */
+  .tablewrap { overflow-x: auto; margin: 18px 0; border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; min-width: 640px; background: var(--surface); font-size: 0.88rem; }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  thead th { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-3); font-weight: 600; background: var(--surface-2); }
+  tbody tr:last-child td { border-bottom: none; }
+  td b { color: var(--ink); font-weight: 600; } td .desc { color: var(--ink-2); }
+  td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .locpill { font-family: var(--mono); font-size: 0.68rem; font-weight: 700; padding: 2px 7px; border-radius: 5px; white-space: nowrap; }
+  .locpill.a { color: var(--anthropic); background: var(--anthropic-soft); } .locpill.g { color: var(--ci); background: var(--ci-soft); } .locpill.w { color: var(--human); background: var(--human-soft); }
+
+  pre { font-family: var(--mono); font-size: 0.8rem; line-height: 1.55; background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; overflow-x: auto; margin: 16px 0; color: var(--ink); max-width: 100%; }
+  pre .cm { color: var(--ink-3); } pre .kw { color: var(--accent-ink); }
+
+  /* Worked-example steps */
+  .steps { display: grid; gap: 0; margin: 16px 0; }
+  .step { display: grid; grid-template-columns: 40px 1fr; gap: 16px; padding: 15px 0; border-top: 1px dashed var(--border); }
+  .step:first-child { border-top: none; }
+  .step .n { font-family: var(--mono); font-size: 0.82rem; font-weight: 700; color: var(--accent-ink);
+    width: 34px; height: 34px; display: grid; place-items: center; border-radius: 9px; background: var(--accent-soft);
+    border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent); }
+  .step .who { display: inline-block; font-family: var(--mono); font-size: 0.63rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; padding: 2px 7px; border-radius: 5px; margin-right: 8px; vertical-align: 1px; }
+  .step .who.agent { color: var(--agent); background: var(--agent-soft); } .step .who.human { color: var(--human); background: var(--human-soft); } .step .who.ci { color: var(--ci); background: var(--ci-soft); }
+  .step .t { font-weight: 620; letter-spacing: -0.01em; font-size: 0.98rem; color: var(--ink); }
+  .step p { margin: 4px 0 0; font-size: 0.9rem; color: var(--ink-2); max-width: 64ch; }
+  .step p .m { font-family: var(--mono); font-size: 0.82em; color: var(--ink-3); }
+
+  ul.clean { list-style: none; padding: 0; margin: 14px 0; display: grid; gap: 10px; }
+  ul.clean > li { position: relative; padding-left: 24px; max-width: var(--measure); font-size: 0.95rem; color: var(--ink-2); }
+  ul.clean > li b { color: var(--ink); }
+  ul.clean > li::before { content: ""; position: absolute; left: 3px; top: 9px; width: 8px; height: 8px; border-radius: 2px; background: var(--accent); }
+
+  footer { border-top: 1px solid var(--border); padding: 32px 0 60px; margin-top: 8px; }
+  footer p { font-size: 0.94rem; color: var(--ink-2); max-width: var(--measure); }
+  footer p b { color: var(--ink); } footer .muted { color: var(--ink-3); font-size: 0.87rem; }
+  a { color: var(--accent-ink); text-underline-offset: 2px; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+  @media (max-width: 820px) { .topo { grid-template-columns: 1fr; } }
+  @media (max-width: 720px) { .stage { grid-template-columns: 1fr; gap: 9px; } .stage::after { display: none; } header.site .ctx { display: none; } }
+  @media (prefers-reduced-motion: no-preference) { .hero { animation: rise 0.5s ease both; } @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } } }
+</style>
+
+<header class="site">
+  <div class="row">
+    <div class="brand"><span class="dot"></span> RealmShark · Autonomous Loop — Full Spec</div>
+    <div class="ctx">Auto Mode · Opus 4.8 · public repo</div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="hero">
+    <p class="eyebrow">Full specification · v5</p>
+    <h1>The whole machine, end to end.</h1>
+    <p class="lede">The committed decision: a <b>hands-off, Auto-Mode</b> loop where a labeled GitHub issue produces a merged, tested change with two human touches — <b>write the issue</b> and <b>press ship</b>. This spec pins down how the layers connect, <b>which cloud each part runs on</b>, <b>the exact files that enforce every rule</b>, a full worked pipeline for a feature and a bug, the model behind each step, and what it costs to run.</p>
+
+    <nav class="toc">
+      <a href="#topology">01 · Topology</a>
+      <a href="#layers">02 · How layers connect</a>
+      <a href="#enforce">03 · Enforcement</a>
+      <a href="#models">04 · Models</a>
+      <a href="#feature">05 · Feature run</a>
+      <a href="#bug">06 · Bug run</a>
+      <a href="#cost">07 · Cost</a>
+    </nav>
+  </div>
+
+  <!-- 01 TOPOLOGY -->
+  <section id="topology">
+    <div class="sec-head"><span class="sec-num">01</span><h2>Where every part runs</h2></div>
+    <p class="sec-sub">Three environments, cleanly split. The agent's brain is on Anthropic's cloud; all the plumbing and state is on GitHub's cloud; the only thing on your hardware is the one test no machine can do.</p>
+    <div class="topo">
+      <div class="loc a">
+        <div class="lh"><span class="badge"></span><h4>Anthropic cloud</h4></div>
+        <div class="sub">the reasoning</div>
+        <ul>
+          <li><b>Build agent</b> — Claude Code cloud session, Auto Mode, in a managed sandbox</li>
+          <li><b>Review agent</b> — the <code>code-review</code> model call from CI</li>
+          <li><b>Captain agent</b> — drafts release notes</li>
+          <li>The <b>Routine</b> that turns an issue webhook into a session</li>
+        </ul>
+      </div>
+      <div class="loc g">
+        <div class="lh"><span class="badge"></span><h4>GitHub cloud</h4></div>
+        <div class="sub">the plumbing &amp; state</div>
+        <ul>
+          <li><b>Repo, branches, issues, PRs, releases</b> — the system of record</li>
+          <li><b>Actions runners</b> — CI, gatekeeper, release build (free on public repos)</li>
+          <li><b>Branch protection</b> + required-status-check rules</li>
+          <li>The <b>webhook</b> that fires the Routine</li>
+        </ul>
+      </div>
+      <div class="loc w">
+        <div class="lh"><span class="badge"></span><h4>Your Windows PC</h4></div>
+        <div class="sub">the irreducible human step</div>
+        <ul>
+          <li><b>The alpha soak</b> — overlay running against the live RotMG client</li>
+          <li>The <b>"Report bug" capture</b> that seeds the next fix</li>
+          <li>Two clicks: <b>label an issue</b>, <b>dispatch a release</b></li>
+        </ul>
+      </div>
+    </div>
+    <div class="callout">
+      <span class="tag">The two cloud boundaries that matter</span>
+      <p>Only <b>two</b> things cross from GitHub → Anthropic: the <b>issue/PR text</b> (the brief) and the <b>repo contents</b> (cloned into the sandbox). Only <b>two</b> things cross back Anthropic → GitHub: <b>git pushes</b> (the agent's branch) and <b>PR comments/verdicts</b>. Everything else — merges, tags, builds, releases — happens entirely inside GitHub. That's what keeps the Anthropic dependency to a single swappable box.</p>
+    </div>
+  </section>
+
+  <!-- 02 LAYERS -->
+  <section id="layers">
+    <div class="sec-head"><span class="sec-num">02</span><h2>How the layers hand off</h2></div>
+    <p class="sec-sub">Each layer's output is the next layer's input. Below, every stage names the actor, and the italic line names the <b>artifact that crosses</b> to the next one — that hand-off is the whole integration.</p>
+    <div class="legend">
+      <span class="actor human"><span class="swatch"></span><b>You</b></span>
+      <span class="actor agent"><span class="swatch"></span><b>Agent</b> (Anthropic cloud)</span>
+      <span class="actor ci"><span class="swatch"></span><b>CI</b> (GitHub Actions)</span>
+    </div>
+    <div class="pipe">
+      <div class="stage">
+        <div class="lane"><span class="node">issue + label</span><span class="actorchip human">You</span></div>
+        <div class="body"><p class="t">Issue Form filled, <code>agent:build</code> applied</p><p>The acceptance criteria in the form body are the spec.</p><span class="xfer">crosses →&nbsp; <b>issue JSON</b> (title, body, labels) via webhook</span></div>
+      </div>
+      <div class="stage">
+        <div class="lane"><span class="node">Routine</span><span class="actorchip agent">Agent</span></div>
+        <div class="body"><p class="t">Webhook starts a cloud session, clones the repo</p><p>Auto Mode; the issue body becomes the session's opening prompt.</p><span class="xfer">crosses →&nbsp; <b>a git branch + a PR</b> (pushed from the sandbox)</span></div>
+      </div>
+      <div class="stage">
+        <div class="lane"><span class="node">build agent</span><span class="actorchip agent">Agent</span></div>
+        <div class="body"><p class="t">Implements, self-checks, logs assumptions, opens the PR</p><p>Watchable live on claude.ai; never blocks on you.</p><span class="xfer">crosses →&nbsp; <b>PR opened event</b> triggers two workflows</span></div>
+      </div>
+      <div class="stage">
+        <div class="lane"><span class="node">ci.yml</span><span class="actorchip ci">CI</span><span class="node">review.yml</span><span class="actorchip agent">Agent</span></div>
+        <div class="body"><p class="t">Ground-truth checks + an independent review, in parallel</p><p>Typecheck/lint/build/test, and the review agent scores the diff against the acceptance criteria.</p><span class="xfer">crosses →&nbsp; <b>two status checks</b>: <code>ci</code> pass/fail + <code>review</code> verdict</span></div>
+      </div>
+      <div class="stage">
+        <div class="lane"><span class="node">gatekeeper.yml</span><span class="actorchip ci">CI</span></div>
+        <div class="body"><p class="t">Auto-merges to <code class="chip branch">staging</code> when both are green</p><p>If review requests changes, the build agent is re-triggered (loop capped ~3×).</p><span class="xfer">crosses →&nbsp; <b>a merge commit</b> on <code class="chip branch">staging</code></span></div>
+      </div>
+      <div class="stage">
+        <div class="lane"><span class="node">release.yml</span><span class="actorchip human">You</span><span class="actorchip ci">CI</span></div>
+        <div class="body"><p class="t">You dispatch (channel = alpha); CI bumps, tags, builds, publishes</p><p>Bridge jar + Windows installer built on a <code>windows</code> runner.</p><span class="xfer">crosses →&nbsp; <b>a GitHub Release</b> + assets; auto-updater delivers it</span></div>
+      </div>
+      <div class="stage">
+        <div class="lane"><span class="node">soak</span><span class="actorchip human">You</span></div>
+        <div class="body"><p class="t">Test against the live game; capture any bug</p><p>A finding becomes a new <code>agent:fix</code> issue — back to the top.</p><span class="xfer">loops →&nbsp; <b>a bug issue + repro capture</b></span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 03 ENFORCEMENT -->
+  <section id="enforce">
+    <div class="sec-head"><span class="sec-num">03</span><h2>What enforces each rule</h2></div>
+    <p class="sec-sub">Every guarantee in this system is pinned to a concrete file or setting — nothing relies on anyone remembering to do the right thing. The <span class="locpill a">A</span>/<span class="locpill g">G</span>/<span class="locpill w">W</span> tag shows where it lives (Anthropic / GitHub / your machine).</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>File / setting</th><th>Loc</th><th>Enforces</th></tr></thead>
+        <tbody>
+          <tr><td><code>CLAUDE.md</code> (repo root)</td><td><span class="locpill g">G</span></td><td class="desc">Conventions the agents obey verbatim: build recipe, wire-format contract, Conventional Commits, and the <b>never-release-without-ask</b> rule. Read at the start of every session.</td></tr>
+          <tr><td><code>.github/ISSUE_TEMPLATE/feature.yml</code></td><td><span class="locpill g">G</span></td><td class="desc">Forces the fields that replace live questions: scope, <b>acceptance criteria</b>, out-of-scope, files/area.</td></tr>
+          <tr><td><code>.github/ISSUE_TEMPLATE/bug_report.yml</code></td><td><span class="locpill g">G</span></td><td class="desc">Forces build/version, steps·expected·actual, and the <b>repro-capture</b> attachment.</td></tr>
+          <tr><td><code>.github/workflows/ci.yml</code></td><td><span class="locpill g">G</span></td><td class="desc">The ground-truth gate: <code>npm run typecheck</code> + <code>lint</code> + <code>gradle bridgeJar</code> + JUnit DPS test. Emits the <code>ci</code> status check.</td></tr>
+          <tr><td><code>.github/workflows/review.yml</code></td><td><span class="locpill g">G</span> → <span class="locpill a">A</span></td><td class="desc">Runs the <code>code-review</code> agent on <code>pull_request</code>; posts inline comments + the <code>review</code> verdict check. Model call happens on Anthropic.</td></tr>
+          <tr><td><code>.github/workflows/gatekeeper.yml</code></td><td><span class="locpill g">G</span></td><td class="desc">Merges to <code class="chip branch">staging</code> only when <code>ci</code> and <code>review</code> are both green; re-triggers the builder on change-requests, capped.</td></tr>
+          <tr><td><code>.github/workflows/release.yml</code></td><td><span class="locpill g">G</span></td><td class="desc"><code>workflow_dispatch</code> only. Bumps <code>overlay/package.json</code>, tags, builds jar + <code>--win --x64</code>, publishes prerelease. Your ship button — human-triggered by design.</td></tr>
+          <tr><td>Routine config (issue webhook → session)</td><td><span class="locpill a">A</span></td><td class="desc">Fires the build agent on <code>issues: labeled</code>. Auto Mode + tool allowlist define what it may do unattended.</td></tr>
+          <tr><td>Branch protection — <code class="chip branch">staging</code> &amp; <code class="chip branch">bridge</code></td><td><span class="locpill g">G</span></td><td class="desc">Required status checks = <code>ci</code> + <code>review</code>; <b>0</b> required human approvals; restrict who can push. This is what lets the gatekeeper stand in for your approval.</td></tr>
+          <tr><td>Repo setting — labels <code>agent:build</code> / <code>agent:fix</code></td><td><span class="locpill g">G</span></td><td class="desc">Maintainer-only labels are the trigger. Nothing runs on a stranger's raw issue — the public-repo safety gate.</td></tr>
+          <tr><td><code>gradle/wrapper/*</code> (committed, 7.4.2)</td><td><span class="locpill g">G</span></td><td class="desc">Reproducible builds via <code>./gradlew</code> in CI and locally. Prerequisite — currently uncommitted.</td></tr>
+          <tr><td>Secrets — App token / <code>ANTHROPIC_API_KEY</code></td><td><span class="locpill g">G</span></td><td class="desc">Scoped GitHub App token (not default <code>GITHUB_TOKEN</code>, so CI runs on agent commits) + the model credential. Minimal set, so a hijacked run has nothing to exfiltrate.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout warn">
+      <span class="tag">The one you must add first</span>
+      <p>Two items above are prerequisites, not niceties: <b>commit the Gradle wrapper</b> (else CI can't build the jar) and set <b>branch protection with 0 required approvals + required checks</b> (else the gatekeeper either can't merge, or merges unreviewed). Everything else builds on those two.</p>
+    </div>
+  </section>
+
+  <!-- 04 MODELS -->
+  <section id="models">
+    <div class="sec-head"><span class="sec-num">04</span><h2>Which model does what</h2></div>
+    <p class="sec-sub">Opus 4.8 for the reasoning-heavy work (build + review); Haiku only for the trivial drafting step. Effort is tuned per role — higher where correctness matters, lower where speed does.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Role</th><th>Model</th><th>Effort</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr><td><b>Build agent</b></td><td class="num"><code>claude-opus-4-8</code></td><td class="num">high → xhigh</td><td class="desc">The hard part — reads the codebase, implements, self-verifies. Opus 4.8 is the strongest coding/agentic model; <code>xhigh</code> for gnarly features, <code>high</code> as default.</td></tr>
+          <tr><td><b>Review agent</b></td><td class="num"><code>claude-opus-4-8</code></td><td class="num">high</td><td class="desc">Must catch what the builder got wrong — needs to be as capable as the builder, and independent (adversarial prompt vs. acceptance criteria). A weaker reviewer rubber-stamps.</td></tr>
+          <tr><td><b>Auto Mode classifier</b></td><td class="num">Sonnet (managed)</td><td class="num">—</td><td class="desc">Anthropic runs this under the hood to approve each action unattended — you don't configure it.</td></tr>
+          <tr><td><b>Release-notes captain</b></td><td class="num"><code>claude-haiku-4-5</code></td><td class="num">low</td><td class="desc">Summarizing Conventional Commits between two tags is trivial — the one place a cheaper model is worth it. Optional; Opus works too.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="font-size:0.86rem;color:var(--ink-3);max-width:var(--measure)">List pricing per 1M tokens (in / out): Opus 4.8 <b style="color:var(--ink-2)">$5 / $25</b> · Haiku 4.5 <b style="color:var(--ink-2)">$1 / $5</b>. Prompt caching drops repeated context to ~0.1× input — which is why an agentic loop that re-sends its context every turn is far cheaper than the raw token count suggests. These rates drive the estimate in §07.</p>
+  </section>
+
+  <!-- 05 FEATURE -->
+  <section id="feature">
+    <div class="sec-head"><span class="sec-num">05</span><h2>Full run — a feature</h2></div>
+    <p class="sec-sub">Concrete example: <b>"Add a Loot Tracker panel"</b> — a new overlay panel that lists recent drops. Lives in <code>overlay/src/renderer/</code>, so it runs cleanly in parallel with anything on the Java side.</p>
+    <div class="steps">
+      <div class="step"><div class="n">1</div><div><span class="who human">You</span><span class="t">File the feature issue</span><p>Use the feature form. Acceptance criteria: <span class="m">"panel registers via registry.ts; shows last 10 drops from the packet stream; sm/md/lg sizes; hidden when no drops."</span> Apply <code>agent:build</code>. <b>~2 minutes of your time; nothing else until the PR.</b></p></div></div>
+      <div class="step"><div class="n">2</div><div><span class="who agent">Agent</span><span class="t">Routine spins up a cloud session</span><p>Webhook → Auto-Mode session on Anthropic cloud, repo cloned, branch <code>feature/loot-panel</code> off <code class="chip branch">staging</code>. <span class="m">Opus 4.8, xhigh (new UI surface).</span></p></div></div>
+      <div class="step"><div class="n">3</div><div><span class="who agent">Agent</span><span class="t">Builds and opens the PR</span><p>Adds the panel component + one <code>registry.ts</code> entry, wires it to <code>DpsTracker</code>'s drop feed, runs typecheck/lint locally, and opens the PR — with an <b>Assumptions</b> block: <span class="m">"assumed 'drops' = ServerPlayerShoot loot events; assumed lg = 6 rows."</span></p></div></div>
+      <div class="step"><div class="n">4</div><div><span class="who ci">CI</span><span class="t">ci.yml runs the ground-truth gate</span><p>Typecheck + lint + <code>gradle bridgeJar</code> (compiles clean since nothing Java changed) + the DPS test. <b>Green.</b></p></div></div>
+      <div class="step"><div class="n">5</div><div><span class="who agent">Agent</span><span class="t">review.yml scores the diff</span><p>Independent Opus review vs. the acceptance criteria. Catches that sizes were hard-coded, not preset via the panel system → <b>requests changes</b> with an inline comment.</p></div></div>
+      <div class="step"><div class="n">6</div><div><span class="who agent">Agent</span><span class="t">Fix loop (round 1 of ≤3)</span><p>The change-request re-triggers the builder; it switches to the sm/md/lg preset dims, pushes. CI + review re-run → both <b>green</b>.</p></div></div>
+      <div class="step"><div class="n">7</div><div><span class="who ci">CI</span><span class="t">gatekeeper.yml merges to staging</span><p><code>ci</code> ✓ and <code>review</code> ✓ → auto-merge, no human. The panel is now on <code class="chip branch">staging</code>.</p></div></div>
+      <div class="step"><div class="n">8</div><div><span class="who human">You</span><span class="t">Dispatch the alpha, then soak</span><p>When enough is queued you run <code>release.yml</code> (alpha). CI publishes; the updater delivers it; you open the overlay on the live game and confirm the panel works. <b>Done — or file a follow-up if a drop type is missing.</b></p></div></div>
+    </div>
+  </section>
+
+  <!-- 06 BUG -->
+  <section id="bug">
+    <div class="sec-head"><span class="sec-num">06</span><h2>Full run — a bug</h2></div>
+    <p class="sec-sub">Concrete example: <b>"DPS carries over across map changes"</b> — you finished a dungeon, entered a new one, and the meter didn't reset. The bug lives in the Java <code>bridge.dps</code> engine (or <code>DpsTracker.ts</code>). The difference from a feature is the <b>repro artifact</b>.</p>
+    <div class="steps">
+      <div class="step"><div class="n">1</div><div><span class="who human">You</span><span class="t">Hit "Report bug" in the overlay</span><p>The button bundles version + logs + a <b>capture of the recent packet buffer</b> (the JSON stream around the map change) and pre-fills a bug issue. You add the expected behavior: <span class="m">"DPS should zero on MapInfoPacket."</span> Apply <code>agent:fix</code>.</p></div></div>
+      <div class="step"><div class="n">2</div><div><span class="who agent">Agent</span><span class="t">Session starts with the capture mounted</span><p>Branch <code>fix/dps-map-reset</code> off <code class="chip branch">staging</code>. The capture is the key: it lets the agent reproduce a live-game bug <b>with no game</b>. <span class="m">Opus 4.8, high.</span></p></div></div>
+      <div class="step"><div class="n">3</div><div><span class="who agent">Agent</span><span class="t">Writes a failing test from the capture first</span><p>Replays the captured stream through <code>FakePacketSource</code> → a JUnit test asserting DPS resets on <code>MapInfoPacket</code>. <b>The test fails</b> — the bug is now reproduced as ground truth.</p></div></div>
+      <div class="step"><div class="n">4</div><div><span class="who agent">Agent</span><span class="t">Fixes until the test passes, opens the PR</span><p>Adds the reset-on-instance-change branch; the new test goes green. PR body links <code>Fixes #N</code> and includes the regression test.</p></div></div>
+      <div class="step"><div class="n">5</div><div><span class="who ci">CI</span><span class="t">ci.yml runs — now with the new test</span><p>The regression test is part of the suite from now on, so this bug can never silently return. <b>Green.</b></p></div></div>
+      <div class="step"><div class="n">6</div><div><span class="who agent">Agent</span><span class="t">review.yml approves</span><p>Diff matches the acceptance behavior and is covered by a test → <b>verdict pass</b>, no loop needed.</p></div></div>
+      <div class="step"><div class="n">7</div><div><span class="who ci">CI</span><span class="t">gatekeeper merges to staging</span><p>Auto-merge on both-green. <code>Fixes #N</code> closes the issue.</p></div></div>
+      <div class="step"><div class="n">8</div><div><span class="who human">You</span><span class="t">Targeted re-test in the next alpha</span><p>The alpha notes list "fixed #N", so you re-verify <b>only the map-reset path</b>, not the whole app. It holds → promote to <code class="chip branch">bridge</code> when the train is green.</p></div></div>
+    </div>
+    <div class="callout key">
+      <span class="tag">Why the bug run converges and a naive one doesn't</span>
+      <p>Steps 1 and 3 are the whole game: a <b>replayable capture</b> turns a "can't-reproduce-without-the-game" report into a <b>failing test</b>, and the fix ships <b>with that test</b>. That's what makes the manual-testing strategy a converging loop instead of whack-a-mole.</p>
+    </div>
+  </section>
+
+  <!-- 07 COST -->
+  <section id="cost">
+    <div class="sec-head"><span class="sec-num">07</span><h2>What it costs to run</h2></div>
+    <p class="sec-sub">Two cost centers: <b>GitHub</b> and <b>Anthropic</b>. The first is basically free; the second is the real number, and it's smaller than raw token counts suggest because agentic loops are cache-dominated.</p>
+
+    <h3>GitHub — ~$0</h3>
+    <p><b>Actions is free on public repositories</b> for standard Linux and Windows runners. Since this repo is public, CI, the gatekeeper, and the release build cost nothing in Actions minutes. Storage for release assets is negligible. Call it <b>$0/month</b>.</p>
+
+    <h3>Anthropic — the real cost</h3>
+    <p>Per-task, metered at API list price (Opus 4.8 $5/$25). The numbers below assume prompt caching (~0.1× on repeated context, which the cloud session does automatically), a multi-turn build, plus review and any fix-loop rounds. Ranges, not promises — effort setting and task size move them a lot.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Unit of work</th><th>Build</th><th>Review ×rounds</th><th>Notes / total</th></tr></thead>
+        <tbody>
+          <tr><td><b>Merged bugfix</b> (scoped)</td><td class="num">~$1–3</td><td class="num">~$0.3–1</td><td class="desc">Usually 1 review round. <b>≈ $2–5 each.</b></td></tr>
+          <tr><td><b>Merged feature</b> (moderate)</td><td class="num">~$3–6</td><td class="num">~$0.6–2</td><td class="desc">Often 1–2 rounds. <b>≈ $4–10 each.</b></td></tr>
+          <tr><td><b>Release notes</b></td><td class="num">Haiku</td><td class="num">—</td><td class="desc">~$0.02. Rounding error.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><b>Monthly, at a moderate solo cadence</b> — say ~15 features + ~25 bugfixes: roughly <b>15 × $7 + 25 × $3.5 ≈ $190/month</b> metered. A realistic band across light-to-heavy months is <b>~$100–400/month</b>. GitHub adds $0.</p>
+
+    <div class="callout key">
+      <span class="tag">You have Max — so the real bill is ~$0 on top of it</span>
+      <p>Both agents can run on your <b>Claude Max subscription</b>, not per-token API. The <b>build agent</b> is a Claude Code cloud session — that's natively Max (Max is exactly what unlocks Claude Code on the web / Routines). The <b>CI review agent</b> normally wants an <code>ANTHROPIC_API_KEY</code>, but <code>claude-code-action</code> also accepts a <b><code>claude_code_oauth_token</code></b> — generate one from your Max login with <code>claude setup-token</code>, store it as a repo secret, and the review agent draws from Max too. Net: <b>no metered API at all</b> — the table above is the "if you ever meter it through the API instead" figure.</p>
+    </div>
+    <div class="callout warn">
+      <span class="tag">The catch with Max — it's a usage ceiling, not unlimited</span>
+      <p>Max has rolling usage limits (a ~5-hour window plus weekly caps; the <b>20× (~$200) tier</b> has far more headroom than 5× for parallel agents). Two things to know: heavy <b>parallel</b> agent runs can hit the cap, at which point sessions <b>queue/pause until the window resets</b> rather than failing; and pointing CI at the <b>same</b> Max account means your automation and your interactive Claude Code usage <b>share one pool</b> — a busy CI day can eat into your personal limit. If that bites, the escape hatch is putting just the CI review agent on a metered <code>ANTHROPIC_API_KEY</code> (the ~$0.3–2/PR figure above) so the build agent keeps the Max pool to itself.</p>
+    </div>
+
+    <ul class="clean">
+      <li><b>Biggest lever:</b> effort. Dropping the build agent from <code>xhigh</code> to <code>high</code>, or <code>high</code> to <code>medium</code> on routine bugs, cuts token spend materially — sweep it per task type.</li>
+      <li><b>Second lever:</b> the fix-loop cap. Each extra round is another build + review. The ~3-round cap is a cost ceiling as much as a sanity one.</li>
+      <li><b>Not a lever:</b> GitHub. Staying on a public repo keeps CI free — a private repo would start metering Actions minutes (Windows runners bill at 2×).</li>
+    </ul>
+  </section>
+
+  <footer>
+    <p><b>That's the whole machine.</b> A labeled issue crosses to Anthropic as a brief, comes back as a branch, gets gated by ground-truth CI and an independent review inside GitHub, merges itself, and waits for you to press ship — with the only genuinely human steps being the issue you write, the alpha you test, and the two buttons you press. Every rule is pinned to a file in §03; the model behind each step is in §04; and at a solo cadence it runs for roughly a <b>flat Max subscription plus $0 of GitHub</b>.</p>
+    <p class="muted">Ready when you are: I can open a draft PR with the foundation — committed Gradle wrapper, the two issue forms, <code>ci.yml</code>, and stubs for <code>review.yml</code> / <code>gatekeeper.yml</code> / <code>release.yml</code> — nothing enabled until you approve.</p>
+  </footer>
+
+</div>
