@@ -51,3 +51,37 @@ jobs:
           gradle-version: 7.4.2
       - run: gradle test        # JUnit DPS tests — the ground-truth net
       - run: gradle bridgeJar
+
+  # Guards against the 2026-07-10 staging-drift incident: review.yml is only "live"
+  # when byte-identical to the DEFAULT branch's copy (claude-code-action's guard), so
+  # a branch whose review.yml drifts SILENTLY skips reviews (green, no review). This
+  # makes that loud. Policy: review.yml changes are legitimate only via a PR into the
+  # default branch; anywhere else the merge result must already match the default's.
+  workflow-parity:
+    name: workflow parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: review.yml must match the default branch
+        env:
+          DEFAULT: ${{ github.event.repository.default_branch }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          if [ "$BASE" = "$DEFAULT" ]; then
+            echo "PR targets the default branch ($DEFAULT); review.yml changes are legitimate here. OK."
+            exit 0
+          fi
+          # Explicit refspec so refs/remotes/origin/$DEFAULT is guaranteed to exist:
+          # checkout@v4 uses a narrow PR refspec, so a bare `git fetch origin $DEFAULT`
+          # may only move FETCH_HEAD, leaving `origin/$DEFAULT` a "bad revision" (exit
+          # 128) — which, as an `if` condition, would masquerade as "differs".
+          git fetch --no-tags origin "+refs/heads/$DEFAULT:refs/remotes/origin/$DEFAULT"
+          if git diff --quiet "refs/remotes/origin/$DEFAULT" -- .github/workflows/review.yml; then
+            echo "review.yml matches origin/$DEFAULT. OK."
+          else
+            echo "::error::review.yml differs from the default branch ($DEFAULT). A stale review.yml makes claude-code-action silently skip reviews on this branch's PRs. Land review.yml changes via a PR into $DEFAULT, then sync this branch."
+            exit 1
+          fi
