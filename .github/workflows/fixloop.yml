@@ -17,9 +17,12 @@ name: fixloop
 # no-op: the gatekeeper owns the pass path, and never re-firing on an absent verdict
 # means an infra hiccup in review can't kick off a spurious fix attempt.
 #
-# Round counting is stateless — the count of non-dismissed CHANGES_REQUESTED reviews
-# on the PR (dismissed reviews drop to state DISMISSED, so they're excluded). The
-# resume path (resume.yml, separate) dismisses reviews to reset the budget.
+# Round counting is stateless — the count of THIS workflow's own prior FIX-MODE
+# re-fire comments on the PR (each tagged with a hidden <!-- fixloop:refire --> marker),
+# NOT reviews. review.yml can post its verdict via a plain comment with no review object
+# (see step 3), so a review-based count is unreliable. Consequence for the resume path
+# (resume.yml, separate): resetting the budget means NEUTRALIZING those markers (delete
+# or edit the re-fire comments) — dismissing reviews does NOT reset a comment-based count.
 on:
   workflow_run:
     workflows: [review]

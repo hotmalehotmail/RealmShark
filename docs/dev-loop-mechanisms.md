@@ -211,11 +211,19 @@ verdict is a no-op (the gatekeeper handles it).
 **Round counting (stateless, from the API — no fragile label state).** The job
 computes:
 ```
-rounds = count of non-dismissed CHANGES_REQUESTED reviews on this PR
+prior_refires = count of fixloop's own <!-- fixloop:refire --> re-fire comments on this PR
+attempt       = prior_refires + 1
 ```
-via `GET /repos/{repo}/pulls/{n}/reviews`. The review that just fired the workflow
-is included, so `rounds` is 1 on the first change-request, 2 on the second, etc. A
-label `loop:<rounds>` is set on the PR purely for human visibility (not read back).
+via `GET /repos/{repo}/issues/{n}/comments`, filtered to `github-actions[bot]` and the
+hidden marker. **It counts fixloop's own re-fire comments, not reviews** — because
+`review.yml` posts its verdict via a plain PR comment (no review object) when its
+`POST /reviews` call 422s (an inline comment on a line outside the diff rejects the
+whole review), while still posting `review-verdict = failure`. A review-based count
+would then stay `0` and re-fire forever; a self-authored marker is posted exactly once
+per successful attempt, so it increments every round regardless of how the review was
+delivered — and is inherently bounded. A label `loop:<attempt>` is set for human
+visibility (not read back). *(As implemented in `fixloop.yml`; the earlier
+review-dismissal design below is superseded by this — see the resume note in §6.3.)*
 
 **Cap.** `MAX_FIX_ROUNDS = 3`.
 - If `rounds <= 3` → **re-fire** (this is automated fix attempt #`rounds`).
@@ -281,10 +289,12 @@ small `.github/workflows/resume.yml` runs `on: pull_request: types: [labeled]` w
   GitHub already guarantees the actor is a maintainer. This is the *same* gate as
   kickoff (§1), so the resume path inherits one security model instead of a bespoke
   `author_association` check.
-- **Resets the budget** — **dismisses** the outstanding `CHANGES_REQUESTED` reviews
-  via `PUT /repos/{repo}/pulls/{n}/reviews/{id}/dismissals`. Because §6.1 counts only
-  *non-dismissed* change-requests, this cleanly resets `rounds` to 0 — a fresh set
-  of 3 automated attempts.
+- **Resets the budget** — because §6.1 now counts fixloop's own `<!-- fixloop:refire -->`
+  re-fire comments (not reviews), the reset must **neutralize those markers**: delete the
+  re-fire comments, or edit them to strip the marker, so the next count reads 0 — a fresh
+  set of 3 automated attempts. **Dismissing reviews does NOT reset a comment-based count.**
+  (The original design reset by dismissing `CHANGES_REQUESTED` reviews; that was superseded
+  when the count moved to markers to survive review.yml's comment-fallback path — §6.1.)
 - **Removes** `agent:retry` + `agent:needs-human`, clears the assignee.
 - **Re-fires** the builder in FIX MODE (as §6.1). The FIX-MODE prompt already reads
   the full PR conversation, so any comment you left is picked up as guidance
@@ -314,7 +324,8 @@ on merge. Nothing about the escalation leaves residue once resolved.
   shares the §1 `/fire` plumbing).
 - ✅ Repo variable `MAINTAINER_HANDLE` (escalation @-mention/assignee) — already set.
 - ✅ §5 verdict (hard dependency) — done.
-- 🔲 `resume.yml` (`on: pull_request` labeled `agent:retry` → dismiss reviews → re-fire) — **next.**
+- 🔲 `resume.yml` (`on: pull_request` labeled `agent:retry` → neutralize the `fixloop:refire`
+  marker comments to reset the budget → re-fire) — **next.**
 - 🔲 A repo label `agent:retry` (maintainer-applied resume trigger) — **next** (with resume.yml).
 - 🔲 **Conflict → rebase FIX MODE** — the gatekeeper branch described in §6.5 (the FIX-MODE
   *prompt* already handles a rebase instruction; the gatekeeper doesn't yet emit one).
