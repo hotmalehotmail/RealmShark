@@ -54,13 +54,15 @@ jobs:
             -H "anthropic-version: 2023-06-01" \
             -H "Content-Type: application/json" \
             --data "$BODY")"
-          URL="$(printf '%s' "$RESP" | jq -r '.claude_code_session_url // empty')"
+          # `|| true` so a non-JSON response (HTML error page, empty body) doesn't
+          # abort the step under `set -e` before the else-branch can report it.
+          URL="$(printf '%s' "$RESP" | jq -r '.claude_code_session_url // empty' 2>/dev/null || true)"
           if [ -n "$URL" ]; then
             gh issue comment "$ISSUE_NUMBER" --body "🤖 Build agent started for this issue — [watch the session]($URL)."
           else
-            gh issue comment "$ISSUE_NUMBER" --body "⚠️ Couldn't start the build agent. Routine response:
-          \`\`\`
-          $RESP
-          \`\`\`"
+            # Build the comment with printf so no YAML indentation leaks into the
+            # rendered markdown (which would break the code fence).
+            gh issue comment "$ISSUE_NUMBER" \
+              --body "$(printf '⚠️ Could not start the build agent. Routine response:\n```\n%s\n```' "$RESP")"
             exit 1
           fi
