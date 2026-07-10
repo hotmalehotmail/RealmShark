@@ -1,0 +1,78 @@
+name: release
+
+# The human ship button (full-spec §02). workflow_dispatch IS the release gate —
+# nothing publishes unless you run this by hand, which preserves the
+# never-release-without-an-explicit-ask rule.
+#
+# Dispatch from `staging` for an alpha, from `bridge` for a beta. Bump
+# overlay/package.json's version BEFORE dispatching (that's the single source of
+# truth for the tag, in-app version, and installer name).
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel
+        type: choice
+        options: [alpha, beta]
+        default: alpha
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    # Native Windows runner — electron-builder --win is far more reliable here
+    # than cross-building from macOS/Linux. Free on public repos.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 7.4.2
+      - name: Build bridge.jar
+        run: gradle bridgeJar   # -> build/libs/bridge.jar (electron-builder bundles this)
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22 # overlay/package.json engines: node >=22.12.0
+          cache: npm
+          cache-dependency-path: overlay/package-lock.json
+      # Full install here (native rebuild included) — the Windows packaging step
+      # needs the compiled addon, and windows-latest has the build tools for it.
+      - name: Install overlay deps
+        working-directory: overlay
+        run: npm ci
+
+      - name: Build + package (Windows x64)
+        working-directory: overlay
+        run: |
+          npm run build
+          npx electron-builder --win --x64   # -> overlay/dist/realmshark-overlay-<version>-setup.exe
+
+      - name: Read version
+        id: v
+        shell: bash
+        run: echo "version=$(node -p "require('./overlay/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          TAG="v${{ steps.v.outputs.version }}"
+          # The updater matches assets by /-setup\.exe$/i, which the electron-builder
+          # artifact name already satisfies — no rename needed.
+          gh release create "$TAG" --prerelease \
+            --title "Overlay $TAG (${{ inputs.channel }})" \
+            --notes "Automated ${{ inputs.channel }} build from ${{ github.ref_name }}." \
+            overlay/dist/*-setup.exe build/libs/bridge.jar
+
+  # TODO (optional): a preceding job that runs a Haiku "captain" agent to draft
+  # release notes from the Conventional Commits since the last tag, and a step to
+  # bump overlay/package.json + commit before tagging (kept manual for now so a
+  # dispatch can never silently rewrite the version).
