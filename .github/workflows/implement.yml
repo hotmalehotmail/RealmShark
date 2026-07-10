@@ -45,16 +45,15 @@ jobs:
             gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "⚙️ \`$LABEL\` applied, but the build-agent routine isn't wired up yet (missing ROUTINE_FIRE_URL / ROUTINE_FIRE_TOKEN secrets). See docs/build-agent-routine.md."
             exit 0
           fi
-          # DECISIVE PROBE: exact docs-shaped request with a minimal hardcoded body.
-          echo "probing /fire with a minimal hardcoded body..."
+          TEXT="$(printf 'Work item from GitHub issue #%s in %s (label: %s).\nTitle: %s\n\n%s' \
+            "$ISSUE_NUMBER" "$REPO" "$LABEL" "$ISSUE_TITLE" "${ISSUE_BODY:-}")"
+          jq -nc --arg t "$TEXT" '{text: $t}' > /tmp/fire.json
           RESP="$(curl -sS -X POST "$FIRE_URL" \
             -H "Authorization: Bearer $FIRE_TOKEN" \
             -H "anthropic-version: 2023-06-01" \
             -H "anthropic-beta: experimental-cc-routine-2026-04-01" \
             -H "Content-Type: application/json" \
-            -d '{"text":"probe from implement.yml"}')"
-          echo "probe response: $RESP"
-          echo "curl exit: $?"
+            --data @/tmp/fire.json)"
           # `|| true` so a non-JSON response (HTML error page, empty body) doesn't
           # abort the step under `set -e` before the else-branch can report it.
           URL="$(printf '%s' "$RESP" | jq -r '.claude_code_session_url // empty' 2>/dev/null || true)"
