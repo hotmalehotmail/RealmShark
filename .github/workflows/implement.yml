@@ -42,7 +42,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${FIRE_URL:-}" ] || [ -z "${FIRE_TOKEN:-}" ]; then
-            gh issue comment "$ISSUE_NUMBER" --body "⚙️ \`$LABEL\` applied, but the build-agent routine isn't wired up yet (missing ROUTINE_FIRE_URL / ROUTINE_FIRE_TOKEN secrets). See docs/build-agent-routine.md."
+            gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "⚙️ \`$LABEL\` applied, but the build-agent routine isn't wired up yet (missing ROUTINE_FIRE_URL / ROUTINE_FIRE_TOKEN secrets). See docs/build-agent-routine.md."
             exit 0
           fi
           TEXT="$(printf 'Work item from GitHub issue #%s in %s (label: %s).\nTitle: %s\n\n%s' \
@@ -58,11 +58,11 @@ jobs:
           # abort the step under `set -e` before the else-branch can report it.
           URL="$(printf '%s' "$RESP" | jq -r '.claude_code_session_url // empty' 2>/dev/null || true)"
           if [ -n "$URL" ]; then
-            gh issue comment "$ISSUE_NUMBER" --body "🤖 Build agent started for this issue — [watch the session]($URL)."
+            gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "🤖 Build agent started for this issue — [watch the session]($URL)."
           else
             # Build the comment with printf so no YAML indentation leaks into the
             # rendered markdown (which would break the code fence).
-            gh issue comment "$ISSUE_NUMBER" \
+            gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
               --body "$(printf '⚠️ Could not start the build agent. Routine response:\n```\n%s\n```' "$RESP")"
             exit 1
           fi
