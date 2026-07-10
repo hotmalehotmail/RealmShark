@@ -37,7 +37,6 @@ public class SpritePackService {
     private final Gson gson = new Gson();
     private String cachedVersion;
     private String cachedPackJson;
-    private boolean diagDumped = false; // TEMP one-shot guard for [asset-inv]
 
     /** True once real object assets are loaded and the character atlas exists on disk. */
     public synchronized boolean ready() {
@@ -165,36 +164,12 @@ public class SpritePackService {
         //   textile(high byte = tile size): [10, atlasId, x, y, w, h]
         JsonObject dyeTable = buildDyeTable(sfb);
         root.add("dyeTable", dyeTable);
+        // animDyeTable: dyeId -> [type, speed, pivotX, pivotY] for animated cloths.
+        JsonObject animDyeTable = buildAnimDyeTable(sfb);
+        root.add("animDyeTable", animDyeTable);
         System.out.println("[sprite-pack] built " + v + ": table=" + table.size()
             + " maskTable=" + maskTable.size() + " dyeTable=" + dyeTable.size()
-            + " animTable=" + animTable.size());
-
-        // TEMP [asset-inv] One-shot consolidated hunt for the per-cloth textile
-        // scroll/rotate data (cloth_bazaar was a dead end - it's a map file).
-        // (1) Full embedded-asset inventory: re-parses resources.assets off the
-        // pack-build path, so on a background thread. (2) Full sprite-group
-        // inventory (unfiltered animation stats). Both print [asset-inv] lines.
-        if (!diagDumped) {
-            diagDumped = true;
-            new Thread(() -> {
-                assets.resextractor.UnityExtractor.dumpAssetInventory(
-                    assets.AssetExtractor.assetFile());
-                assets.SpriteFlatBuffer.dumpAllGroups();
-            }, "asset-inv-dump").start();
-        }
-
-        // TEMP [dye-anim] Scan character (player/skin) and textile groups for
-        // indices that actually animate (>1 frame), regardless of what's
-        // equipped, to confirm the frame extraction and locate animated ones.
-        try {
-            for (String g : new String[]{
-                "players", "playerskins", "playerskins16", "playerskins32",
-                "textile4x4", "textile5x5", "textile9x9", "textile10x10"}) {
-                System.out.println("[dye-anim] " + sfb.describeAnimatedIndices(g));
-            }
-        } catch (Exception e) {
-            System.out.println("[dye-anim] failed: " + e);
-        }
+            + " animDyeTable=" + animDyeTable.size() + " animTable=" + animTable.size());
 
         cachedVersion = v;
         cachedPackJson = gson.toJson(root);
@@ -202,6 +177,25 @@ public class SpritePackService {
     }
 
     private JsonObject cachedDyeTable;
+    private JsonObject cachedAnimDyeTable;
+
+    /** Parses an integer attribute {@code name="123"} out of an XML tag body, or {@code def}. */
+    private static int intAttr(String tagBody, String name, int def) {
+        java.util.regex.Matcher a = java.util.regex.Pattern
+            .compile(name + "=\"(-?\\d+)\"").matcher(tagBody);
+        if (!a.find()) return def;
+        try {
+            return Integer.parseInt(a.group(1));
+        } catch (Exception e) {
+            return def;
+        }
+    }
+
+    /** Animated dye table built alongside {@link #buildDyeTable}; call that first. */
+    private synchronized JsonObject buildAnimDyeTable(SpriteFlatBuffer sfb) {
+        buildDyeTable(sfb);
+        return cachedAnimDyeTable;
+    }
 
     /**
      * Builds {@code dyeId -> cloth} by scanning the extracted object XML for
@@ -215,21 +209,28 @@ public class SpritePackService {
      * its animation frames' atlas rects and emitted as
      * {@code [10, atlasId, x0,y0,w0,h0, x1,y1,w1,h1, ...]} (one 4-tuple per
      * frame; a static cloth is a single frame).
+     * <p>Also builds {@link #cachedAnimDyeTable}: {@code dyeId -> [type, speed,
+     * pivotX, pivotY]} from each dye's optional {@code <AnimatedDye>} element
+     * (present only on animated cloths), so the renderer can scroll/rotate the
+     * tiling. {@code type} selects the motion (scroll direction / rotate).
      */
     private synchronized JsonObject buildDyeTable(SpriteFlatBuffer sfb) {
         if (cachedDyeTable != null) return cachedDyeTable;
         JsonObject dyeTable = new JsonObject();
-        int[] xmlDump = {0}; // TEMP [asset-inv] # of textile-dye bodies printed
+        JsonObject animDyeTable = new JsonObject();
         java.io.File xmlDir = new java.io.File("assets/xml");
         java.io.File[] files = xmlDir.listFiles((d, n) -> n.endsWith("xml"));
         if (files == null) {
             cachedDyeTable = dyeTable;
+            cachedAnimDyeTable = animDyeTable;
             return dyeTable;
         }
         java.util.regex.Pattern objP = java.util.regex.Pattern.compile(
             "<Object type=\"(0x[0-9a-fA-F]+)\"[^>]*>(.*?)</Object>", java.util.regex.Pattern.DOTALL);
         java.util.regex.Pattern texP = java.util.regex.Pattern.compile(
             "<Tex[12]>(0x[0-9a-fA-F]+)</Tex[12]>");
+        java.util.regex.Pattern animP = java.util.regex.Pattern.compile(
+            "<AnimatedDye\\b([^>]*)/>");
         for (java.io.File f : files) {
             String txt;
             try {
@@ -268,14 +269,6 @@ public class SpritePackService {
                     // per frame (a static cloth is just a single frame).
                     int size = (int) high;
                     int idx = (int) (tex & 0xFFFFFF);
-                    // TEMP [asset-inv] Print the full <Object> body of the first
-                    // few textile dyes to reveal any schema field beyond Tex1
-                    // (e.g. an animation/scroll-direction attribute we ignore).
-                    if (xmlDump[0] < 6) {
-                        xmlDump[0]++;
-                        System.out.println("[asset-inv] textile-dye type=" + m.group(1)
-                            + " tex=" + t.group(1) + " body=" + body.trim());
-                    }
                     int[][] frames = null;
                     try {
                         frames = sfb.getAnimationFrames("textile" + size + "x" + size, idx);
@@ -293,9 +286,24 @@ public class SpritePackService {
                     }
                 }
                 dyeTable.add(String.valueOf(id), arr);
+
+                // Optional <AnimatedDye type speed pivotX pivotY/> (animated
+                // cloths only) -> [type, speed, pivotX, pivotY]. The renderer
+                // uses `type` to scroll/rotate the cloth tiling at `speed`.
+                java.util.regex.Matcher ad = animP.matcher(body);
+                if (ad.find()) {
+                    String attrs = ad.group(1);
+                    JsonArray anim = new JsonArray();
+                    anim.add(intAttr(attrs, "type", 0));
+                    anim.add(intAttr(attrs, "speed", 0));
+                    anim.add(intAttr(attrs, "pivotX", 0));
+                    anim.add(intAttr(attrs, "pivotY", 0));
+                    animDyeTable.add(String.valueOf(id), anim);
+                }
             }
         }
         cachedDyeTable = dyeTable;
+        cachedAnimDyeTable = animDyeTable;
         return dyeTable;
     }
 }

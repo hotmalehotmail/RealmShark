@@ -102,4 +102,15 @@ export interface SpritePack {
    * use `table`/`maskTable` instead.
    */
   animTable?: Record<string, number[]>
+  /**
+   * dyeId -> animated-cloth motion `[type, speed, pivotX, pivotY]`, from the dye
+   * object's optional `<AnimatedDye>` element (present only on animated cloths).
+   * The renderer scrolls/rotates the tiled pattern by this; `type` selects the
+   * motion and the sign of `speed` its direction:
+   *   type 1 = horizontal scroll (+speed left, -speed right)
+   *   type 2 = vertical scroll   (+speed down, -speed up)
+   *   type 3 = rotate            (+speed counter-clockwise)
+   * pivotX/pivotY offset the rotation center (0,0 = tile center).
+   */
+  animDyeTable?: Record<string, number[]>
 }

@@ -32,6 +32,12 @@ export interface SpriteContextValue {
     clothingDye?: number | null,
     accessoryDye?: number | null
   ) => boolean
+  /**
+   * Whether a clothing/accessory dye scrolls/rotates continuously (has an
+   * <AnimatedDye>), as opposed to a multi-frame textile. Lets a <Sprite> pick
+   * the smooth animation tick instead of the coarse frame rate.
+   */
+  dyeAnimated: (clothingDye?: number | null, accessoryDye?: number | null) => boolean
   /** Milliseconds per animation frame (from Settings). */
   frameMs: number
 }
@@ -41,6 +47,7 @@ export const SpriteContext = createContext<SpriteContextValue>({
   getSprite: () => null,
   getDyedSprite: () => null,
   isAnimated: () => false,
+  dyeAnimated: () => false,
   frameMs: 200
 })
 

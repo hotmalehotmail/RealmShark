@@ -302,7 +302,10 @@ app.whenReady().then(() => {
       ...next,
       toggleHotkey: hotkeyRegistered ? next.toggleHotkey : settings.toggleHotkey,
       // Clamp to a sane range so a bad value can't stall or thrash the render loop.
-      textileAnimMs: Math.min(2000, Math.max(50, Math.round(next.textileAnimMs))) || 200
+      textileAnimMs: Math.min(2000, Math.max(50, Math.round(next.textileAnimMs))) || 200,
+      // Cloth scroll/rotate rates are floats; NaN/missing falls back via `|| default`.
+      textileScrollSpeed: Math.min(20, Math.max(0.1, next.textileScrollSpeed)) || 1.5,
+      textileRotateSpeed: Math.min(3, Math.max(0.01, next.textileRotateSpeed)) || 0.15
     }
     persistSettings(settings)
 

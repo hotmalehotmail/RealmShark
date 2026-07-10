@@ -70,6 +70,44 @@ function ConfigWindow(): React.JSX.Element {
         </p>
       </div>
 
+      <div>
+        <label className="mb-1 block text-white/70">
+          Cloth scroll speed:{' '}
+          <span className="font-mono">{settings.textileScrollSpeed.toFixed(1)}</span>
+        </label>
+        <input
+          type="range"
+          min={0.1}
+          max={8}
+          step={0.1}
+          className="w-full"
+          value={settings.textileScrollSpeed}
+          onChange={(e) => setSettings({ ...settings, textileScrollSpeed: Number(e.target.value) })}
+        />
+        <p className="mt-1 text-xs text-white/40">
+          How fast scrolling cloths (horizontal/vertical) move. Higher = faster. Applies on Save.
+        </p>
+      </div>
+
+      <div>
+        <label className="mb-1 block text-white/70">
+          Cloth rotate speed:{' '}
+          <span className="font-mono">{settings.textileRotateSpeed.toFixed(2)}</span>
+        </label>
+        <input
+          type="range"
+          min={0.01}
+          max={1}
+          step={0.01}
+          className="w-full"
+          value={settings.textileRotateSpeed}
+          onChange={(e) => setSettings({ ...settings, textileRotateSpeed: Number(e.target.value) })}
+        />
+        <p className="mt-1 text-xs text-white/40">
+          How fast rotating (vortex) cloths spin. Higher = faster. Applies on Save.
+        </p>
+      </div>
+
       <div className="mt-auto flex items-center gap-3">
         <button
           className="rounded bg-sky-600 px-3 py-1.5 font-medium hover:bg-sky-500"

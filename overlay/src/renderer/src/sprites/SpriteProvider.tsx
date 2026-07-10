@@ -13,6 +13,19 @@ const TEXTILE_SUB = 5
 // [x, y, w, h, spriteAtlasId, maskX, maskY, maskW, maskH].
 const FRAME_STRIDE = 9
 
+// Animated-cloth motion, driven by a dye's <AnimatedDye type speed …> (see
+// animDyeTable). `type` picks the motion; the sign of `speed` its direction:
+//   type 1 = horizontal scroll (+ = left,  - = right)
+//   type 2 = vertical scroll   (+ = down,  - = up)
+//   type 3 = rotate            (+ = counter-clockwise)
+// The dye's `speed` is scaled into output pattern-pixels/sec (scroll) and
+// radians/sec (rotate) by the `textileScrollSpeed` / `textileRotateSpeed`
+// settings (live-tunable, no rebuild). The motion is continuous, so
+// animated-cloth sprites tick at DYE_ANIM_MS (not the coarser frame rate), and
+// the rotation angle is quantized to ROT_STEPS to bound the per-sprite cache.
+const ROT_STEPS = 60
+export const DYE_ANIM_MS = 50
+
 /** Crop an atlas region into an ImageData, for pixel-level dye compositing. */
 function regionImageData(
   img: ImageBitmap | HTMLImageElement,
@@ -47,10 +60,20 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
   // Animation frame duration (Settings). Each animated <Sprite> ticks itself at
   // this rate; getSprite/getDyedSprite read the current frame from the clock.
   const [frameMs, setFrameMs] = useState(DEFAULT_SETTINGS.textileAnimMs)
+  // Live-tunable rates for continuous cloth scroll (px/sec) and rotate (rad/sec)
+  // per unit of the dye's own speed - so the in-game feel can be dialed in
+  // without a rebuild.
+  const [scrollSpeed, setScrollSpeed] = useState(DEFAULT_SETTINGS.textileScrollSpeed)
+  const [rotateSpeed, setRotateSpeed] = useState(DEFAULT_SETTINGS.textileRotateSpeed)
 
   useEffect(() => {
-    window.overlay.getSettings().then((s) => setFrameMs(s.textileAnimMs))
-    const off = window.overlay.onSettingsChanged((s) => setFrameMs(s.textileAnimMs))
+    const apply = (s: typeof DEFAULT_SETTINGS): void => {
+      setFrameMs(s.textileAnimMs)
+      setScrollSpeed(s.textileScrollSpeed)
+      setRotateSpeed(s.textileRotateSpeed)
+    }
+    window.overlay.getSettings().then(apply)
+    const off = window.overlay.onSettingsChanged(apply)
     return () => {
       off()
     }
@@ -140,6 +163,18 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
     [pack]
   )
 
+  // A clothing/accessory dye that carries an <AnimatedDye> (animDyeTable) scrolls
+  // or rotates continuously - distinct from multi-frame textiles (which cycle
+  // discrete frames). Used to pick the smooth DYE_ANIM_MS tick.
+  const dyeAnimated = useCallback(
+    (clothingDye?: number | null, accessoryDye?: number | null): boolean => {
+      const has = (id?: number | null): boolean =>
+        !!id && !!pack.animDyeTable?.[String(id)] && pack.dyeTable?.[String(id)]?.[0] === 10
+      return has(clothingDye) || has(accessoryDye)
+    },
+    [pack]
+  )
+
   const isAnimated = useCallback(
     (
       objectType: number | null | undefined,
@@ -156,9 +191,13 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
         const e = id ? pack.dyeTable?.[String(id)] : undefined
         return !!e && e[0] === 10 && (e.length - 2) / 4 > 1
       }
-      return textileAnim(clothingDye) || textileAnim(accessoryDye)
+      return (
+        textileAnim(clothingDye) ||
+        textileAnim(accessoryDye) ||
+        dyeAnimated(clothingDye, accessoryDye)
+      )
     },
-    [pack]
+    [pack, dyeAnimated]
   )
 
   const getSprite = useCallback(
@@ -236,9 +275,47 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       const clothingFrame = frameOf(clothingEntry)
       const accessoryFrame = frameOf(accessoryEntry)
 
+      // Continuous scroll/rotate for a dye with an <AnimatedDye> (animDyeTable).
+      // The motion is time-driven; we quantize it (scroll offset mod the pattern
+      // size, rotation to ROT_STEPS) so the frame cache stays bounded.
+      type TileAnim =
+        | { mode: 'scroll'; ox: number; oy: number }
+        | { mode: 'rotate'; angle: number; pivotX: number; pivotY: number }
+      const animFor = (id: number | null | undefined, e: number[] | undefined): TileAnim | null => {
+        if (!e || e[0] !== 10 || !id) return null
+        const a = pack.animDyeTable?.[String(id)]
+        if (!a) return null
+        const [type, speed, pivotX = 0, pivotY = 0] = a
+        const pw = e[4] || 1
+        const ph = e[5] || 1
+        const t = now / 1000
+        const wrap = (v: number, m: number): number => ((Math.floor(v) % m) + m) % m
+        if (type === 1 || type === 2) {
+          const disp = speed * scrollSpeed * t
+          // +x sample offset scrolls the pattern left; -y offset scrolls it down.
+          return type === 1
+            ? { mode: 'scroll', ox: wrap(disp, pw), oy: 0 }
+            : { mode: 'scroll', ox: 0, oy: wrap(-disp, ph) }
+        }
+        if (type === 3) {
+          const step =
+            ((Math.round((speed * rotateSpeed * t * ROT_STEPS) / (2 * Math.PI)) % ROT_STEPS) +
+              ROT_STEPS) %
+            ROT_STEPS
+          return { mode: 'rotate', angle: (step / ROT_STEPS) * 2 * Math.PI, pivotX, pivotY }
+        }
+        return null
+      }
+      const clothingAnim = animFor(clothingDye, clothingEntry)
+      const accessoryAnim = animFor(accessoryDye, accessoryEntry)
+      const animKey = (a: TileAnim | null): string =>
+        !a ? '' : a.mode === 'scroll' ? `s${a.ox},${a.oy}` : `r${a.angle.toFixed(3)}`
+
       const key = `dye:${baseType}:${size}:${clothingEntry ? clothingDye : 0}:${
         accessoryEntry ? accessoryDye : 0
-      }:${bFrame}:${clothingFrame}:${accessoryFrame}`
+      }:${bFrame}:${clothingFrame}:${accessoryFrame}:${animKey(clothingAnim)}:${animKey(
+        accessoryAnim
+      )}`
       const cached = cacheRef.current.get(key)
       if (cached) return cached
 
@@ -246,8 +323,12 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       // current frame cropped from its atlas rect). Both get mask-shaded below.
       type DyeSrc =
         | { kind: 'solid'; rgb: [number, number, number] }
-        | { kind: 'textile'; pixels: ImageData; pw: number; ph: number }
-      const resolveDye = (e: number[] | undefined, frame: number): DyeSrc | null => {
+        | { kind: 'textile'; pixels: ImageData; pw: number; ph: number; anim: TileAnim | null }
+      const resolveDye = (
+        e: number[] | undefined,
+        frame: number,
+        anim: TileAnim | null
+      ): DyeSrc | null => {
         if (!e) return null
         if (e[0] === 1) return { kind: 'solid', rgb: [e[1], e[2], e[3]] }
         if (e[0] === 10) {
@@ -256,12 +337,12 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
           const img = atlasesRef.current[String(atlasId)]
           if (!img) return null // atlas not decoded yet
           const d = regionImageData(img, e[o], e[o + 1], e[o + 2], e[o + 3])
-          return d ? { kind: 'textile', pixels: d, pw: e[o + 2], ph: e[o + 3] } : null
+          return d ? { kind: 'textile', pixels: d, pw: e[o + 2], ph: e[o + 3], anim } : null
         }
         return null
       }
-      const clothing = resolveDye(clothingEntry, clothingFrame)
-      const accessory = resolveDye(accessoryEntry, accessoryFrame)
+      const clothing = resolveDye(clothingEntry, clothingFrame, clothingAnim)
+      const accessory = resolveDye(accessoryEntry, accessoryFrame, accessoryAnim)
       if (!clothing && !accessory) return getSprite(baseType, size) // atlases not ready
 
       const baseImg = atlasesRef.current[String(baseRect[0])]
@@ -317,7 +398,33 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
               ;[r, g, b] = src.rgb
             } else {
               // Tile the pattern across the region at the output (mask) scale.
-              const j = ((py % src.ph) * src.pw + (px % src.pw)) * 4
+              // Animated cloths offset (scroll) or rotate the sample coords first;
+              // both wrap into the pattern tile so it stays seamless.
+              let sx = px
+              let sy = py
+              if (src.anim) {
+                if (src.anim.mode === 'scroll') {
+                  sx = px + src.anim.ox
+                  sy = py + src.anim.oy
+                } else {
+                  // Rotate within the tile (about its center + pivot) so the spin
+                  // stays seamless across the tiling. +angle = counter-clockwise
+                  // on screen: since y is down, that's the screen-CW matrix.
+                  const lx = ((px % src.pw) + src.pw) % src.pw
+                  const ly = ((py % src.ph) + src.ph) % src.ph
+                  const cx = src.pw / 2 + src.anim.pivotX
+                  const cy = src.ph / 2 + src.anim.pivotY
+                  const dx = lx - cx
+                  const dy = ly - cy
+                  const cos = Math.cos(src.anim.angle)
+                  const sin = Math.sin(src.anim.angle)
+                  sx = cx + dx * cos - dy * sin
+                  sy = cy + dx * sin + dy * cos
+                }
+              }
+              const txp = ((Math.floor(sx) % src.pw) + src.pw) % src.pw
+              const typ = ((Math.floor(sy) % src.ph) + src.ph) % src.ph
+              const j = (typ * src.pw + txp) * 4
               r = src.pixels.data[j]
               g = src.pixels.data[j + 1]
               b = src.pixels.data[j + 2]
@@ -358,12 +465,12 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       cacheRef.current.set(key, url)
       return url
     },
-    [pack, getSprite, frameMs, baseFrame, baseSpriteRect, baseMaskRect]
+    [pack, getSprite, frameMs, scrollSpeed, rotateSpeed, baseFrame, baseSpriteRect, baseMaskRect]
   )
 
   return (
     <SpriteContext.Provider
-      value={{ ready: pack.ready, getSprite, getDyedSprite, isAnimated, frameMs }}
+      value={{ ready: pack.ready, getSprite, getDyedSprite, isAnimated, dyeAnimated, frameMs }}
     >
       {children}
     </SpriteContext.Provider>

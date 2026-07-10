@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useSprites } from './context'
+import { DYE_ANIM_MS } from './SpriteProvider'
 
 interface SpriteProps {
   /** The RotMG objectType to render. Null/undefined renders nothing. */
@@ -32,17 +33,21 @@ export function Sprite({
   accessoryDye,
   className
 }: SpriteProps): React.JSX.Element | null {
-  const { getSprite, getDyedSprite, isAnimated, frameMs } = useSprites()
+  const { getSprite, getDyedSprite, isAnimated, dyeAnimated, frameMs } = useSprites()
 
   // If this sprite animates (idle character frames or an animated textile dye),
-  // tick locally at the frame rate so it advances; static sprites never tick.
+  // tick locally so it advances; static sprites never tick. A continuously
+  // scrolling/rotating cloth ticks at the smooth DYE_ANIM_MS; frame-cycling
+  // sprites tick at the (coarser) configured frame rate.
   const [, setTick] = useState(0)
   const animated = isAnimated(objectType, clothingDye, accessoryDye)
+  const smooth = dyeAnimated(clothingDye, accessoryDye)
   useEffect(() => {
     if (!animated) return
-    const id = setInterval(() => setTick((t) => t + 1), Math.max(50, frameMs))
+    const interval = smooth ? DYE_ANIM_MS : Math.max(50, frameMs)
+    const id = setInterval(() => setTick((t) => t + 1), interval)
     return () => clearInterval(id)
-  }, [animated, frameMs])
+  }, [animated, smooth, frameMs])
 
   if (objectType == null) return null
 

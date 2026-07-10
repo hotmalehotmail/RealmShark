@@ -130,46 +130,4 @@ public class UnityExtractor {
         }
     }
 
-    // TEMP [asset-inv] Enumerate EVERY embedded TextAsset (name + size), flagging
-    // which the normal extraction discards (NON_XML_FILES), and print a short
-    // ASCII sniff of each discarded one's start. cloth_bazaar turned out to be a
-    // map file, not cloth data; this widens the search to find whatever asset (if
-    // any) actually holds per-cloth textile-animation data.
-    public static void dumpAssetInventory(File resourcesAssets) {
-        if (resourcesAssets == null || !resourcesAssets.exists()) {
-            System.out.println("[asset-inv] resources.assets not found");
-            return;
-        }
-        java.util.Set<String> discard = new java.util.HashSet<>(
-            java.util.Arrays.asList(TextAsset.NON_XML_FILES));
-        try {
-            Resources res = new Resources(resourcesAssets);
-            System.out.println("[asset-inv] textAssets: " + res.assetTextAsset.size());
-            // Stable, sorted-by-name listing so the log is easy to scan.
-            java.util.List<TextAsset> list = new java.util.ArrayList<>(res.assetTextAsset);
-            list.sort((a, b) -> String.valueOf(a.name).compareTo(String.valueOf(b.name)));
-            for (TextAsset t : list) {
-                int size = t.m_Script == null ? 0 : t.m_Script.length;
-                boolean dropped = discard.contains(t.name);
-                System.out.println("[asset-inv]   " + t.name + ": size=" + size
-                    + (dropped ? " [DISCARDED]" : ""));
-            }
-            // For discarded (non-XML) assets, sniff the start so a textile/cloth
-            // definition reveals itself by its content, not just its name.
-            for (TextAsset t : list) {
-                if (!discard.contains(t.name)) continue;
-                byte[] b = t.m_Script;
-                if (b == null) continue;
-                int n = Math.min(b.length, 96);
-                StringBuilder ascii = new StringBuilder();
-                for (int i = 0; i < n; i++) {
-                    int c = b[i] & 0xFF;
-                    ascii.append(c >= 32 && c < 127 ? (char) c : '.');
-                }
-                System.out.println("[asset-inv]   sniff " + t.name + "=" + ascii);
-            }
-        } catch (Throwable t) {
-            System.out.println("[asset-inv] dump failed: " + t);
-        }
-    }
 }
