@@ -1,9 +1,16 @@
-import { app, BrowserWindow, globalShortcut, ipcMain, Menu, nativeImage } from 'electron'
+import { app, BrowserWindow, globalShortcut, ipcMain, Menu, nativeImage, shell } from 'electron'
 import { join } from 'path'
+import { writeFile } from 'fs/promises'
 import { electronApp, is } from '@electron-toolkit/utils'
 import { OverlayController, OVERLAY_WINDOW_OPTS } from 'electron-overlay-window'
 import icon from '../../resources/icon.png?asset'
-import { IPC, type BridgeStatus, type SaveSettingsResult } from '../shared/ipc'
+import {
+  IPC,
+  type BridgeStatus,
+  type BugReportResult,
+  type PacketEnvelope,
+  type SaveSettingsResult
+} from '../shared/ipc'
 import type { PanelInstance } from '../shared/panels'
 import type { OverlaySettings } from '../shared/settings'
 import { startBridgeClient, stopBridgeClient } from './bridgeClient'
@@ -236,6 +243,11 @@ app.whenReady().then(() => {
 
   void ensureBridgeRunning(!supportsAttach)
 
+  // Rolling window of recent packets kept for the "Report bug" capture, so a
+  // bug found against the live game ships with a replayable trace.
+  const RECENT_PACKETS_MAX = 300
+  const recentPackets: PacketEnvelope[] = []
+
   startBridgeClient({
     onStatus: (status) => {
       currentBridgeStatus = status
@@ -247,6 +259,10 @@ app.whenReady().then(() => {
     onBatch: (packets) => {
       if (overlayWindow && !overlayWindow.isDestroyed()) {
         overlayWindow.webContents.send(IPC.packetBatch, packets)
+      }
+      recentPackets.push(...(packets as PacketEnvelope[]))
+      if (recentPackets.length > RECENT_PACKETS_MAX) {
+        recentPackets.splice(0, recentPackets.length - RECENT_PACKETS_MAX)
       }
     },
     onConnected: requestSpritePack,
@@ -262,6 +278,31 @@ app.whenReady().then(() => {
   ipcMain.handle(IPC.getAppVersion, (): string => app.getVersion())
 
   ipcMain.handle(IPC.getSpritePack, () => getSpritePack())
+
+  // Report bug: dump version + recent packets + main logs to a JSON file, reveal
+  // it so the user can drag it into the issue's repro field, and open the
+  // prefilled bug-report form. The capture is the linchpin — it lets a headless
+  // fix agent reproduce a live-game bug via FakePacketSource.
+  ipcMain.handle(IPC.reportBug, async (): Promise<BugReportResult> => {
+    const capture = {
+      version: app.getVersion(),
+      platform: process.platform,
+      arch: process.arch,
+      capturedAt: new Date().toISOString(),
+      bridgeStatus: currentBridgeStatus,
+      gameWindowTitle: settings.gameWindowTitle,
+      recentPackets,
+      mainLogs: getBufferedMainLogs()
+    }
+    const file = join(app.getPath('temp'), `realmshark-bug-${Date.now()}.json`)
+    await writeFile(file, JSON.stringify(capture, null, 2), 'utf8')
+    shell.showItemInFolder(file)
+    const version = encodeURIComponent(app.getVersion())
+    await shell.openExternal(
+      `https://github.com/hotmalehotmail/RealmShark/issues/new?template=bug_report.yml&version=${version}`
+    )
+    return { file }
+  })
 
   startUpdatePolling((info) => {
     if (overlayWindow && !overlayWindow.isDestroyed()) {
