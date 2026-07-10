@@ -1,0 +1,75 @@
+name: Bug report
+description: Report a bug for an agent to fix.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The fix agent runs **headless with no game**, so the single most valuable field
+        is the **repro capture**. Without a replayable packet capture, a bug that only
+        shows against the live client usually can't be reproduced or regression-tested.
+
+        > A **maintainer** applies the `agent:fix` label to dispatch the fix agent.
+  - type: input
+    id: version
+    attributes:
+      label: Build / version
+      description: From the Status panel (`app.getVersion()`), e.g. `0.9.25-alpha`.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: >
+        Doubles as spec — if the app did the wrong thing, this defines the right thing
+        (e.g. "DPS should zero on MapInfoPacket").
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Repro capture + logs (drag & drop)
+      description: >
+        The recent packet/JSON capture from the in-app "Report bug" button, plus the
+        overlay/bridge logs. This is what lets the headless agent reproduce the bug via
+        FakePacketSource and write a regression test.
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Overlay renderer (panels / UI)
+        - DPS engine
+        - Bridge / packet decode
+        - Asset pipeline (sprites / dyes)
+        - Updater / packaging
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - Low
+        - Medium
+        - High
+        - Critical
+    validations:
+      required: true

@@ -1,0 +1,51 @@
+name: ci
+
+# Ground-truth merge gate (full-spec §02, net 1). Runs on every PR into the
+# integration/release branches. This is the objective pass/fail that stands in
+# for a test suite the repo doesn't have yet.
+on:
+  pull_request:
+    branches: [staging, bridge]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  overlay:
+    name: overlay — typecheck + lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: overlay
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: overlay/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+
+  bridge:
+    name: bridge — compile + fat jar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      # Pin Gradle 7.4.2 here instead of committing a wrapper jar: the Shadow 7.0.0
+      # plugin breaks on Gradle 9, and `gradle/` is gitignored in this repo.
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 7.4.2
+      - run: gradle bridgeJar
+      # TODO: once a JUnit test module exists (DPS engine is the first target),
+      #       add a `gradle test` step here — that's the real ground-truth net.

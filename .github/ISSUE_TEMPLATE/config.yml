@@ -1,0 +1,3 @@
+# Force everything through the two structured forms — a blank issue can't be a
+# usable brief for an autonomous agent.
+blank_issues_enabled: false

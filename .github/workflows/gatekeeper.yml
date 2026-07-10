@@ -1,0 +1,46 @@
+name: gatekeeper
+
+# ============================================================================
+# DRAFT / STUB — intentionally disabled (`if: false`).
+# ----------------------------------------------------------------------------
+# Auto-merges an agent PR into `staging` once the ground-truth checks (ci.yml)
+# and the review verdict (review.yml) are both green — the piece that stands in
+# for your old "approve" click (full-spec §02).
+#
+# GitHub deliberately won't let a bot's approval satisfy branch protection, so
+# the pattern is: branch protection requires status checks (not human approval),
+# and this job flips on native auto-merge once they pass.
+#
+# PREREQUISITES before enabling (remove `if: false` only after all three):
+#   1. Branch protection on `staging`:
+#        - required status checks = `ci` + `review-verdict`
+#        - required approvals = 0
+#        - restrict who can push
+#   2. A merge-capable token as secret GATEKEEPER_TOKEN (a second GitHub App or a
+#      fine-grained PAT). The default GITHUB_TOKEN can't satisfy protection alone.
+#   3. review.yml must emit a `review-verdict` commit status (pass/fail). The
+#      code-review plugin posts comments today; converting its structured output
+#      into a status check is the one bit of real work left here.
+# ============================================================================
+on:
+  # TODO: real trigger once `review-verdict` exists, e.g. check_suite: { types: [completed] }
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  automerge:
+    if: false # DISABLED until the prerequisites above are met
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable auto-merge when ci + review-verdict are green
+        env:
+          GH_TOKEN: ${{ secrets.GATEKEEPER_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          # Once wired, gate on both checks == success, then hand off to native
+          # auto-merge (branch protection does the actual "wait for green"):
+          #   gh pr merge "$PR" --squash --auto
+          echo "gatekeeper stub — see prerequisites in the header before enabling"

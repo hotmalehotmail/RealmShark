@@ -1,0 +1,37 @@
+name: review
+
+# Independent agent review (full-spec §02, net 2). Posts an adversarial code
+# review on each PR, checked against the issue's acceptance criteria.
+#
+# Auth: uses a Claude Code OAuth token so it draws from a Claude Max/Pro
+# subscription instead of metered API billing. Generate one locally with
+#   claude setup-token
+# and store it as the repo secret CLAUDE_CODE_OAUTH_TOKEN. (Swap to
+# `anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}` to meter via the API.)
+#
+# NOTE: the code-review plugin posts inline comments today; turning its verdict
+# into a *gating status check* is the remaining work called out in gatekeeper.yml.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [staging, bridge]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    name: agent review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
+          plugins: "code-review@claude-code-plugins"
+          prompt: >
+            /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+          # Opus 4.8 for review — must be as capable as the builder, or it rubber-stamps.
+          claude_args: "--model claude-opus-4-8"

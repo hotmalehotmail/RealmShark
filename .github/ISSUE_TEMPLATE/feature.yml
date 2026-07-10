@@ -1,0 +1,56 @@
+name: Feature
+description: Propose a new feature or change for an agent to build.
+title: "[feature] "
+labels: ["feature"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Fill this out as the **brief for an autonomous agent** — the agent implements
+        from this text with no follow-up questions, so be specific. The clearer the
+        acceptance criteria, the less the agent has to guess.
+
+        > A **maintainer** applies the `agent:build` label to dispatch the build agent.
+        > This repo is public, so opening an issue on its own triggers nothing.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What should exist that doesn't today, and why.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: >
+        Concrete, checkable conditions for "done". These are the yardstick for the
+        review agent, any tests, and your alpha soak — vague criteria produce vague builds.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: area
+    attributes:
+      label: Area / files
+      description: >
+        Which part of the codebase this touches (e.g. `overlay/src/renderer/panels`,
+        `src/main/java/bridge/dps`). Keeps parallel agents on disjoint files.
+    validations:
+      required: true
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of scope
+      description: Anything the agent should explicitly NOT do.
+    validations:
+      required: false
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes / references
+      description: Prior art (e.g. upstream `tomato`/`potato` branches), links, constraints.
+    validations:
+      required: false
