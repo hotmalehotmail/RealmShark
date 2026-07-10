@@ -33,7 +33,7 @@ step that *runs* (driven) but is *not gated* (unenforced), or vice-versa.
 | 3 | Build agent → branch + PR | routine session (Opus 4.8) | GitHub App push scope; `claude/*` branch convention | 🟢 |
 | 4 | CI ground-truth checks | `pull_request` → `ci.yml` | branch protection required checks | 🟢 |
 | 5 | Independent review | `pull_request` → `review.yml` | workflow-validation guard | 🟢 verdict live |
-| 6 | Fix loop (review → re-fire builder, capped) | — | — | 🔴 |
+| 6 | Fix loop (review → re-fire builder, capped) | `workflow_run` of `review` → `fixloop.yml` | `review-verdict` status; `MAX_FIX_ROUNDS`; `agent:needs-human` freeze | 🟡 re-fire + escalate built; resume.yml + live-verify pending |
 | 7 | Gatekeeper auto-merge | `workflow_run` → arm auto-merge | native auto-merge + required checks | 🟢 verified (#19) |
 | 8 | Release (ship button) | `workflow_dispatch` → `release.yml` | manual-only dispatch | 🟢 (no captain notes) |
 | — | Branch protection | — | required checks (+ push restriction) | 🟢 verdict required (push restrict N/A on user repo) |
@@ -171,12 +171,18 @@ linchpin for §6 and §7. How it works:
 
 ## 6 · Fix loop — review requests changes → re-fire the builder (capped)
 
-**Status.** 🔴 Unbuilt. This is the single largest gap and the one most easily
-hand-waved, so it is specified in full below. Nothing today triggers on review
-events (`grep pull_request_review .github/workflows` → none).
+**Status.** 🟡 Partial — the converging path is built, the resume path and live
+verification are not. **Built:** `.github/workflows/fixloop.yml` (`on: workflow_run`
+of `review` → read `review-verdict` → round-count → re-fire in FIX MODE or escalate,
+per §6.1/§6.2) and the FIX-MODE branch of the routine prompt
+([build-agent-routine.md](build-agent-routine.md)). **Still to build:** `resume.yml`
++ the `agent:retry` label (§6.3), the gatekeeper's rebase-FIX-MODE on conflict
+(§6.5), and an end-to-end live verification (the loop hasn't yet run against a real
+change-request). Until the routine's live prompt is re-pasted with the FIX-MODE
+block, a re-fire is a no-op.
 
-**Depends on:** §5's `REQUEST_CHANGES` verdict, and §3's "operate on an existing
-branch" agent mode.
+**Depends on:** §5's `REQUEST_CHANGES` verdict (done), and §3's "operate on an existing
+branch" agent mode (done — the FIX-MODE prompt branch).
 
 ### 6.1 Normal (converging) path — exactly what happens
 
@@ -300,15 +306,19 @@ on merge. Nothing about the escalation leaves residue once resolved.
 
 ### 6.4 What must be built for §6
 
-- `fixloop.yml` (`on: workflow_run` of `review` → read `review-verdict` → round count,
-  re-fire, or escalate) — new. Uses the built-in `GITHUB_TOKEN`.
-- `resume.yml` (`on: pull_request` labeled `agent:retry` → dismiss reviews → re-fire) — new.
-- A repo label `agent:retry` (maintainer-applied resume trigger) — new.
-- FIX-MODE branch in the routine prompt (build-agent-routine.md) — edit.
-- FIX-MODE work-item construction in the fire call — new (shares the §1 `/fire` plumbing).
-- Repo variable `MAINTAINER_HANDLE` (escalation @-mention/assignee) — new.
-- **Conflict → rebase FIX MODE** — the branch described in §6.5.
-- §5 verdict (hard dependency).
+- ✅ `fixloop.yml` (`on: workflow_run` of `review` → read `review-verdict` → round count,
+  re-fire, or escalate) — **built.** Uses the built-in `GITHUB_TOKEN`.
+- ✅ FIX-MODE branch in the routine prompt (build-agent-routine.md) — **built** (but the
+  *live* routine prompt at claude.ai must be re-pasted; the doc edit alone doesn't take).
+- ✅ FIX-MODE work-item construction in the fire call — **built** (in `fixloop.yml`,
+  shares the §1 `/fire` plumbing).
+- ✅ Repo variable `MAINTAINER_HANDLE` (escalation @-mention/assignee) — already set.
+- ✅ §5 verdict (hard dependency) — done.
+- 🔲 `resume.yml` (`on: pull_request` labeled `agent:retry` → dismiss reviews → re-fire) — **next.**
+- 🔲 A repo label `agent:retry` (maintainer-applied resume trigger) — **next** (with resume.yml).
+- 🔲 **Conflict → rebase FIX MODE** — the gatekeeper branch described in §6.5 (the FIX-MODE
+  *prompt* already handles a rebase instruction; the gatekeeper doesn't yet emit one).
+- 🔲 Live end-to-end verification against a real change-request.
 - **No `GATEKEEPER_TOKEN` / PAT** — the `workflow_run` trigger (§6.1) sidesteps the
   recursion guard, and the re-fire happens through the routine (the `app/claude`
   App pushes, which already re-triggers CI/review). So the whole loop runs on the
@@ -531,8 +541,9 @@ Each item unlocks the next; do them in this order.
 5. ~~**Gatekeeper** (§7) → auto-merge on all-green.~~ **✅ Done & verified** — PR #19
    auto-merged into `staging` with zero human action (PR #25). **The happy path now
    closes.**
-6. **Fix loop** (§6) ← *next* → `fixloop.yml` + `resume.yml` + FIX-MODE prompt. Closes
-   the *iterate* path, with the exact 3-attempt cap and escalation above.
+6. **Fix loop** (§6) — `fixloop.yml` (re-fire + escalate) and the FIX-MODE routine-prompt
+   branch are **built**; `resume.yml` + the `agent:retry` label and a live end-to-end
+   run are what remain to fully close the *iterate* path (3-attempt cap + escalation).
 7. ~~**Workflow-parity guard** → prevents §5 from silently regressing.~~ **✅ Done &
    verified** — `workflow parity` ci job, required on both branches (PR #25).
 8. **Release captain** (§8, optional) → drafted notes.

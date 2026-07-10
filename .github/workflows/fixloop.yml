@@ -1,0 +1,145 @@
+name: fixloop
+
+# Fix loop (full-spec §02, mechanisms §6). When the review agent requests changes
+# on an agent PR, re-fire the build agent in FIX MODE to address the findings on the
+# SAME branch — bounded to MAX_FIX_ROUNDS automated attempts, after which it stops
+# and escalates the PR to a human instead of looping forever.
+#
+# Trigger: the COMPLETION of the `review` workflow (workflow_run). Why not
+# `pull_request_review`? The reviewer posts its verdict with the built-in
+# GITHUB_TOKEN, and GitHub's recursion guard suppresses workflow triggers for
+# GITHUB_TOKEN-caused events — so that trigger would silently never fire.
+# workflow_run fires regardless of which token produced the checks, so the whole
+# loop runs on the built-in token + the existing ROUTINE_FIRE_* secrets — no PAT.
+#
+# It reads the machine-readable `review-verdict` commit status (posted by review.yml)
+# on the reviewed SHA and acts ONLY on `failure`. `success`/absent/pending is a
+# no-op: the gatekeeper owns the pass path, and never re-firing on an absent verdict
+# means an infra hiccup in review can't kick off a spurious fix attempt.
+#
+# Round counting is stateless — the count of non-dismissed CHANGES_REQUESTED reviews
+# on the PR (dismissed reviews drop to state DISMISSED, so they're excluded). The
+# resume path (resume.yml, separate) dismisses reviews to reset the budget.
+on:
+  workflow_run:
+    workflows: [review]
+    types: [completed]
+
+permissions:
+  contents: read # read PR/reviews/status
+  issues: write # labels, assignee, escalation comment (PR labels/assignees go through the issues API)
+  pull-requests: write # comment, disable auto-merge
+
+jobs:
+  fix-or-escalate:
+    runs-on: ubuntu-latest
+    # Only PR-triggered review runs, same-repo (forks get no verdict anyway), agent branches.
+    if: >
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      startsWith(github.event.workflow_run.head_branch, 'claude/')
+    steps:
+      - name: Re-fire the build agent in FIX MODE, or escalate when the budget is spent
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD: ${{ github.event.workflow_run.head_branch }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          FIRE_URL: ${{ secrets.ROUTINE_FIRE_URL }}
+          FIRE_TOKEN: ${{ secrets.ROUTINE_FIRE_TOKEN }}
+          MAINTAINER: ${{ vars.MAINTAINER_HANDLE }}
+        run: |
+          set -euo pipefail
+          MAX_FIX_ROUNDS=3
+
+          # Add a label, creating it first if the repo doesn't have it (so the workflow
+          # doesn't silently no-op on a missing label — `agent:needs-human` is the
+          # gatekeeper's freeze signal, and `loop:N` are dynamic).
+          ensure_label() { # name color description
+            gh label create "$1" --repo "$REPO" --color "$2" --description "$3" --force >/dev/null 2>&1 || true
+            gh pr edit "$PR" --repo "$REPO" --add-label "$1" >/dev/null 2>&1 || true
+          }
+
+          # 1. The open agent PR for this head branch, targeting staging.
+          PR="$(gh pr list --repo "$REPO" --head "$HEAD" --base staging --state open \
+                  --json number -q '.[0].number')"
+          if [ -z "$PR" ] || [ "$PR" = "null" ]; then
+            echo "No open claude/* -> staging PR for $HEAD; nothing to do."
+            exit 0
+          fi
+
+          # 2. Read the review-verdict status on the reviewed SHA. Act ONLY on failure.
+          VERDICT="$(gh api "repos/$REPO/commits/$SHA/status" \
+                       -q '.statuses[] | select(.context=="review-verdict") | .state' 2>/dev/null | head -n1 || true)"
+          if [ "$VERDICT" != "failure" ]; then
+            echo "review-verdict on $SHA is '${VERDICT:-absent}' (not failure) — nothing to do."
+            exit 0
+          fi
+
+          # 3. Round count: non-dismissed CHANGES_REQUESTED reviews. The review that just
+          #    fired this run is included, so ROUNDS is 1 on the first change-request, etc.
+          #    Emit one line per matching review and count with wc -l — NOT `-q length`,
+          #    which under --paginate runs per-page and concatenates a count per page.
+          ROUNDS="$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" \
+                      -q '.[] | select(.state=="CHANGES_REQUESTED") | .id' 2>/dev/null | wc -l | tr -d ' ')"
+          echo "PR #$PR: change-request round $ROUNDS (cap $MAX_FIX_ROUNDS)."
+
+          if [ "$ROUNDS" -ge $((MAX_FIX_ROUNDS + 1)) ]; then
+            # ---- ESCALATE (§6.2): stop looping, flag the human. Halt by inaction — we
+            #      neither re-fire nor push, so nothing re-runs; the PR sits at its last
+            #      failing verdict (unmergeable) until a human unblocks it. ----
+            echo "Automated budget spent ($ROUNDS > $MAX_FIX_ROUNDS) — escalating."
+            ensure_label "agent:needs-human" "B60205" "Agent loop stalled — needs a maintainer"
+            # Clear any loop:* visibility labels from prior rounds.
+            LOOP_LABELS="$(gh pr view "$PR" --repo "$REPO" --json labels -q '.labels[].name' | grep '^loop:' || true)"
+            for L in $LOOP_LABELS; do gh pr edit "$PR" --repo "$REPO" --remove-label "$L" >/dev/null 2>&1 || true; done
+            # Disable any pending auto-merge so it can't merge while the human looks (harmless if none).
+            gh pr merge "$PR" --repo "$REPO" --disable-auto >/dev/null 2>&1 || true
+
+            SUMMARY="$(gh api "repos/$REPO/pulls/$PR/reviews" \
+                        -q '[.[] | select(.state=="CHANGES_REQUESTED")] | last | .body' 2>/dev/null || true)"
+            MENTION=""; ASSIGN=0
+            if [ -n "${MAINTAINER:-}" ]; then MENTION="@$MAINTAINER "; ASSIGN=1; fi
+            gh pr comment "$PR" --repo "$REPO" --body "$(printf '%s🛑 **Automated fix budget exhausted.** %s automated attempts did not clear review, so this PR is now yours (labeled `agent:needs-human`; auto-merge disabled).\n\nLatest reviewer summary:\n\n> %s\n\n**To unblock:** push your own fixes to `%s` (CI + review re-run automatically), or admin-merge if you accept it as-is. An `agent:retry` resume path that re-runs the agent with a fresh budget is a separate follow-up (resume.yml).' \
+              "$MENTION" "$MAX_FIX_ROUNDS" "${SUMMARY:-(no summary posted)}" "$HEAD")"
+            [ "$ASSIGN" -eq 1 ] && gh pr edit "$PR" --repo "$REPO" --add-assignee "$MAINTAINER" >/dev/null 2>&1 || true
+            echo "Escalated PR #$PR."
+            exit 0
+          fi
+
+          # ---- RE-FIRE (§6.1): FIX MODE work item to the routine. ----
+          if [ -z "${FIRE_URL:-}" ] || [ -z "${FIRE_TOKEN:-}" ]; then
+            echo "::warning::ROUTINE_FIRE_URL / ROUTINE_FIRE_TOKEN unset — cannot re-fire the agent."
+            gh pr comment "$PR" --repo "$REPO" --body "⚙️ Review requested changes, but the fix loop can't re-fire the build agent (missing ROUTINE_FIRE_* secrets). See docs/build-agent-routine.md."
+            exit 0
+          fi
+
+          # loop:<rounds> label for human visibility only (not read back).
+          ensure_label "loop:$ROUNDS" "FBCA04" "Fix-loop automated attempt #$ROUNDS"
+
+          # Gather the unresolved findings for the work item: latest reviewer summary +
+          # every inline review comment. The FIX-MODE agent also reads the full PR
+          # conversation itself, so this is a pointer, not the sole source of truth.
+          REVIEW_BODY="$(gh api "repos/$REPO/pulls/$PR/reviews" \
+                          -q '[.[] | select(.state=="CHANGES_REQUESTED")] | last | .body' 2>/dev/null || true)"
+          INLINE="$(gh api --paginate "repos/$REPO/pulls/$PR/comments" \
+                      -q '.[] | "- \(.path):\(.line // .original_line // "?"): \(.body)"' 2>/dev/null || true)"
+
+          # Untrusted review text goes to jq via --arg (never interpolated into the shell).
+          TEXT="$(printf 'FIX MODE. Repository %s. PR #%s, head branch `%s`, base `staging`.\nA reviewer requested changes. Check out `%s`, read the full PR conversation (review comments AND any maintainer comments) for guidance, address every unresolved finding below, and PUSH your fixes to `%s` — do NOT open a new PR. If you believe a finding is wrong, reply to that review comment explaining why instead of changing code.\n\nReviewer summary:\n%s\n\nInline review comments:\n%s\n' \
+            "$REPO" "$PR" "$HEAD" "$HEAD" "$HEAD" "${REVIEW_BODY:-(none)}" "${INLINE:-(none)}")"
+          jq -nc --arg t "$TEXT" '{text: $t}' > /tmp/fire.json
+
+          RESP="$(curl -sS -X POST "$FIRE_URL" \
+            -H "Authorization: Bearer $FIRE_TOKEN" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "anthropic-beta: experimental-cc-routine-2026-04-01" \
+            -H "Content-Type: application/json" \
+            --data @/tmp/fire.json)"
+          URL="$(printf '%s' "$RESP" | jq -r '.claude_code_session_url // empty' 2>/dev/null || true)"
+          if [ -n "$URL" ]; then
+            gh pr comment "$PR" --repo "$REPO" --body "🔧 Review requested changes — re-fired the build agent in **FIX MODE** (attempt $ROUNDS/$MAX_FIX_ROUNDS). [Watch the session]($URL)."
+          else
+            gh pr comment "$PR" --repo "$REPO" --body "$(printf '⚠️ Review requested changes but the FIX MODE re-fire failed. Routine response:\n```\n%s\n```' "$RESP")"
+            exit 1
+          fi
