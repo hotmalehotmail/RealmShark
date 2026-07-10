@@ -1,46 +1,63 @@
 name: gatekeeper
 
-# ============================================================================
-# DRAFT / STUB — intentionally disabled (`if: false`).
-# ----------------------------------------------------------------------------
-# Auto-merges an agent PR into `staging` once the ground-truth checks (ci.yml)
-# and the review verdict (review.yml) are both green — the piece that stands in
-# for your old "approve" click (full-spec §02).
+# Auto-merge agent PRs into staging once ci + review are green (full-spec §02).
 #
-# GitHub deliberately won't let a bot's approval satisfy branch protection, so
-# the pattern is: branch protection requires status checks (not human approval),
-# and this job flips on native auto-merge once they pass.
+# Triggers on the COMPLETION of the ci/review workflows. workflow_run fires
+# regardless of which token produced the checks (unlike pull_request_review, which
+# GitHub's recursion guard would suppress for the GITHUB_TOKEN-posted review) — so
+# no GATEKEEPER_TOKEN / PAT is needed; the built-in token suffices.
 #
-# PREREQUISITES before enabling (remove `if: false` only after all three):
-#   1. Branch protection on `staging`:
-#        - required status checks = `ci` + `review-verdict`
-#        - required approvals = 0
-#        - restrict who can push
-#   2. A merge-capable token as secret GATEKEEPER_TOKEN (a second GitHub App or a
-#      fine-grained PAT). The default GITHUB_TOKEN can't satisfy protection alone.
-#   3. review.yml must emit a `review-verdict` commit status (pass/fail). The
-#      code-review plugin posts comments today; converting its structured output
-#      into a status check is the one bit of real work left here.
-# ============================================================================
+# It doesn't evaluate the checks itself: it ARMS GitHub native auto-merge on the PR,
+# and branch protection (required checks = the two ci jobs + review-verdict) does the
+# actual "wait for green, then merge". A failing review-verdict just leaves auto-merge
+# waiting (the fix loop, §6, drives re-fires); its escalation sets `agent:needs-human`,
+# which this job refuses to re-arm past.
+#
+# Prereqs (both met): repo "Allow auto-merge" enabled; review-verdict is a required
+# check on staging + bridge.
 on:
-  # TODO: real trigger once `review-verdict` exists, e.g. check_suite: { types: [completed] }
-  workflow_dispatch: {}
+  workflow_run:
+    workflows: [ci, review]
+    types: [completed]
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: write # native auto-merge creates the squash commit
+  pull-requests: write # to enable auto-merge
 
 jobs:
-  automerge:
-    if: false # DISABLED until the prerequisites above are met
+  arm-auto-merge:
     runs-on: ubuntu-latest
+    # Only PR-triggered ci/review runs, and only agent branches.
+    if: >
+      github.event.workflow_run.event == 'pull_request' &&
+      startsWith(github.event.workflow_run.head_branch, 'claude/')
     steps:
-      - name: Enable auto-merge when ci + review-verdict are green
+      - name: Arm native auto-merge if the PR is eligible
         env:
-          GH_TOKEN: ${{ secrets.GATEKEEPER_TOKEN }}
-          PR: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD: ${{ github.event.workflow_run.head_branch }}
         run: |
-          # Once wired, gate on both checks == success, then hand off to native
-          # auto-merge (branch protection does the actual "wait for green"):
-          #   gh pr merge "$PR" --squash --auto
-          echo "gatekeeper stub — see prerequisites in the header before enabling"
+          set -euo pipefail
+          # The open agent PR for this head branch, targeting staging.
+          PR="$(gh pr list --repo "$REPO" --head "$HEAD" --base staging --state open \
+                  --json number,labels,autoMergeRequest -q '.[0]')"
+          if [ -z "$PR" ] || [ "$PR" = "null" ]; then
+            echo "No open claude/* -> staging PR for $HEAD; nothing to do."
+            exit 0
+          fi
+          NUM="$(printf '%s' "$PR" | jq -r '.number')"
+          if printf '%s' "$PR" | jq -e '.labels[]? | select(.name == "agent:needs-human")' >/dev/null; then
+            echo "PR #$NUM is frozen (agent:needs-human) — not arming auto-merge."
+            exit 0
+          fi
+          if [ "$(printf '%s' "$PR" | jq -r '.autoMergeRequest // "null"')" != "null" ]; then
+            echo "PR #$NUM already has auto-merge armed; nothing to do."
+            exit 0
+          fi
+          echo "Arming auto-merge on PR #$NUM."
+          # --auto hands off to native auto-merge; branch protection waits for all
+          # required checks (ci + review-verdict) before it actually merges. A conflict
+          # (DIRTY) makes this a no-op until resolved — that path is the fix loop's (§6.5).
+          gh pr merge "$NUM" --repo "$REPO" --squash --auto \
+            || echo "Could not arm auto-merge on #$NUM (likely conflicted/ineligible); leaving it."
