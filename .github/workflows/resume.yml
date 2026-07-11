@@ -7,8 +7,11 @@ name: resume
 # Security: applying a label requires write/triage permission, so GitHub already
 # guarantees the actor is a maintainer — the SAME gate as issue kickoff (§1). No
 # author_association check is needed. Agent PRs are same-repo (`claude/*`), so this
-# pull_request-triggered workflow has the secrets it needs (a fork PR gets none, but
-# its head isn't `claude/*` either, so the guard below no-ops it).
+# pull_request-triggered workflow has the secrets it needs. A fork PR is doubly safe:
+# `pull_request` from a fork receives NO secrets and only a read-only token, so the
+# re-fire and comment-deletion steps below can do nothing even if a maintainer retries
+# one — the `claude/*` head check is a convenience filter, not the security boundary
+# (a fork can name its head `claude/anything`).
 #
 # What it does:
 #   1. Resets the budget by DELETING fixloop's own `<!-- fixloop:refire -->` marker
@@ -52,7 +55,7 @@ jobs:
           FIRE_TOKEN: ${{ secrets.ROUTINE_FIRE_TOKEN }}
         run: |
           set -euo pipefail
-          MAX_FIX_ROUNDS=3
+          MAX_FIX_ROUNDS=3 # keep in sync with fixloop.yml (Actions has no cross-workflow constant)
           # Only agent branches (mirror fixloop's scoping); a human's PR labeled agent:retry is a no-op.
           case "$HEAD" in
             claude/*) ;;
