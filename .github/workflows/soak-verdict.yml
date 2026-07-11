@@ -1,0 +1,103 @@
+name: soak verdict
+
+# §9.2/9.3/9.4 — the maintainer's soak verdict, applied as a label on a soak tracking
+# issue (opened by `release staging`). Applying a label is maintainer-only (write
+# access), the same gate as issue kickoff (§1).
+#
+#   soak:pass -> promote staging -> bridge via a PR with a STAMPED review-verdict
+#                (soak:pass IS the approval; the agent review is skipped on promotion
+#                PRs by review.yml), auto-merged. When it lands, post-merge.yml cuts the
+#                latest release. Runs entirely on GITHUB_TOKEN — no elevated token.
+#   soak:fail -> fire the build agent (BUILD MODE) with the failure description to fix
+#                forward; the fix PR flows through the normal loop back to staging, and
+#                a fresh alpha auto-cuts (post-merge.yml).
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+  issues: write # comment on / close the soak issue
+  pull-requests: write # open the promotion PR + arm auto-merge
+  statuses: write # stamp review-verdict on the promotion PR
+
+jobs:
+  promote:
+    if: github.event.label.name == 'soak:pass'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Promote staging -> bridge (PR + stamped verdict + auto-merge)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          # Scope to soak issues only (a soak:pass on some other issue is a no-op).
+          if ! gh issue view "$ISSUE" --repo "$REPO" --json labels -q '.labels[].name' | grep -qx 'soak'; then
+            echo "Issue #$ISSUE is not a soak issue — ignoring."
+            exit 0
+          fi
+          # Open the promotion PR (or reuse an existing one). staging -> bridge.
+          gh pr create --repo "$REPO" --base bridge --head staging \
+            --title "Promote staging -> bridge (soak #$ISSUE passed)" \
+            --body "Auto-opened by \`soak:pass\` on #$ISSUE. \`review-verdict\` is stamped from the soak approval and the agent review is skipped on promotion PRs (see review.yml); CI + workflow parity still gate. A **latest** release auto-cuts when this lands." \
+            >/dev/null 2>&1 || echo "PR may already exist; continuing."
+          PR="$(gh pr list --repo "$REPO" --base bridge --head staging --state open --json number,headRefOid -q '.[0]')"
+          if [ -z "$PR" ] || [ "$PR" = "null" ]; then
+            gh issue comment "$ISSUE" --repo "$REPO" --body "⚠️ \`soak:pass\` — but there's nothing to promote (no diff between \`staging\` and \`bridge\`)."
+            exit 0
+          fi
+          NUM="$(printf '%s' "$PR" | jq -r '.number')"
+          SHA="$(printf '%s' "$PR" | jq -r '.headRefOid')"
+          # Stamp review-verdict=success — soak:pass is the human approval standing in for
+          # the (skipped) agent re-review. CI + parity still have to pass.
+          gh api -X POST "repos/$REPO/statuses/$SHA" \
+            -f state=success -f context=review-verdict -f description="soak:pass on #$ISSUE"
+          # Arm native auto-merge (merge commit preserves per-commit history + Closes #N).
+          gh pr merge "$NUM" --repo "$REPO" --merge --auto \
+            || echo "Could not arm auto-merge on #$NUM (will need a manual merge)."
+          gh issue comment "$ISSUE" --repo "$REPO" --body "✅ Soak passed — promoting to \`bridge\` via PR #$NUM. The latest release auto-cuts when it lands."
+          gh issue close "$ISSUE" --repo "$REPO"
+
+  fix:
+    if: github.event.label.name == 'soak:fail'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire the build agent to fix the soak failures (fix-forward)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+          TITLE: ${{ github.event.issue.title }}
+          BODY: ${{ github.event.issue.body }}
+          FIRE_URL: ${{ secrets.ROUTINE_FIRE_URL }}
+          FIRE_TOKEN: ${{ secrets.ROUTINE_FIRE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! gh issue view "$ISSUE" --repo "$REPO" --json labels -q '.labels[].name' | grep -qx 'soak'; then
+            echo "Issue #$ISSUE is not a soak issue — ignoring."
+            exit 0
+          fi
+          if [ -z "${FIRE_URL:-}" ] || [ -z "${FIRE_TOKEN:-}" ]; then
+            gh issue comment "$ISSUE" --repo "$REPO" --body "⚙️ \`soak:fail\` — but the fix agent can't be fired (missing ROUTINE_FIRE_* secrets)."
+            exit 0
+          fi
+          # Untrusted issue text (title/body/comments) -> jq via --arg, never the shell.
+          COMMENTS="$(gh api --paginate "repos/$REPO/issues/$ISSUE/comments" -q '.[] | "- \(.user.login): \(.body)"' 2>/dev/null || true)"
+          TEXT="$(printf 'ALPHA SOAK FAILED (%s, issue #%s). Reported broken during live Windows testing:\n\nTitle: %s\n\n%s\n\nMaintainer comments:\n%s\n\nDiagnose and fix EACH reported bug, fix-forward. Open ONE fix PR into `staging` (BUILD MODE). If a repro capture is included, reproduce it via FakePacketSource and add a regression test first. A fresh alpha will auto-cut for re-soak when your fix merges.' \
+            "$TITLE" "$ISSUE" "$TITLE" "${BODY:-(no body)}" "${COMMENTS:-(none)}")"
+          jq -nc --arg t "$TEXT" '{text: $t}' > /tmp/fire.json
+          RESP="$(curl -sS -X POST "$FIRE_URL" \
+            -H "Authorization: Bearer $FIRE_TOKEN" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "anthropic-beta: experimental-cc-routine-2026-04-01" \
+            -H "Content-Type: application/json" \
+            --data @/tmp/fire.json || true)"
+          URL="$(printf '%s' "$RESP" | jq -r '.claude_code_session_url // empty' 2>/dev/null || true)"
+          if [ -n "$URL" ]; then
+            gh issue comment "$ISSUE" --repo "$REPO" --body "🔧 Soak failures sent to the build agent to fix forward — [watch the session]($URL). A fix PR will open into \`staging\`; when it merges, a fresh alpha auto-cuts for re-soak."
+          else
+            gh issue comment "$ISSUE" --repo "$REPO" --body "$(printf '⚠️ \`soak:fail\` — but firing the fix agent failed. Routine response:\n```\n%s\n```' "$RESP")"
+            exit 1
+          fi

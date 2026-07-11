@@ -1,17 +1,23 @@
-name: release
+name: release staging
 
-# The human ship button (full-spec §02). workflow_dispatch IS the release gate —
-# nothing publishes unless you run this by hand, which preserves the
-# never-release-without-an-explicit-ask rule.
+# The release pipeline (full-spec §02, §8, §9).
 #
-# Dispatch from `staging` for an alpha, from `bridge` for a beta. Bump
-# overlay/package.json's version BEFORE dispatching (that's the single source of
-# truth for the tag, in-app version, and installer name).
+# Two channels, same build:
+#   alpha  — the SOAK build from `staging`. Manual dispatch starts a soak; while a soak
+#            is open, post-merge.yml auto-cuts fresh alphas. patch+1, `-alpha` suffix,
+#            published as a PRERELEASE, and opens a soak tracking issue (§9.1).
+#   beta   — the LATEST release from `bridge`. Auto-cut by post-merge.yml when a
+#            soak:pass promotion lands on `bridge` (§9.3). MINOR bump, no suffix,
+#            published as the "Latest" release (not a prerelease). No soak issue.
+#
+# The manual `workflow_dispatch` is still the human release gate — a soak only ever
+# starts because you press it (auto-cut re-releases are continuations of that soak).
+# Version auto-bumps from the latest published tag (§8); no manual bump needed.
 on:
   workflow_dispatch:
     inputs:
       channel:
-        description: Release channel
+        description: Release channel (alpha = staging soak build; beta = latest release)
         type: choice
         options: [alpha, beta]
         default: alpha
@@ -82,12 +88,13 @@ jobs:
     # running them concurrently: the download step can only see the artifact once the
     # notes job has finished, so a concurrent build could reach it first and silently
     # fall back to static notes. The captain (Haiku) is fast relative to the Windows
-    # build, and a release is a rare manual action, so the added latency is cheap
-    # insurance that a successful captain's notes are actually used.
+    # build, and a release is a rare action, so the added latency is cheap insurance
+    # that a successful captain's notes are actually used.
     needs: notes
     if: ${{ !cancelled() }} # publish even if the captain job hiccups (static fallback below)
     permissions:
       contents: write # gh release create
+      issues: write # open the soak tracking issue (alpha)
     # Native Windows runner — electron-builder --win is far more reliable here
     # than cross-building from macOS/Linux. Free on public repos.
     runs-on: windows-latest
@@ -115,32 +122,32 @@ jobs:
         working-directory: overlay
         run: npm ci
 
-      - name: Auto-bump the version (patch+1, channel-suffixed)
+      - name: Auto-bump the version (channel-aware)
         id: v
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          case "${{ inputs.channel }}" in
-            beta) SUFFIX="beta" ;;
-            *)    SUFFIX="alpha" ;;
-          esac
           # Seed from the latest published release tag — the record of what's actually
           # shipped — so versions increase monotonically without persisting anything back
-          # to the (protected) branch. Fall back to package.json for the very first
-          # release. Increment the patch, keep the channel suffix: v0.9.27-alpha -> 0.9.28-alpha.
+          # to a (protected) branch. Fall back to package.json for the very first release.
           LATEST="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName -q '.[0].tagName // empty' 2>/dev/null || true)"
           SEED="${LATEST#v}"
           SEED="${SEED:-$(node -p "require('./overlay/package.json').version")}"
-          CORE="${SEED%%-*}"
+          CORE="${SEED%%-*}" # strip any prerelease suffix
           IFS=. read -r MA MI PA <<< "$CORE"
-          NEW="${MA}.${MI}.$((PA + 1))-${SUFFIX}"
+          case "${{ inputs.channel }}" in
+            # LATEST release: a bigger (minor) bump, no prerelease suffix. 0.9.29-alpha -> 0.10.0
+            beta) NEW="${MA}.$((MI + 1)).0" ;;
+            # SOAK build: patch bump, -alpha suffix. 0.9.27-alpha -> 0.9.28-alpha
+            *)    NEW="${MA}.${MI}.$((PA + 1))-alpha" ;;
+          esac
           echo "version=$NEW" >> "$GITHUB_OUTPUT"
           # Write it into package.json so the built app (app.getVersion) + installer name
           # carry it. NEW is computed (semver chars only) — safe to interpolate.
           node -e "const fs=require('fs'),f='overlay/package.json',p=JSON.parse(fs.readFileSync(f));p.version='$NEW';fs.writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
-          echo "Auto-bumped ${SEED} -> ${NEW} (seed: ${LATEST:-package.json})."
+          echo "Auto-bumped ${SEED} -> ${NEW} (channel ${{ inputs.channel }}, seed: ${LATEST:-package.json})."
 
       - name: Build + package (Windows x64)
         working-directory: overlay
@@ -155,29 +162,42 @@ jobs:
           name: release-notes
           path: notes
 
-      - name: Publish prerelease
+      - name: Publish release
+        id: publish
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           TAG="v${{ steps.v.outputs.version }}"
+          # alpha -> prerelease; beta -> the "Latest" release (not a prerelease).
+          if [ "${{ inputs.channel }}" = "beta" ]; then RELFLAG="--latest"; else RELFLAG="--prerelease"; fi
           # The updater matches assets by /-setup\.exe$/i, which the electron-builder
           # artifact name already satisfies — no rename needed.
           NOTES_FILE="notes/release-notes.md"
           if [ -s "$NOTES_FILE" ]; then
-            echo "Publishing with captain-drafted notes."
-            gh release create "$TAG" --prerelease \
-              --title "Overlay $TAG (${{ inputs.channel }})" \
-              --notes-file "$NOTES_FILE" \
-              overlay/dist/*-setup.exe build/libs/bridge.jar
+            NOTESARG=(--notes-file "$NOTES_FILE")
           else
-            echo "No drafted notes — falling back to a static note."
-            gh release create "$TAG" --prerelease \
-              --title "Overlay $TAG (${{ inputs.channel }})" \
-              --notes "Automated ${{ inputs.channel }} build from ${{ github.ref_name }}." \
-              overlay/dist/*-setup.exe build/libs/bridge.jar
+            NOTESARG=(--notes "Automated ${{ inputs.channel }} build from ${{ github.ref_name }}.")
           fi
+          gh release create "$TAG" $RELFLAG \
+            --title "Overlay $TAG (${{ inputs.channel }})" \
+            "${NOTESARG[@]}" \
+            overlay/dist/*-setup.exe build/libs/bridge.jar
+          echo "url=https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" >> "$GITHUB_OUTPUT"
 
-  # TODO (optional): auto-bump overlay/package.json + commit before tagging (kept
-  # manual for now so a dispatch can never silently rewrite the version).
+      - name: Open the soak tracking issue (alpha only)
+        if: ${{ inputs.channel == 'alpha' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.v.outputs.version }}
+          REL_URL: ${{ steps.publish.outputs.url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          NOTES_FILE="notes/release-notes.md"
+          if [ -s "$NOTES_FILE" ]; then CHANGES="$(cat "$NOTES_FILE")"; else CHANGES="_(see the release for the change list)_"; fi
+          BODY="$(printf 'Installer to test: %s\n\n### What changed\n%s\n\n### To verify\nInstall on the Windows PC and test against the live game, then apply a verdict label:\n\n- ✅ **Works** — apply `soak:pass`. Promotes `staging` to `bridge` and cuts a **latest** release.\n- ❌ **Broken** — describe each bug below (steps / expected / actual; add a FakePacketSource repro capture for packet/DPS/decode bugs), then apply `soak:fail`. The build agent fixes forward and a fresh alpha auto-cuts for re-soak.\n\n> While this soak is open, any change merged to `staging` auto-cuts a fresh alpha and supersedes this issue.' \
+            "$REL_URL" "$CHANGES")"
+          gh label create soak --repo "$GITHUB_REPOSITORY" --color 5319E7 --description "Alpha soak tracking issue" --force >/dev/null 2>&1 || true
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "🧪 Alpha soak: v$VERSION" --label soak --body "$BODY"
