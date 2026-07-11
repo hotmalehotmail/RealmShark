@@ -66,13 +66,30 @@ jobs:
             The repo is checked out — read surrounding files for context, and consult
             CLAUDE.md for the project's conventions and the wire-format contract.
 
-            Review for BOTH, weighting them equally:
+            Review for ALL THREE, weighting them equally:
             1. Correctness — bugs, wrong logic, unhandled edge cases, race conditions,
                broken contracts (e.g. Java packet fields vs. the TS types that consume them).
             2. Code quality — readability, maintainability, clear naming, right-sized
                abstraction, error handling at boundaries; no magic numbers, dead code, or
                duplicated logic; consistency with existing patterns and CLAUDE.md. The bar
                is: would a careful maintainer be happy to own this code?
+            3. Documentation accuracy — the `docs/` tree is a required deliverable, not
+               optional. Two kinds of drift are `high`-severity findings:
+               (a) Stale docs — this PR changes behavior, structure, data flow, or any
+                   fact a `docs/` file describes (use `docs/README.md` as the index)
+                   without updating that doc; a present-but-incomplete/now-wrong update
+                   counts too.
+               (b) Undocumented new surface — this PR adds something a maintainer would
+                   need docs to understand (a new subsystem/service/module boundary, a new
+                   wire-format/IPC/protocol contract, or a new cross-cutting mechanism
+                   future work builds on) but ships NO doc for it (a new `docs/` file or a
+                   substantial new section, plus a `docs/README.md` index entry — and an
+                   `architecture.md` mention if architecturally significant).
+               Judge by whether a future maintainer would be lost without the doc, NOT by
+               diff size. Do NOT require docs for work that is merely another instance of
+               an already-documented pattern (a new panel type, packet consumer, or dye), a
+               localized change that doesn't alter what a doc says, or internal
+               refactors/helpers with no new concept or contract — flag only real gaps.
 
             Be coverage-first: surface every real issue with a severity
             (critical / high / medium / low), each tied to a file and line where possible.
@@ -90,7 +107,7 @@ jobs:
             Then POST the review to the PR (do not just print it). Write /tmp/review.json:
               {
                 "event": "<COMMENT or REQUEST_CHANGES, per the verdict above>",
-                "body": "<2-4 sentence summary; include any findings not tied to a line>",
+                "body": "<2-4 sentence summary; include any findings not tied to a line. ALWAYS end the summary with one line: `Docs affected: <the docs/ file(s) whose subject this PR changes, or none>; accurate after this diff: <yes | no>.` — state it even when nothing is wrong, so the documentation check is visibly performed and cannot be silently skipped>",
                 "comments": [
                   { "path": "<file>", "line": <line number in the NEW version of the file>,
                     "body": "**[severity]** <the issue and a concrete suggested fix>" }
