@@ -17,10 +17,68 @@ on:
         default: alpha
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  # §8 release-notes "captain": a Haiku agent drafts notes from the Conventional
+  # Commits since the last tag. Best-effort — every step is non-fatal, so a captain
+  # failure never blocks the release; the publish job falls back to a static note.
+  notes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # claude-code-action mints an OIDC token for its GitHub App token
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need tags + full history to diff since the last release
+
+      - name: Collect Conventional Commits since the last tag
+        id: commits
+        shell: bash
+        run: |
+          set -euo pipefail
+          LAST_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          if [ -n "$LAST_TAG" ]; then RANGE="$LAST_TAG..HEAD"; else RANGE="HEAD"; fi
+          echo "last_tag=${LAST_TAG:-(first release)}" >> "$GITHUB_OUTPUT"
+          # One bullet per non-merge commit subject -> the captain's raw material.
+          git log --no-merges --pretty=format:'- %s' "$RANGE" > "$GITHUB_WORKSPACE/commits.txt" || true
+          printf '\n' >> "$GITHUB_WORKSPACE/commits.txt"
+          echo "Collected $(grep -c . "$GITHUB_WORKSPACE/commits.txt" || echo 0) commit(s) in range $RANGE."
+
+      - name: Draft release notes (Haiku)
+        id: captain
+        continue-on-error: true # never block the release on the captain
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: "--model claude-haiku-4-5 --allowedTools Read,Write"
+          prompt: |
+            Draft concise, user-facing release notes in GitHub-flavored markdown for the
+            RealmShark Overlay "${{ inputs.channel }}" release, covering changes since
+            ${{ steps.commits.outputs.last_tag }}.
+
+            The raw Conventional Commits are in commits.txt (read it). Rewrite them into
+            short human-readable bullets grouped under **Features** / **Fixes** / **Other**
+            (omit an empty group). Drop pure noise (chore/ci/docs/test) unless user-visible,
+            drop commit hashes and PR numbers, and keep the whole thing brief.
+
+            Write ONLY the finished notes (no preamble, no surrounding code fence) to the
+            file release-notes.md in the repo root.
+
+      - name: Upload drafted notes
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+          if-no-files-found: warn
+
   build-and-publish:
+    needs: notes
+    if: ${{ !cancelled() }} # publish even if the captain job hiccups (static fallback below)
+    permissions:
+      contents: write # gh release create
     # Native Windows runner — electron-builder --win is far more reliable here
     # than cross-building from macOS/Linux. Free on public repos.
     runs-on: windows-latest
@@ -59,20 +117,36 @@ jobs:
         shell: bash
         run: echo "version=$(node -p "require('./overlay/package.json').version")" >> "$GITHUB_OUTPUT"
 
+      - name: Download drafted notes
+        continue-on-error: true # fall back to static notes if the captain produced none
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: notes
+
       - name: Publish prerelease
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
+          set -euo pipefail
           TAG="v${{ steps.v.outputs.version }}"
           # The updater matches assets by /-setup\.exe$/i, which the electron-builder
           # artifact name already satisfies — no rename needed.
-          gh release create "$TAG" --prerelease \
-            --title "Overlay $TAG (${{ inputs.channel }})" \
-            --notes "Automated ${{ inputs.channel }} build from ${{ github.ref_name }}." \
-            overlay/dist/*-setup.exe build/libs/bridge.jar
+          NOTES_FILE="notes/release-notes.md"
+          if [ -s "$NOTES_FILE" ]; then
+            echo "Publishing with captain-drafted notes."
+            gh release create "$TAG" --prerelease \
+              --title "Overlay $TAG (${{ inputs.channel }})" \
+              --notes-file "$NOTES_FILE" \
+              overlay/dist/*-setup.exe build/libs/bridge.jar
+          else
+            echo "No drafted notes — falling back to a static note."
+            gh release create "$TAG" --prerelease \
+              --title "Overlay $TAG (${{ inputs.channel }})" \
+              --notes "Automated ${{ inputs.channel }} build from ${{ github.ref_name }}." \
+              overlay/dist/*-setup.exe build/libs/bridge.jar
+          fi
 
-  # TODO (optional): a preceding job that runs a Haiku "captain" agent to draft
-  # release notes from the Conventional Commits since the last tag, and a step to
-  # bump overlay/package.json + commit before tagging (kept manual for now so a
-  # dispatch can never silently rewrite the version).
+  # TODO (optional): auto-bump overlay/package.json + commit before tagging (kept
+  # manual for now so a dispatch can never silently rewrite the version).
