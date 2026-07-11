@@ -33,7 +33,7 @@ step that *runs* (driven) but is *not gated* (unenforced), or vice-versa.
 | 3 | Build agent → branch + PR | routine session (Opus 4.8) | GitHub App push scope; `claude/*` branch convention | 🟢 |
 | 4 | CI ground-truth checks | `pull_request` → `ci.yml` | branch protection required checks | 🟢 |
 | 5 | Independent review | `pull_request` → `review.yml` | workflow-validation guard | 🟢 verdict live |
-| 6 | Fix loop (review → re-fire builder, capped) | `workflow_run` of `review` → `fixloop.yml`; `agent:retry` → `resume.yml` | `review-verdict` status; `MAX_FIX_ROUNDS`; `agent:needs-human` freeze | 🟡 re-fire + escalate + resume built; live-verify pending |
+| 6 | Fix loop (review → re-fire builder, capped) | `workflow_run` of `review` → `fixloop.yml`; `agent:retry` → `resume.yml`; conflict → `gatekeeper.yml` rebase | `review-verdict` status; `MAX_FIX_ROUNDS`; `agent:needs-human` freeze | 🟡 re-fire + escalate + resume + conflict-rebase built; live-verify pending |
 | 7 | Gatekeeper auto-merge | `workflow_run` → arm auto-merge | native auto-merge + required checks | 🟢 verified (#19) |
 | 8 | Release (ship button) | `workflow_dispatch` → `release.yml` | manual-only dispatch | 🟢 (no captain notes) |
 | — | Branch protection | — | required checks (+ push restriction) | 🟢 verdict required (push restrict N/A on user repo) |
@@ -329,8 +329,10 @@ on merge. Nothing about the escalation leaves residue once resolved.
 - ✅ `resume.yml` (`on: pull_request` labeled `agent:retry` → delete the `fixloop:refire`
   marker comments to reset the budget → re-fire in FIX MODE) — **built.** Uses `GITHUB_TOKEN`.
 - ✅ A repo label `agent:retry` (maintainer-applied resume trigger) — **created.**
-- 🔲 **Conflict → rebase FIX MODE** — the gatekeeper branch described in §6.5 (the FIX-MODE
-  *prompt* already handles a rebase instruction; the gatekeeper doesn't yet emit one).
+- ✅ **Conflict → rebase FIX MODE** — **built** in `gatekeeper.yml` (§6.5): on an
+  otherwise-green but `CONFLICTING` PR it re-fires FIX MODE with a rebase instruction,
+  sharing the `<!-- fixloop:refire -->` marker + `MAX_FIX_ROUNDS` budget, and freezes
+  (`agent:needs-human`) if the conflict outlives the budget.
 - 🔲 Live end-to-end verification against a real change-request.
 - **No `GATEKEEPER_TOKEN` / PAT** — the `workflow_run` trigger (§6.1) sidesteps the
   recursion guard, and the re-fire happens through the routine (the `app/claude`
@@ -353,6 +355,17 @@ stalls. Handling:
 - It counts against the **same `MAX_FIX_ROUNDS` cap** and escalates via §6.2 (the
   `agent:needs-human` flow) if the agent can't resolve the conflict within budget —
   so a genuinely hard conflict lands on your desk instead of looping forever.
+
+**Status.** 🟢 Built in `gatekeeper.yml`. When the gate evaluates an
+otherwise-green PR (`review-verdict = success`) whose `mergeable = CONFLICTING`, it
+re-fires FIX MODE with the rebase instruction above, marks the attempt with the shared
+`<!-- fixloop:refire -->` marker (so review-fix and rebase rounds share the one
+`MAX_FIX_ROUNDS` budget), and — once the budget is spent on a still-conflicting PR —
+freezes it with `agent:needs-human` + a maintainer @-mention. **Known limitation:** the
+gate fires on the PR's own `ci`/`review` completion, so a PR that goes `CONFLICTING`
+only because `staging` advanced *after* it was armed isn't re-evaluated until its own
+checks next run; native auto-merge disables itself on the conflict, so it stalls
+(safely) rather than mis-merging.
 
 *Optional hardening:* branch protection's **"require branches up to date before
 merging"** (`strict`, currently off) surfaces staleness earlier by forcing a rebase
@@ -555,9 +568,9 @@ Each item unlocks the next; do them in this order.
    auto-merged into `staging` with zero human action (PR #25). **The happy path now
    closes.**
 6. **Fix loop** (§6) — `fixloop.yml` (re-fire + escalate), `resume.yml` (`agent:retry`
-   reset), the `agent:retry` label, and the FIX-MODE routine-prompt branch are **built**.
-   What remains to fully close the *iterate* path: promote both workflows to `bridge` +
-   re-paste the live routine prompt (activation), and a live end-to-end run.
+   reset), `gatekeeper.yml` conflict-rebase (§6.5), the `agent:retry` label, and the
+   FIX-MODE routine-prompt branch are **built and activated** (on `bridge`; live prompt
+   pasted). What remains: a live end-to-end run to move §6 from 🟡 to verified.
 7. ~~**Workflow-parity guard** → prevents §5 from silently regressing.~~ **✅ Done &
    verified** — `workflow parity` ci job, required on both branches (PR #25).
 8. **Release captain** (§8, optional) → drafted notes.
