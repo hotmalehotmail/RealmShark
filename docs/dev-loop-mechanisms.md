@@ -612,7 +612,7 @@ Built in **PR #41** (workflows) unless noted:
   alpha; a `staging → bridge` promotion landing cuts the latest release, closes the soak
   issue, and thaws the freeze (arms any held agent PRs).
 - `ci.yml` gains a `workflow_dispatch` trigger so the promotion head can be gated (9.3).
-- Repo labels `soak` / `soak:pass` / `soak:fail` / `soak-fix`; repo setting **Allow merge commits** on.
+- Repo labels `soak` / `soak:pass` / `soak:fail` / `soak-fix`; repo settings **Allow merge commits** on and **Allow GitHub Actions to create and approve pull requests** on (`actions/permissions/workflow` → `can_approve_pull_request_reviews: true` — the `soak:pass` handler opens the promotion PR with `GITHUB_TOKEN`; off by default → `gh pr create` 403s).
 - **The soak-freeze (§9.5)** — the §7 gatekeeper holds unrelated agent PRs while a `soak`
   issue is open, exempting soak-fix PRs (recognized by the `soak-fix` label, body reference as fallback),
   plus the `post-merge.yml` thaw. Folded into **PR #41**.

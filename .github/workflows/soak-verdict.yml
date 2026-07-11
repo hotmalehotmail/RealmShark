@@ -40,20 +40,26 @@ jobs:
             exit 0
           fi
           # Open the promotion PR (or reuse an existing one). staging -> bridge.
-          # Capture stderr so a genuine failure (bad base, auth) isn't masked as the
-          # benign "a PR already exists" case.
+          # Capture stderr so a genuine failure (bad base, auth) isn't masked as a benign case.
+          NOTHING_TO_PROMOTE=0
           if ! ERR="$(gh pr create --repo "$REPO" --base bridge --head staging \
                 --title "Promote staging -> bridge (soak #$ISSUE passed)" \
                 --body "Auto-opened by \`soak:pass\` on #$ISSUE. \`review-verdict\` is stamped from the soak approval; the agent review does not run on this PR (review.yml skips staging->bridge promotions, and it's bot-authored). \`ci\` is dispatched on the promotion head — with workflow parity, it still gates (§9.3). A **latest** release auto-cuts when this lands." \
                 2>&1)"; then
             if printf '%s' "$ERR" | grep -qi 'already exists'; then
               echo "Promotion PR already exists; reusing it."
+            elif printf '%s' "$ERR" | grep -qiE 'no commits between'; then
+              # gh pr create ERRORS (rather than creating an empty PR) when staging == bridge, so
+              # the empty-diff case surfaces HERE, not in the `gh pr list` check below. Route it to
+              # the same nothing-to-promote cleanup.
+              echo "No commits between staging and bridge — nothing to promote."
+              NOTHING_TO_PROMOTE=1
             else
               echo "::error::gh pr create failed: $ERR"; exit 1
             fi
           fi
           PR="$(gh pr list --repo "$REPO" --base bridge --head staging --state open --json number,headRefOid -q '.[0]')"
-          if [ -z "$PR" ] || [ "$PR" = "null" ]; then
+          if [ "$NOTHING_TO_PROMOTE" -eq 1 ] || [ -z "$PR" ] || [ "$PR" = "null" ]; then
             # Nothing to promote (staging == bridge). There's no promotion PR to land, so the
             # deferred close (post-merge.yml) never fires — close the soak and thaw HERE, else
             # the §9.5 freeze would persist indefinitely with no automated recovery.
