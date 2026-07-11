@@ -312,9 +312,15 @@ by *you* re-run review because they are not made with the default `GITHUB_TOKEN`
 see the token note under Branch protection.)
 
 **Resolution in both paths.** The terminal state is identical to any other PR: a
-green CI + a `review-verdict = success` → gatekeeper auto-merges to `staging` →
-`Closes #N` closes the issue → all `loop:*` / `agent:*` working labels are removed
-on merge. Nothing about the escalation leaves residue once resolved.
+green CI + a `review-verdict = success` → gatekeeper auto-merges the PR to `staging`.
+The linked issue does **not** close at that point, though: GitHub only honours a
+`Closes #N` reference when it reaches the repo's **default branch** (`bridge`), and
+agent PRs merge into `staging` (non-default). So the issue stays open through alpha
+integration and auto-closes on the `staging → bridge` promotion — provided `Closes #N`
+actually survives into a commit that lands on `bridge` (with a squash merge, the
+squash commit message must carry it; worth confirming on the first real run). The PR's
+`loop:*` / `agent:*` working labels stay on the now-closed PR (harmless — nothing
+strips them on merge). Nothing about the escalation leaves residue once resolved.
 
 ### 6.4 What must be built for §6
 
