@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Reference docs
 
-`docs/` holds deep-dive documentation for each subsystem — fuller than this file. Consult the relevant one before changing a subsystem, and update it in the same change when your change affects what it describes. `docs/README.md` is the index; key entries:
+`docs/` holds deep-dive documentation for each subsystem — fuller than this file. Consult the relevant one before changing a subsystem, and update it in the same PR whenever your change alters what it describes — a doc left inaccurate by your change is a defect, not a follow-up. This is enforced: the PR review agent treats an out-of-date (or now-wrong/incomplete) `docs/` file as a high-severity finding that fails the review-verdict gate and blocks the merge. New work that introduces a new subsystem, a new contract (wire format / IPC), or a cross-cutting mechanism must ship its own doc — a new `docs/` file (indexed in `docs/README.md`) or a substantial new section. Work that is merely another instance of an already-documented pattern (a new panel type, packet consumer, or dye), or an internal change that doesn't alter what a doc says, needs no doc change. `docs/README.md` is the index; key entries:
 
 - `docs/architecture.md` — end-to-end system overview
 - `docs/bridge-server.md` — the Java WebSocket bridge (packet → JSON → WS)
