@@ -7,6 +7,12 @@ name: post-merge release
 #
 # Both just dispatch `release staging` (release.yml) with the right channel — which
 # works on GITHUB_TOKEN because workflow_dispatch is exempt from the recursion guard.
+#
+# CODE-GATED: an automatic build only fires when the merged PR actually touches buildable
+# code (overlay/, the Java bridge, gradle). A docs/CI/markdown-only change produces a
+# byte-identical app, so cutting a release would be a no-op "update" — skipped here. Fail-safe:
+# any file outside the non-buildable set counts as code. (A *manual* release.yml dispatch is
+# never gated — you press it, it always builds.)
 on:
   pull_request:
     types: [closed]
@@ -36,14 +42,35 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          PR_NUM: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
+          # Returns 0 if the merged PR touches buildable code, 1 if it's all non-buildable
+          # (.github, docs, markdown, root config). Fail-safe: on any doubt (no file list, or
+          # any file outside the set), treat it as code and build.
+          has_code_changes() {
+            local files f
+            files="$(gh api --paginate "repos/$REPO/pulls/$PR_NUM/files" -q '.[].filename' 2>/dev/null || true)"
+            [ -z "$files" ] && return 0
+            while IFS= read -r f; do
+              [ -z "$f" ] && continue
+              case "$f" in
+                .github/*|docs/*|*.md|.gitignore|.gitattributes|.editorconfig|LICENSE) ;;
+                *) return 0 ;;
+              esac
+            done <<< "$files"
+            return 1
+          }
           OPEN="$(gh issue list --repo "$REPO" --state open --label soak --json number -q 'length')"
-          if [ "${OPEN:-0}" -gt 0 ]; then
-            echo "Soak in progress ($OPEN open soak issue(s)) — re-cutting the alpha."
+          if [ "${OPEN:-0}" -eq 0 ]; then
+            echo "No soak open — nothing to re-cut (auto-cut is strictly during a soak)."
+            exit 0
+          fi
+          if has_code_changes; then
+            echo "Soak in progress ($OPEN open) + buildable code changed — re-cutting the alpha."
             gh workflow run release.yml --repo "$REPO" --ref staging -f channel=alpha
           else
-            echo "No soak open — nothing to re-cut (auto-cut is strictly during a soak)."
+            echo "Soak in progress, but PR #$PR_NUM is docs/CI-only — installer is unchanged, not re-cutting."
           fi
 
   cut-latest:
@@ -58,15 +85,37 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          PR_NUM: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-          echo "Promotion landed on bridge — cutting the latest release (beta channel)."
-          # Guard the dispatch: under `set -e` an unguarded failure here would abort BEFORE the
-          # close+thaw below, wedging the loop (soak open, staging frozen, no beta). The
-          # promotion has already landed, so cleanup must run regardless; a failed dispatch is
-          # a visible warning to re-cut the latest manually.
-          gh workflow run release.yml --repo "$REPO" --ref bridge -f channel=beta \
-            || echo "::warning::Could not dispatch the latest (beta) release — re-run 'release staging' (beta) manually. Promotion landed; cleanup continues."
+          # Returns 0 if the promotion touches buildable code, 1 if it's all non-buildable.
+          # Fail-safe: on any doubt (no file list, or any file outside the set), build.
+          has_code_changes() {
+            local files f
+            files="$(gh api --paginate "repos/$REPO/pulls/$PR_NUM/files" -q '.[].filename' 2>/dev/null || true)"
+            [ -z "$files" ] && return 0
+            while IFS= read -r f; do
+              [ -z "$f" ] && continue
+              case "$f" in
+                .github/*|docs/*|*.md|.gitignore|.gitattributes|.editorconfig|LICENSE) ;;
+                *) return 0 ;;
+              esac
+            done <<< "$files"
+            return 1
+          }
+          # Cut the latest release ONLY if the promotion carries buildable code — a docs/CI-only
+          # promotion yields a byte-identical app (a no-op "update" for users). The cleanup below
+          # runs either way: the promotion landed, so the soak is done and the freeze must lift.
+          if has_code_changes; then
+            echo "Promotion #$PR_NUM has buildable code — cutting the latest release (beta channel)."
+            # Guarded so a dispatch failure can't abort before the close+thaw.
+            gh workflow run release.yml --repo "$REPO" --ref bridge -f channel=beta \
+              || echo "::warning::Could not dispatch the latest (beta) release — re-run 'release staging' (beta) manually. Cleanup continues."
+            RELEASE_MSG="Cutting the latest release."
+          else
+            echo "Promotion #$PR_NUM is docs/CI-only — skipping the latest release (no app-code change)."
+            RELEASE_MSG="No app code changed, so no new release was cut."
+          fi
           # Capture the cleanup lists FIRST, each guarded with `|| true`. These run under
           # `set -euo pipefail`, so a transient `gh list` failure inside a `... | while` would
           # abort the step and skip the thaw — re-introducing the exact wedge the deferred
@@ -79,7 +128,7 @@ jobs:
           # active through the promotion window (a failed promotion must not leave the loop
           # wedged with no tracking issue). Should be exactly one open.
           for I in $OPEN_SOAKS; do
-            gh issue comment "$I" --repo "$REPO" --body "✅ Promotion landed on \`bridge\` — soak complete. Cutting the latest release." >/dev/null 2>&1 || true
+            gh issue comment "$I" --repo "$REPO" --body "✅ Promotion landed on \`bridge\` — soak complete. $RELEASE_MSG" >/dev/null 2>&1 || true
             gh issue close "$I" --repo "$REPO" >/dev/null 2>&1 || true
           done
           # Thaw the soak freeze (§9.5): arm any held (un-armed) agent PRs into staging. Ones
