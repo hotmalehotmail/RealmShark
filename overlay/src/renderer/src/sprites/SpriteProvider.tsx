@@ -2,12 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { SpritePack } from '../../../shared/ipc'
 import { DEFAULT_SETTINGS } from '../../../shared/settings'
 import { SpriteContext } from './context'
-
-// A textile (cloth) dye's woven pattern renders finer than the low-res body
-// sprite - its weave is smaller than a body pixel. So for textile dyes we
-// subdivide each body pixel this many times and tile the pattern in that finer
-// space (the body / region outline stays blocky). 5 matches the in-game weave.
-const TEXTILE_SUB = 5
+import {
+  bakeDyedSprite,
+  regionImageData,
+  TEXTILE_SUB,
+  type DyeBake,
+  type DyeMotion,
+  type DyeRoleInput
+} from './dyeBake'
 
 // animTable stores this many ints per animation frame:
 // [x, y, w, h, spriteAtlasId, maskX, maskY, maskW, maskH].
@@ -20,29 +22,8 @@ const FRAME_STRIDE = 9
 //   type 3 = rotate            (+ = counter-clockwise)
 // The dye's `speed` is scaled into output pattern-pixels/sec (scroll) and
 // radians/sec (rotate) by the `textileScrollSpeed` / `textileRotateSpeed`
-// settings (live-tunable, no rebuild). The motion is continuous, so
-// animated-cloth sprites tick at DYE_ANIM_MS (not the coarser frame rate), and
-// the rotation angle is quantized to ROT_STEPS to bound the per-sprite cache.
-const ROT_STEPS = 60
-export const DYE_ANIM_MS = 50
-
-/** Crop an atlas region into an ImageData, for pixel-level dye compositing. */
-function regionImageData(
-  img: ImageBitmap | HTMLImageElement,
-  x: number,
-  y: number,
-  w: number,
-  h: number
-): ImageData | null {
-  const c = document.createElement('canvas')
-  c.width = w
-  c.height = h
-  const ctx = c.getContext('2d')
-  if (!ctx) return null
-  ctx.imageSmoothingEnabled = false
-  ctx.drawImage(img, x, y, w, h, 0, 0, w, h)
-  return ctx.getImageData(0, 0, w, h)
-}
+// settings (live-tunable, no rebuild). This motion renders continuously (no
+// quantization) via the shared rAF clock - see dyeBake.ts / AnimatedDyeCanvas.tsx.
 
 /**
  * App-level sprite service shared by every panel. Loads the sprite pack once
@@ -54,6 +35,10 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
   const [pack, setPack] = useState<SpritePack>({ ready: false })
   const atlasesRef = useRef<Record<string, ImageBitmap | HTMLImageElement>>({})
   const cacheRef = useRef<Map<string, string>>(new Map())
+  // Baked static composite + per-region motion masks for animated-textile
+  // dyes, keyed on everything that affects the bake (NOT the continuous
+  // scroll/rotate phase - that's applied live, per frame, by the renderer).
+  const bakeCacheRef = useRef<Map<string, DyeBake>>(new Map())
   // Bumped when an atlas finishes decoding so consumers re-request (a sprite
   // that returned null because its atlas wasn't loaded yet can now be cropped).
   const [, setGen] = useState(0)
@@ -81,6 +66,7 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
 
   const applyPack = useCallback((p: SpritePack): void => {
     cacheRef.current.clear()
+    bakeCacheRef.current.clear()
     atlasesRef.current = {}
     setPack(p)
     if (p.ready && p.atlases) {
@@ -165,7 +151,8 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
 
   // A clothing/accessory dye that carries an <AnimatedDye> (animDyeTable) scrolls
   // or rotates continuously - distinct from multi-frame textiles (which cycle
-  // discrete frames). Used to pick the smooth DYE_ANIM_MS tick.
+  // discrete frames via getDyedSprite). Used by <Sprite> to route to the
+  // continuous rAF-driven canvas renderer (bakeAnimatedDye) instead.
   const dyeAnimated = useCallback(
     (clothingDye?: number | null, accessoryDye?: number | null): boolean => {
       const has = (id?: number | null): boolean =>
@@ -229,6 +216,19 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
     [pack, baseFrame, baseSpriteRect]
   )
 
+  // For a textile dyeTable entry, the frame count is (len-2)/4; the current
+  // frame is driven by the (coarse) animation clock. Solids (or single-frame
+  // textiles, including animated-motion cloths - see docs/dyes-and-textiles.md
+  // "Sprite animation") => always frame 0.
+  const dyeFrameOf = useCallback(
+    (e: number[] | undefined, now: number): number => {
+      if (!e || e[0] !== 10) return 0
+      const count = (e.length - 2) / 4
+      return count > 1 ? Math.floor(now / Math.max(50, frameMs)) % count : 0
+    },
+    [frameMs]
+  )
+
   // Render a character sprite with clothing/accessory dyes composited in. Dyes
   // arrive as objectTypes (Tex1/Tex2); the dye's real color lives in
   // pack.dyeTable (parsed from the dye object XML - the dye's own sprite is only
@@ -237,9 +237,12 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
   // shading is preserved: the undyed sprite is itself referenceColor x
   // (maskValue/255), so dyeColor x (maskValue/255) reproduces the same shading.
   // Textile dyes are the same but the region is filled with the tiled cloth
-  // pattern (cropped from its atlas rect) instead of a flat color; an animated
-  // textile has several frames and cycles through them over time. Falls back to
-  // the plain sprite when there's no dye or no mask.
+  // pattern (cropped from its atlas rect) instead of a flat color; a
+  // multi-frame textile cycles discrete frames over time. A dye with
+  // *continuous* scroll/rotate motion (animDyeTable) never reaches this
+  // function - <Sprite> routes it to bakeAnimatedDye/AnimatedDyeCanvas instead
+  // (see dyeAnimated below). Falls back to the plain sprite when there's no
+  // dye or no mask.
   const getDyedSprite = useCallback(
     (
       baseType: number,
@@ -265,57 +268,12 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       const maskRect = baseMaskRect(baseType, bFrame)
       if (!baseRect || !maskRect) return getSprite(baseType, size)
 
-      // For a textile entry, the frame count is (len-2)/4; the current frame is
-      // driven by the animation clock. Solids (or single-frame textiles) => 0.
-      const frameOf = (e: number[] | undefined): number => {
-        if (!e || e[0] !== 10) return 0
-        const count = (e.length - 2) / 4
-        return count > 1 ? Math.floor(now / Math.max(50, frameMs)) % count : 0
-      }
-      const clothingFrame = frameOf(clothingEntry)
-      const accessoryFrame = frameOf(accessoryEntry)
-
-      // Continuous scroll/rotate for a dye with an <AnimatedDye> (animDyeTable).
-      // The motion is time-driven; we quantize it (scroll offset mod the pattern
-      // size, rotation to ROT_STEPS) so the frame cache stays bounded.
-      type TileAnim =
-        | { mode: 'scroll'; ox: number; oy: number }
-        | { mode: 'rotate'; angle: number; pivotX: number; pivotY: number }
-      const animFor = (id: number | null | undefined, e: number[] | undefined): TileAnim | null => {
-        if (!e || e[0] !== 10 || !id) return null
-        const a = pack.animDyeTable?.[String(id)]
-        if (!a) return null
-        const [type, speed, pivotX = 0, pivotY = 0] = a
-        const pw = e[4] || 1
-        const ph = e[5] || 1
-        const t = now / 1000
-        const wrap = (v: number, m: number): number => ((Math.floor(v) % m) + m) % m
-        if (type === 1 || type === 2) {
-          const disp = speed * scrollSpeed * t
-          // +x sample offset scrolls the pattern left; -y offset scrolls it down.
-          return type === 1
-            ? { mode: 'scroll', ox: wrap(disp, pw), oy: 0 }
-            : { mode: 'scroll', ox: 0, oy: wrap(-disp, ph) }
-        }
-        if (type === 3) {
-          const step =
-            ((Math.round((speed * rotateSpeed * t * ROT_STEPS) / (2 * Math.PI)) % ROT_STEPS) +
-              ROT_STEPS) %
-            ROT_STEPS
-          return { mode: 'rotate', angle: (step / ROT_STEPS) * 2 * Math.PI, pivotX, pivotY }
-        }
-        return null
-      }
-      const clothingAnim = animFor(clothingDye, clothingEntry)
-      const accessoryAnim = animFor(accessoryDye, accessoryEntry)
-      const animKey = (a: TileAnim | null): string =>
-        !a ? '' : a.mode === 'scroll' ? `s${a.ox},${a.oy}` : `r${a.angle.toFixed(3)}`
+      const clothingFrame = dyeFrameOf(clothingEntry, now)
+      const accessoryFrame = dyeFrameOf(accessoryEntry, now)
 
       const key = `dye:${baseType}:${size}:${clothingEntry ? clothingDye : 0}:${
         accessoryEntry ? accessoryDye : 0
-      }:${bFrame}:${clothingFrame}:${accessoryFrame}:${animKey(clothingAnim)}:${animKey(
-        accessoryAnim
-      )}`
+      }:${bFrame}:${clothingFrame}:${accessoryFrame}`
       const cached = cacheRef.current.get(key)
       if (cached) return cached
 
@@ -323,12 +281,8 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       // current frame cropped from its atlas rect). Both get mask-shaded below.
       type DyeSrc =
         | { kind: 'solid'; rgb: [number, number, number] }
-        | { kind: 'textile'; pixels: ImageData; pw: number; ph: number; anim: TileAnim | null }
-      const resolveDye = (
-        e: number[] | undefined,
-        frame: number,
-        anim: TileAnim | null
-      ): DyeSrc | null => {
+        | { kind: 'textile'; pixels: ImageData; pw: number; ph: number }
+      const resolveDye = (e: number[] | undefined, frame: number): DyeSrc | null => {
         if (!e) return null
         if (e[0] === 1) return { kind: 'solid', rgb: [e[1], e[2], e[3]] }
         if (e[0] === 10) {
@@ -337,12 +291,12 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
           const img = atlasesRef.current[String(atlasId)]
           if (!img) return null // atlas not decoded yet
           const d = regionImageData(img, e[o], e[o + 1], e[o + 2], e[o + 3])
-          return d ? { kind: 'textile', pixels: d, pw: e[o + 2], ph: e[o + 3], anim } : null
+          return d ? { kind: 'textile', pixels: d, pw: e[o + 2], ph: e[o + 3] } : null
         }
         return null
       }
-      const clothing = resolveDye(clothingEntry, clothingFrame, clothingAnim)
-      const accessory = resolveDye(accessoryEntry, accessoryFrame, accessoryAnim)
+      const clothing = resolveDye(clothingEntry, clothingFrame)
+      const accessory = resolveDye(accessoryEntry, accessoryFrame)
       if (!clothing && !accessory) return getSprite(baseType, size) // atlases not ready
 
       const baseImg = atlasesRef.current[String(baseRect[0])]
@@ -397,33 +351,8 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
             if (src.kind === 'solid') {
               ;[r, g, b] = src.rgb
             } else {
-              // Tile the pattern across the region at the output (mask) scale.
-              // Animated cloths offset (scroll) or rotate the sample coords first;
-              // both wrap into the pattern tile so it stays seamless.
-              let sx = px
-              let sy = py
-              if (src.anim) {
-                if (src.anim.mode === 'scroll') {
-                  sx = px + src.anim.ox
-                  sy = py + src.anim.oy
-                } else {
-                  // Rotate within the tile (about its center + pivot) so the spin
-                  // stays seamless across the tiling. +angle = counter-clockwise
-                  // on screen: since y is down, that's the screen-CW matrix.
-                  const lx = ((px % src.pw) + src.pw) % src.pw
-                  const ly = ((py % src.ph) + src.ph) % src.ph
-                  const cx = src.pw / 2 + src.anim.pivotX
-                  const cy = src.ph / 2 + src.anim.pivotY
-                  const dx = lx - cx
-                  const dy = ly - cy
-                  const cos = Math.cos(src.anim.angle)
-                  const sin = Math.sin(src.anim.angle)
-                  sx = cx + dx * cos - dy * sin
-                  sy = cy + dx * sin + dy * cos
-                }
-              }
-              const txp = ((Math.floor(sx) % src.pw) + src.pw) % src.pw
-              const typ = ((Math.floor(sy) % src.ph) + src.ph) % src.ph
+              const txp = ((px % src.pw) + src.pw) % src.pw
+              const typ = ((py % src.ph) + src.ph) % src.ph
               const j = (typ * src.pw + txp) * 4
               r = src.pixels.data[j]
               g = src.pixels.data[j + 1]
@@ -465,12 +394,106 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       cacheRef.current.set(key, url)
       return url
     },
-    [pack, getSprite, frameMs, scrollSpeed, rotateSpeed, baseFrame, baseSpriteRect, baseMaskRect]
+    [pack, getSprite, dyeFrameOf, baseFrame, baseSpriteRect, baseMaskRect]
+  )
+
+  const dyeRoleInput = useCallback(
+    (id: number | null | undefined, entry: number[] | undefined, frame: number): DyeRoleInput => {
+      if (!entry) return null
+      if (entry[0] === 1) return { kind: 'solid', rgb: [entry[1], entry[2], entry[3]] }
+      if (entry[0] === 10) {
+        const atlasId = entry[1]
+        const o = 2 + frame * 4
+        const img = atlasesRef.current[String(atlasId)]
+        if (!img) return null // atlas not decoded yet
+        const raw = id ? pack.animDyeTable?.[String(id)] : undefined
+        const motion: DyeMotion | null = raw
+          ? { type: raw[0], speed: raw[1], pivotX: raw[2] ?? 0, pivotY: raw[3] ?? 0 }
+          : null
+        return {
+          kind: 'textile',
+          img,
+          x: entry[o],
+          y: entry[o + 1],
+          pw: entry[o + 2],
+          ph: entry[o + 3],
+          motion
+        }
+      }
+      return null
+    },
+    [pack]
+  )
+
+  // Bake the static composite + per-region motion masks for a dyeAnimated
+  // sprite once per (baseType, size, dyes, discrete frame) combination - the
+  // continuous scroll/rotate phase is NOT part of the key, it's applied live
+  // by the renderer every animation frame (see dyeBake.ts).
+  const bakeAnimatedDye = useCallback(
+    (
+      baseType: number,
+      size: number,
+      clothingDye?: number | null,
+      accessoryDye?: number | null
+    ): DyeBake | null => {
+      const clothingEntry =
+        clothingDye != null && clothingDye > 0 ? pack.dyeTable?.[String(clothingDye)] : undefined
+      const accessoryEntry =
+        accessoryDye != null && accessoryDye > 0 ? pack.dyeTable?.[String(accessoryDye)] : undefined
+      if (!pack.ready || !pack.table || (!clothingEntry && !accessoryEntry)) return null
+
+      const now = Date.now()
+      const bFrame = baseFrame(baseType, now)
+      const baseRect = baseSpriteRect(baseType, bFrame)
+      const maskRect = baseMaskRect(baseType, bFrame)
+      if (!baseRect || !maskRect) return null
+
+      const clothingFrame = dyeFrameOf(clothingEntry, now)
+      const accessoryFrame = dyeFrameOf(accessoryEntry, now)
+
+      const key = `bake:${baseType}:${size}:${clothingEntry ? clothingDye : 0}:${
+        accessoryEntry ? accessoryDye : 0
+      }:${bFrame}:${clothingFrame}:${accessoryFrame}`
+      const cached = bakeCacheRef.current.get(key)
+      if (cached) return cached
+
+      const clothing = dyeRoleInput(clothingDye, clothingEntry, clothingFrame)
+      const accessory = dyeRoleInput(accessoryDye, accessoryEntry, accessoryFrame)
+      if (clothingEntry?.[0] === 10 && !clothing) return null // atlas not decoded yet
+      if (accessoryEntry?.[0] === 10 && !accessory) return null
+
+      const baseImg = atlasesRef.current[String(baseRect[0])]
+      const maskImg = atlasesRef.current[String(maskRect[0])]
+      if (!baseImg || !maskImg) return null // atlases not decoded yet
+
+      const bake = bakeDyedSprite({
+        baseImg,
+        baseRect: [baseRect[1], baseRect[2], baseRect[3], baseRect[4]],
+        maskImg,
+        maskRect: [maskRect[1], maskRect[2], maskRect[3], maskRect[4]],
+        clothing,
+        accessory
+      })
+      if (!bake) return null
+      bakeCacheRef.current.set(key, bake)
+      return bake
+    },
+    [pack, baseFrame, baseSpriteRect, baseMaskRect, dyeFrameOf, dyeRoleInput]
   )
 
   return (
     <SpriteContext.Provider
-      value={{ ready: pack.ready, getSprite, getDyedSprite, isAnimated, dyeAnimated, frameMs }}
+      value={{
+        ready: pack.ready,
+        getSprite,
+        getDyedSprite,
+        isAnimated,
+        dyeAnimated,
+        bakeAnimatedDye,
+        frameMs,
+        scrollSpeed,
+        rotateSpeed
+      }}
     >
       {children}
     </SpriteContext.Provider>
