@@ -33,7 +33,7 @@ step that *runs* (driven) but is *not gated* (unenforced), or vice-versa.
 | 3 | Build agent → branch + PR | routine session (Opus 4.8) | GitHub App push scope; `claude/*` branch convention | 🟢 |
 | 4 | CI ground-truth checks | `pull_request` → `ci.yml` | branch protection required checks | 🟢 |
 | 5 | Independent review | `pull_request` → `review.yml` | workflow-validation guard | 🟢 verdict live |
-| 6 | Fix loop (review → re-fire builder, capped) | `workflow_run` of `review` → `fixloop.yml` | `review-verdict` status; `MAX_FIX_ROUNDS`; `agent:needs-human` freeze | 🟡 re-fire + escalate built; resume.yml + live-verify pending |
+| 6 | Fix loop (review → re-fire builder, capped) | `workflow_run` of `review` → `fixloop.yml`; `agent:retry` → `resume.yml` | `review-verdict` status; `MAX_FIX_ROUNDS`; `agent:needs-human` freeze | 🟡 re-fire + escalate + resume built; live-verify pending |
 | 7 | Gatekeeper auto-merge | `workflow_run` → arm auto-merge | native auto-merge + required checks | 🟢 verified (#19) |
 | 8 | Release (ship button) | `workflow_dispatch` → `release.yml` | manual-only dispatch | 🟢 (no captain notes) |
 | — | Branch protection | — | required checks (+ push restriction) | 🟢 verdict required (push restrict N/A on user repo) |
@@ -171,15 +171,17 @@ linchpin for §6 and §7. How it works:
 
 ## 6 · Fix loop — review requests changes → re-fire the builder (capped)
 
-**Status.** 🟡 Partial — the converging path is built, the resume path and live
-verification are not. **Built:** `.github/workflows/fixloop.yml` (`on: workflow_run`
-of `review` → read `review-verdict` → round-count → re-fire in FIX MODE or escalate,
-per §6.1/§6.2) and the FIX-MODE branch of the routine prompt
-([build-agent-routine.md](build-agent-routine.md)). **Still to build:** `resume.yml`
-+ the `agent:retry` label (§6.3), the gatekeeper's rebase-FIX-MODE on conflict
-(§6.5), and an end-to-end live verification (the loop hasn't yet run against a real
-change-request). Until the routine's live prompt is re-pasted with the FIX-MODE
-block, a re-fire is a no-op.
+**Status.** 🟡 Partial — the full loop (converge + escalate + resume) is built; live
+verification is not. **Built:** `.github/workflows/fixloop.yml` (`on: workflow_run` of
+`review` → read `review-verdict` → round-count → re-fire in FIX MODE or escalate, per
+§6.1/§6.2), `.github/workflows/resume.yml` (`agent:retry` label → reset budget →
+re-fire, §6.3) + the `agent:retry` repo label, and the FIX-MODE branch of the routine
+prompt ([build-agent-routine.md](build-agent-routine.md)). **Still to build:** the
+gatekeeper's rebase-FIX-MODE on conflict (§6.5), and an end-to-end live verification
+(the loop hasn't yet run against a real change-request). Until the routine's live
+prompt is re-pasted with the FIX-MODE block, a re-fire is a no-op. **Activation:**
+`fixloop.yml` fires only from the default branch (`workflow_run`), so both workflows
+must reach `bridge` before the loop is live.
 
 **Depends on:** §5's `REQUEST_CHANGES` verdict (done), and §3's "operate on an existing
 branch" agent mode (done — the FIX-MODE prompt branch).
@@ -282,18 +284,18 @@ escalation actions don't need to trigger anything downstream, so no special toke
 You have two supported ways to unblock, and precisely one thing happens in each:
 
 **(a) Steer the agent (stay hands-off on code).** You apply the **`agent:retry`**
-label to the PR — optionally after dropping a normal comment with your steer. A
-small `.github/workflows/resume.yml` runs `on: pull_request: types: [labeled]` with
-`if: github.event.label.name == 'agent:retry'`, and:
+label to the PR — optionally after dropping a normal comment with your steer.
+`.github/workflows/resume.yml` (**built**) runs `on: pull_request: types: [labeled]`
+with `if: github.event.label.name == 'agent:retry'`, and:
 - **No auth filter needed** — applying a label requires write/triage permission, so
   GitHub already guarantees the actor is a maintainer. This is the *same* gate as
   kickoff (§1), so the resume path inherits one security model instead of a bespoke
   `author_association` check.
-- **Resets the budget** — because §6.1 now counts fixloop's own `<!-- fixloop:refire -->`
-  re-fire comments (not reviews), the reset must **neutralize those markers**: delete the
-  re-fire comments, or edit them to strip the marker, so the next count reads 0 — a fresh
-  set of 3 automated attempts. **Dismissing reviews does NOT reset a comment-based count.**
-  (The original design reset by dismissing `CHANGES_REQUESTED` reviews; that was superseded
+- **Resets the budget** — because §6.1 counts fixloop's own `<!-- fixloop:refire -->`
+  re-fire comments (not reviews), resume **deletes those marker comments** so the next
+  count reads 0 — a fresh set of 3 automated attempts. **Dismissing reviews does NOT
+  reset a comment-based count.** (The original design reset by dismissing
+  `CHANGES_REQUESTED` reviews; that was superseded
   when the count moved to markers to survive review.yml's comment-fallback path — §6.1.)
 - **Removes** `agent:retry` + `agent:needs-human`, clears the assignee.
 - **Re-fires** the builder in FIX MODE (as §6.1). The FIX-MODE prompt already reads
@@ -324,9 +326,9 @@ on merge. Nothing about the escalation leaves residue once resolved.
   shares the §1 `/fire` plumbing).
 - ✅ Repo variable `MAINTAINER_HANDLE` (escalation @-mention/assignee) — already set.
 - ✅ §5 verdict (hard dependency) — done.
-- 🔲 `resume.yml` (`on: pull_request` labeled `agent:retry` → neutralize the `fixloop:refire`
-  marker comments to reset the budget → re-fire) — **next.**
-- 🔲 A repo label `agent:retry` (maintainer-applied resume trigger) — **next** (with resume.yml).
+- ✅ `resume.yml` (`on: pull_request` labeled `agent:retry` → delete the `fixloop:refire`
+  marker comments to reset the budget → re-fire in FIX MODE) — **built.** Uses `GITHUB_TOKEN`.
+- ✅ A repo label `agent:retry` (maintainer-applied resume trigger) — **created.**
 - 🔲 **Conflict → rebase FIX MODE** — the gatekeeper branch described in §6.5 (the FIX-MODE
   *prompt* already handles a rebase instruction; the gatekeeper doesn't yet emit one).
 - 🔲 Live end-to-end verification against a real change-request.
@@ -552,9 +554,10 @@ Each item unlocks the next; do them in this order.
 5. ~~**Gatekeeper** (§7) → auto-merge on all-green.~~ **✅ Done & verified** — PR #19
    auto-merged into `staging` with zero human action (PR #25). **The happy path now
    closes.**
-6. **Fix loop** (§6) — `fixloop.yml` (re-fire + escalate) and the FIX-MODE routine-prompt
-   branch are **built**; `resume.yml` + the `agent:retry` label and a live end-to-end
-   run are what remain to fully close the *iterate* path (3-attempt cap + escalation).
+6. **Fix loop** (§6) — `fixloop.yml` (re-fire + escalate), `resume.yml` (`agent:retry`
+   reset), the `agent:retry` label, and the FIX-MODE routine-prompt branch are **built**.
+   What remains to fully close the *iterate* path: promote both workflows to `bridge` +
+   re-paste the live routine prompt (activation), and a live end-to-end run.
 7. ~~**Workflow-parity guard** → prevents §5 from silently regressing.~~ **✅ Done &
    verified** — `workflow parity` ci job, required on both branches (PR #25).
 8. **Release captain** (§8, optional) → drafted notes.

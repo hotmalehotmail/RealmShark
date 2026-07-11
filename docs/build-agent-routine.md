@@ -114,13 +114,14 @@ Never touch `bridge` directly, never publish a release, never edit
   block above, re-paste the whole thing into the routine's prompt — otherwise the
   agent won't recognize `FIX MODE` and the fix loop's re-fires will be treated as new
   build requests.
-- **Two firing paths, one routine.** BUILD MODE is fired by `implement.yml` on a
-  labeled issue (above). FIX MODE is fired by `fixloop.yml` when the review agent
-  requests changes on an agent PR: it re-`/fire`s this same routine with a
-  `FIX MODE …` work item naming the PR + head branch, so the agent pushes fixes to the
-  existing branch (never a new PR), bounded to 3 automated attempts before it
-  escalates the PR to a human (`agent:needs-human`). Both paths share the same
-  `ROUTINE_FIRE_URL` / `ROUTINE_FIRE_TOKEN`.
+- **Firing paths, one routine.** BUILD MODE is fired by `implement.yml` on a labeled
+  issue (above). FIX MODE is fired two ways, both re-`/fire`ing this same routine with a
+  `FIX MODE …` work item naming the PR + head branch so the agent pushes fixes to the
+  existing branch (never a new PR): (1) `fixloop.yml` automatically when the review agent
+  requests changes, bounded to 3 attempts before it escalates to a human
+  (`agent:needs-human`); and (2) `resume.yml` when a maintainer applies `agent:retry` to
+  a frozen PR — it resets the budget (deletes fixloop's re-fire markers) and re-fires.
+  All paths share the same `ROUTINE_FIRE_URL` / `ROUTINE_FIRE_TOKEN`.
 - **Identity:** routine commits/PRs carry **your** GitHub user (not a separate bot),
   from a `claude/*` head branch. That `claude/*` prefix is the signal we'll use when
   we scope the review agent to pipeline PRs.
