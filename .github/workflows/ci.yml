@@ -6,13 +6,6 @@ name: ci
 on:
   pull_request:
     branches: [staging, bridge]
-  # Dispatched by soak-verdict.yml on the staging->bridge promotion head (§9.3). That
-  # PR is opened by GITHUB_TOKEN, so the recursion guard suppresses its `pull_request`
-  # ci run — the required checks would sit pending and hang auto-merge forever. A
-  # workflow_dispatch (exempt from the guard) on `staging` posts the same required
-  # check runs to the same HEAD SHA. The parity job below has no PR base under dispatch,
-  # so it compares review.yml against the default branch — the right check on a promotion.
-  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
