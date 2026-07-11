@@ -109,13 +109,15 @@ This repo runs an issue-driven, mostly-hands-off development loop. The moving pa
 
 A CI release path exists: `.github/workflows/release.yml` (`workflow_dispatch`, channel `alpha`|`beta`) builds `bridge.jar` + the Windows installer on a `windows-latest` runner and publishes a prerelease. The manual recipe below still works and documents exactly what that workflow does.
 
+**The CI dispatch auto-bumps the version** — no manual bump needed. It seeds from the latest published release tag, increments the patch, and applies the channel suffix (`v0.9.27-alpha` → `0.9.28-alpha` for alpha, `-beta` for beta), writes that into `overlay/package.json` in the runner (so the built app + installer name carry it), and tags/releases with it. Nothing is committed back — the **latest release tag is the source of truth** for the CI path, so the repo's `overlay/package.json` version is only a fallback seed and can lag. (Dispatch alpha from `staging`, beta from `bridge`.) The manual recipe below is the exception: it still bumps `overlay/package.json` by hand.
+
 **NEVER cut a new release (tag + `gh release create`, or dispatching `release.yml`) unless the user explicitly asks for it in that message.** Building/packaging locally to verify is fine; tagging, pushing tags, dispatching the release workflow, and publishing a GitHub release are not — wait for an explicit "release"/"cut a release"/"ship it". This gate is stricter than the commit/PR posture above: branch commits and PRs are fine unasked, but publishing a release is not.
 
 `overlay/package.json`'s `version` is the single source of truth for the release number — it drives both the in-app version (shown in the Status panel via `app.getVersion()`) and the release tag/title below. Bump it *first*; everything else is derived from it, so the tag and the in-app version can't disagree.
 
 **Tag scheme is a plain semver tag `v$VERSION`** (e.g. `v0.9.11-alpha`), NOT the old `overlay-test-v…` prefix. GitHub only sorts the releases page correctly when the tag is recognizable semver; the old prefix made it fall back to lexical order (so `overlay-test-v0.9.10` sorted down next to `0.9.1`). Keep `version` a valid semver prerelease (e.g. `0.9.11-alpha`) so GitHub also auto-treats it as a prerelease. `updater.ts`'s `parseTagVersion` accepts both the new `v…` tags and the legacy prefixed ones (numeric core only), so mixed history still resolves.
 
-1. Bump `overlay/package.json`'s `version` to the new release number (a semver prerelease, e.g. `0.9.11-alpha`).
+1. Bump `overlay/package.json`'s `version` to the new release number (a semver prerelease, e.g. `0.9.11-alpha`). *(Manual recipe only — the CI dispatch above does this step automatically.)*
 2. Rebuild `bridge.jar` (Gradle, see above) if the Java side changed.
 3. `cd overlay && npm run build && npx electron-builder --win --x64`.
 4. Tag and release, deriving the tag/title straight from `package.json` so nothing is hand-typed:
