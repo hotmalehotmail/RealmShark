@@ -1,0 +1,109 @@
+name: sweep
+
+# Safety-net reconciliation (level-triggered) for the §7 gatekeeper. The gatekeeper arms
+# agent PRs on ci/review COMPLETION (edge-triggered); a PR held through a soak is re-armed by
+# the post-merge thaw the instant a promotion lands — but that's exactly when GitHub is
+# recomputing mergeability (UNKNOWN), so arming can fail and the PR strands with no fresh event
+# to retry (see #54). This sweep periodically merges any green, idle, un-armed agent PR when no
+# soak is open, so stranding self-heals regardless of how it happened.
+#
+# SECURITY — exactly as restrictive as the gatekeeper; the branch name is NOT the boundary:
+#   - SAME-REPO `claude/*` branches only (`isCrossRepository == false`). A `claude/*` branch in
+#     the repo itself requires write access to push, so forks/strangers are excluded up front.
+#   - Merges with a plain `gh pr merge` — NEVER `--admin` — so branch protection still gates,
+#     including `review-verdict`. A fork PR can't obtain `review-verdict` (a `pull_request` from
+#     a fork gets no secrets, so review.yml can't post it), so it is unmergeable here. THIS RESTS
+#     ON review.yml staying `on: pull_request` (never `pull_request_target`, which would hand
+#     secrets to fork PRs and break this reasoning).
+#   - Respects the §9.5 soak freeze and the `agent:needs-human` escalation, same as the gatekeeper.
+on:
+  schedule:
+    - cron: "*/30 * * * *" # every ~30 min (GitHub may delay/throttle scheduled runs; it's a net)
+  workflow_dispatch: {} # manual reconcile / testing
+
+permissions:
+  contents: read
+  pull-requests: read # list candidates + read mergeability (the merge itself uses MERGE_PAT)
+  issues: read # check for an open soak (freeze)
+
+concurrency:
+  group: sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge stranded agent PRs (no soak, green, same-repo)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_PAT: ${{ secrets.MERGE_PAT }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # 1) Respect the §9.5 soak freeze: during a soak only soak-fixes may move staging, and
+          #    the gatekeeper owns those. If any soak is open, do nothing.
+          if [ "$(gh issue list --repo "$REPO" --state open --label soak --json number -q 'length')" -gt 0 ]; then
+            echo "A soak is open — freeze active; sweep is a no-op."
+            exit 0
+          fi
+
+          # 2) Candidate PRs: SAME-REPO (no forks) claude/* -> staging, not a draft, not already
+          #    armed, not frozen for a human. The same-repo filter + branch protection (step 4)
+          #    are the security boundary — the `claude/` name is not.
+          CANDIDATES="$(gh pr list --repo "$REPO" --base staging --state open \
+            --json number,headRefName,isCrossRepository,isDraft,autoMergeRequest,labels \
+            -q '.[]
+                 | select(.isCrossRepository == false)
+                 | select(.isDraft == false)
+                 | select(.headRefName | startswith("claude/"))
+                 | select(.autoMergeRequest == null)
+                 | select([.labels[].name] | index("agent:needs-human") | not)
+                 | .number' 2>/dev/null || true)"
+          if [ -z "$CANDIDATES" ]; then
+            echo "No stranded agent PRs to sweep."
+            exit 0
+          fi
+
+          # 3) There is work, so the merge needs MERGE_PAT (a member identity, so the merge fires
+          #    post-merge). LOUD preflight — fail the run on a missing/expired PAT rather than
+          #    silently doing nothing. (Only reached when there's an actual PR to merge, so an
+          #    idle sweep never fails on the PAT.)
+          if [ -z "${MERGE_PAT:-}" ]; then
+            echo "::error::MERGE_PAT is empty/unset — required to merge swept PRs. Add the fine-grained PAT (this repo · Contents + Pull requests: R/W) as MERGE_PAT."
+            exit 1
+          fi
+          if ! GH_TOKEN="$MERGE_PAT" gh api "repos/$REPO/pulls?per_page=1" >/dev/null 2>/tmp/pat_err; then
+            echo "::error::MERGE_PAT failed (expired, revoked, or missing Contents/Pull-requests access) — rotate it. gh: $(tr '\n' ' ' </tmp/pat_err)"
+            exit 1
+          fi
+
+          # 4) Merge each CLEAN candidate. Poll mergeStateStatus first: right after staging moved,
+          #    GitHub recomputes it (UNKNOWN) — the exact race that stranded these PRs.
+          for P in $CANDIDATES; do
+            STATE="UNKNOWN"
+            for _ in 1 2 3 4 5 6; do
+              STATE="$(gh pr view "$P" --repo "$REPO" --json mergeStateStatus -q '.mergeStateStatus' 2>/dev/null || echo UNKNOWN)"
+              if [ "$STATE" != "UNKNOWN" ]; then break; fi
+              sleep 5
+            done
+            case "$STATE" in
+              CLEAN)
+                # Green + mergeable + up to date -> all required checks (ci + review-verdict) have
+                # passed. Merge via the PAT with NO --admin, so branch protection still governs.
+                if GH_TOKEN="$MERGE_PAT" gh pr merge "$P" --repo "$REPO" --squash 2>/tmp/merge_err; then
+                  echo "Swept: merged stranded green PR #$P."
+                else
+                  echo "::warning::#$P is CLEAN but the merge failed: $(tr '\n' ' ' </tmp/merge_err)"
+                fi
+                ;;
+              DIRTY)
+                echo "#$P conflicts with staging — needs a rebase (the gatekeeper's §6.5 job); skipping." ;;
+              BEHIND|BLOCKED)
+                echo "#$P not ready ('$STATE' — behind base, or checks not all green); skipping." ;;
+              *)
+                echo "#$P mergeability unresolved ('$STATE') — will retry next sweep." ;;
+            esac
+          done
+          echo "Sweep complete."
