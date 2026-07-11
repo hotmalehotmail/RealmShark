@@ -33,6 +33,7 @@ function render(): void {
   if (!tray) return
   tray.setContextMenu(
     Menu.buildFromTemplate([
+      { label: `RealmShark Overlay v${app.getVersion()}`, enabled: false },
       { label: STATUS_LABEL[status], enabled: false },
       { type: 'separator' },
       { label: 'Show/Hide Overlay', click: callbacks.onToggleOverlay },
