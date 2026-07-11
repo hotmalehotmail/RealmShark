@@ -154,6 +154,10 @@ so animations play on our clock (not phase-synced), and we always show the *idle
 sequence (not walk/attack). Confirm which indices animate with the temporary
 `[dye-anim]` bridge log.
 
+This discrete frame-cycling is separate from the **continuous** scroll/rotate
+motion some textiles have (driven by `animDyeTable`, not extra frames) — see
+"Animated cloth motion (scroll/rotate)" below.
+
 ## Colour fidelity: raw atlas decode
 
 Atlases are decoded with **`createImageBitmap(blob, { colorSpaceConversion:
@@ -168,10 +172,10 @@ pixels exact, which matters both for the dye colour and the base sprite.
 | File | Role |
 | --- | --- |
 | `src/main/java/assets/AssetExtractor.java` | Extracts object XML (`assets/xml`) + atlases; only parses `<Texture>` (not `<Tex1>`). |
-| `src/main/java/bridge/sprites/SpritePackService.java` | `buildDyeTable()` parses `<Tex1>` from `assets/xml`; emits `table`/`maskTable`/`dyeTable`/`animTable`/`atlases`. |
+| `src/main/java/bridge/sprites/SpritePackService.java` | `buildDyeTable()` parses `<Tex1>` (and each dye's optional `<AnimatedDye>`) from `assets/xml`; emits `table`/`maskTable`/`dyeTable`/`animTable`/`animDyeTable`/`atlases`. |
 | `src/main/java/assets/SpriteFlatBuffer.java` | Sprite/mask rects from the flatbuffer; `getAnimationFrames` (all frames of the representative animation, for character idle sprites and textiles); representative facing-frame selection via `framePreference`. |
-| `overlay/src/shared/ipc.ts` | `SpritePack` type incl. `dyeTable` / `maskTable` / `animTable`. |
-| `overlay/src/main/spritePack.ts` | Caches the pack; persists `dyeTable`/`maskTable`/`animTable`; forces a refetch when a cache predates them. |
+| `overlay/src/shared/ipc.ts` | `SpritePack` type incl. `dyeTable` / `maskTable` / `animTable` / `animDyeTable`. |
+| `overlay/src/main/spritePack.ts` | Caches the pack; persists `dyeTable`/`maskTable`/`animTable`/`animDyeTable`; forces a refetch when a cache predates them. |
 | `overlay/src/renderer/src/sprites/EntityRegistry.tsx` | Tracks `clothingDye`(32)/`accessoryDye`(33) per objectId from the packet stream. |
 | `overlay/src/renderer/src/sprites/SpriteProvider.tsx` | `getDyedSprite`/`getSprite` — the compositor and per-frame lookup (`TEXTILE_SUB` lives here). |
 | `overlay/src/renderer/src/sprites/Sprite.tsx` | `<Sprite>` — ticks its own animation clock (`isAnimated`) only when the sprite actually animates. |
@@ -186,59 +190,37 @@ textile) — a consumer must branch on `entry[0]` before reading the rest. A
 textile entry is variable length (`[10, atlasId, …4 numbers per frame]`), so its
 frame count is `(entry.length − 2) / 4`.
 
-## ⏳ IN PROGRESS: textile scroll animation (resume here)
+## Animated cloth motion (scroll/rotate) — shipped
 
-**Status (overlay 0.9.25-alpha).** Character idle animation and static textile
-rendering work. Animated textiles do **not** yet animate. Confirmed live:
+The scroll/rotate direction data initially looked absent from every asset we
+parsed (flatbuffer, dye object XML, `Tex1` itself) — see "Gotchas / history"
+below for where it turned out to actually live: a dye object's optional
+`<AnimatedDye type speed pivotX pivotY/>` element, which the extractor had
+never parsed before.
 
-- **Character skins/classes animate** — the frames are in the flatbuffer's
-  `animatedSprites` section; `animTable` + the per-`<Sprite>` clock cycle them.
-  (`[dye-anim]` shows `players`/`playerskins*` with `animatedIndices` = all,
-  17–95 frames each.) Idle loop looks clean.
-- **Textiles have NO animation frames** — `[dye-anim]` reports
-  `textile4x4/5x5/9x9/10x10: <no frames>`. They're single static sprites.
-- **In-game, animated textiles SCROLL** (user observation): the tiled pattern
-  translates in **one of the 4 cardinal directions**, and **some rotate** — and
-  this is **per-cloth** (different cloths scroll different ways).
-
-**Where the scroll direction is (and isn't).** Ruled out: the sprite flatbuffer
-(no animation field), the dye object XML (`Class`/`Texture`/`Mask`/`Tex1` only),
-and `Tex1` itself (`[size byte][24-bit index]`, no spare field).
-
-- **`cloth_bazaar` is a DEAD END (proven).** The 0.9.25-alpha `[cloth-bazaar]`
-  dump ran live: it's a **map file for the in-game "Cloth Bazaar" market area**,
-  not cloth data — `{"width":37,"height":37,"data":"<zlib+base64 tile array>",
-  "dict":[…ground/objs/regions…]}`. Decoding `data` gives 2738 B = 37×37 × 2 =
-  a grid of 16-bit tile indices (0–14, matching the 15-entry `dict`). Pure name
-  collision (the *market map* ≠ cloth dyes). Zero animation info.
-- **Upstream `tomato`/`potato` have no prior art** — they never reference
-  `textile`/`cloth`/`Tex1`/`dye`; they're DPS/stat overlays only.
-
-**Next step (do this first next session): widen the hunt, one live run.**
-0.9.26-alpha replaced the cloth-bazaar dump with a consolidated `[asset-inv]`
-diagnostic (one-shot, guarded by `diagDumped`, off the pack-build path):
-1. `UnityExtractor.dumpAssetInventory()` — lists **every** embedded TextAsset
-   (name + size), flags the `NON_XML_FILES`-discarded ones `[DISCARDED]`, and
-   prints a ~96-char ASCII **sniff** of each discarded one's start. Finds any
-   textile/cloth/dye asset we've never enumerated (by content, not just name).
-2. `SpriteFlatBuffer.dumpAllGroups()` — lists **every** sprite group (static
-   index count + **unfiltered** animation stats: `animIndices`/`multiFrameIndices`
-   /`maxFrames`). Closes the blind spot in `decodeSheet` where `animFrames` only
-   keeps `player*`/`textile*` groups — an animated cloth group under any other
-   name would otherwise be invisible.
-3. `buildDyeTable` prints the **full `<Object>` body** of the first 6 textile
-   dyes, to reveal any schema field beyond `Tex1` (an ignored animation/direction
-   attribute).
-
-**Get the `[asset-inv]` lines from a live run**, then: if an asset/field turns up
-→ parse `clothId → animType`, emit it in `dyeTable`, and scroll/rotate the tiling
-in `getDyedSprite` (offset by `time × speed` in the cloth's direction, reusing the
-per-`<Sprite>` tick). If **nothing** turns up, every data source is exhausted →
-it's procedural in the client, and the fallback is a **global fixed scroll**.
-
-**Temporary diagnostics to remove once done** (grep `[dye-anim]`, `[asset-inv]`,
-`dumpAssetInventory`, `dumpAllGroups`, `animCountsAll`, `diagDumped`,
-`describeAnimatedIndices`).
+- **Bridge:** `buildDyeTable` (`bridge/sprites/SpritePackService.java`) also
+  builds `cachedAnimDyeTable` from each dye's `<AnimatedDye>` element (present
+  only on animated cloths), emitted as its own `animDyeTable` in the pack JSON:
+  `dyeId -> [type, speed, pivotX, pivotY]`. `type` selects the motion, the sign
+  of `speed` its direction: `1` = horizontal scroll, `2` = vertical scroll,
+  `3` = rotate (`pivotX`/`pivotY` offset the rotation center from the tile
+  center).
+- **Renderer:** `SpriteProvider.tsx`'s `getDyedSprite` looks up
+  `pack.animDyeTable[dyeId]` for a textile dye (`dyeTable[id][0] === 10`) and,
+  when present, offsets the tiled pattern's sample coordinates by
+  `time × speed` (scroll) or rotates them about the pivot (rotate, quantized to
+  `ROT_STEPS` frames so the composite cache stays bounded) before tiling —
+  continuous, not a discrete frame cycle. `dyeAnimated`/`isAnimated` gate a
+  `<Sprite>`'s clock to tick at the smooth `DYE_ANIM_MS` (50 ms) instead of the
+  coarser `frameMs` when a dye has this. `textileScrollSpeed` (default `1.5`)
+  and `textileRotateSpeed` (default `0.15`) in `overlay/src/shared/settings.ts`
+  scale the dye's raw `speed` into output pattern-pixels/sec and radians/sec
+  respectively, live-tunable with no rebuild.
+- **Gotcha already hit once:** `overlay/src/main/spritePack.ts` caches the pack
+  pushed from the bridge into a `SpritePack` it hand-builds field by field —
+  any new top-level pack field (like `animDyeTable`) must be added there *and*
+  to the `requestSpritePack` staleness check, or it's silently dropped even
+  though the bridge emits it and the renderer is wired to consume it.
 
 ## Gotchas / history
 
@@ -250,5 +232,7 @@ it's procedural in the client, and the fallback is a **global fixed scroll**.
 - The mask is the same 8×8 as the body sprite; textile fineness comes from
   sub-pixel tiling (`TEXTILE_SUB`), not from higher-res source art.
 - Animated textiles are **not** frame sequences (no `animatedSprites` entries) —
-  they scroll/rotate procedurally, per-cloth; the direction data is not in
-  anything we currently parse (see "IN PROGRESS" above).
+  they scroll/rotate procedurally, per-cloth, driven by the dye object's
+  `<AnimatedDye>` element (see "Animated cloth motion (scroll/rotate)" above).
+  That element was easy to miss because it lives on the *dye* object, not the
+  sprite/flatbuffer data the rest of this doc's data flow otherwise draws from.
