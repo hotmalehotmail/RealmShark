@@ -7,8 +7,11 @@ body:
     attributes:
       value: |
         Fill this out as the **brief for an autonomous agent** — the agent implements
-        from this text with no follow-up questions, so be specific. The clearer the
-        acceptance criteria, the less the agent has to guess.
+        from this text with no follow-up questions, so be specific about the *outcome*.
+
+        Describe **what** you want and **why**, not **how**. Which files to change and
+        how to build it is the agent's call — you own the goal and the acceptance
+        criteria, the agent owns the implementation.
 
         > A **maintainer** applies the `agent:build` label to dispatch the build agent.
         > This repo is public, so opening an issue on its own triggers nothing.
@@ -16,7 +19,7 @@ body:
     id: summary
     attributes:
       label: Summary
-      description: What should exist that doesn't today, and why.
+      description: What should exist that doesn't today, and why. Describe the behaviour/outcome, not the code.
     validations:
       required: true
   - type: textarea
@@ -32,25 +35,18 @@ body:
     validations:
       required: true
   - type: textarea
-    id: area
-    attributes:
-      label: Area / files
-      description: >
-        Which part of the codebase this touches (e.g. `overlay/src/renderer/panels`,
-        `src/main/java/bridge/dps`). Keeps parallel agents on disjoint files.
-    validations:
-      required: true
-  - type: textarea
     id: out_of_scope
     attributes:
       label: Out of scope
-      description: Anything the agent should explicitly NOT do.
+      description: Anything the agent should explicitly NOT do (behaviour, not files).
     validations:
       required: false
   - type: textarea
     id: notes
     attributes:
       label: Notes / references
-      description: Prior art (e.g. upstream `tomato`/`potato` branches), links, constraints.
+      description: >
+        Constraints, links, or prior art the agent should be aware of (e.g. upstream
+        `tomato`/`potato` branches). Context, not implementation instructions.
     validations:
       required: false
