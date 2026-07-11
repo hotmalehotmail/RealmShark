@@ -20,6 +20,7 @@ permissions:
   issues: write # comment on / close the soak issue
   pull-requests: write # open the promotion PR + arm auto-merge
   statuses: write # stamp review-verdict on the promotion PR
+  actions: write # dispatch ci on the promotion head (workflow_dispatch)
 
 jobs:
   promote:
