@@ -27,6 +27,7 @@ concurrency:
 
 permissions:
   contents: write # native auto-merge creates the squash commit
+  statuses: read # read the review-verdict status (NOT covered by contents; unlisted scopes default to none)
   issues: write # freeze label + escalation comment on a stuck conflict
   pull-requests: write # to enable auto-merge / comment
 
@@ -45,6 +46,7 @@ jobs:
           REPO: ${{ github.repository }}
           HEAD: ${{ github.event.workflow_run.head_branch }}
           SHA: ${{ github.event.workflow_run.head_sha }}
+          EVENT_WF: ${{ github.event.workflow_run.name }}
           FIRE_URL: ${{ secrets.ROUTINE_FIRE_URL }}
           FIRE_TOKEN: ${{ secrets.ROUTINE_FIRE_TOKEN }}
           MAINTAINER: ${{ vars.MAINTAINER_HANDLE }}
@@ -85,10 +87,20 @@ jobs:
             exit 0
           fi
 
-          # ---- Conflicted (§6.5). Only act when the PR is OTHERWISE green; a failing
-          #      review is the fix loop's job (it'll re-fire, and the agent's push may
-          #      resolve the conflict incidentally). Re-firing a rebase on top of a
-          #      failing review would double-fire and race the shared budget. ----
+          # ---- Conflicted (§6.5). ----
+          # This job fires on BOTH `ci` and `review` completion (to arm auto-merge on
+          # either). But the rebase re-fire must happen ONCE per PR state, so gate it to
+          # the `review` completion only — otherwise one push would fire two rebases.
+          # (Arming above is idempotent, so it's fine on both.)
+          if [ "$EVENT_WF" != "review" ]; then
+            echo "PR #$NUM conflicts with staging; deferring the rebase to the review-completion run."
+            exit 0
+          fi
+
+          # Only act when the PR is OTHERWISE green; a failing review is the fix loop's
+          # job (it'll re-fire, and the agent's push may resolve the conflict
+          # incidentally). Re-firing a rebase on top of a failing review would double-fire
+          # and race the shared budget.
           VERDICT="$(gh api "repos/$REPO/commits/$SHA/status" \
                        -q '.statuses[] | select(.context=="review-verdict") | .state' 2>/dev/null | head -n1 || true)"
           if [ "$VERDICT" != "success" ]; then
