@@ -35,6 +35,13 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Allow the build agent's bot to trigger reviews. claude-code-action blocks
+          # bot-initiated runs by default, but the entire point of this workflow is to
+          # review the build agent's PRs (app/claude, actor `claude[bot]`). Both login
+          # forms are listed so it matches whether or not the action strips `[bot]`.
+          # Safe scope: a fork bot PR receives no secrets (this action can't run on it),
+          # and a same-repo bot PR requires write access — i.e. the trusted build agent.
+          allowed_bots: "claude,claude[bot]"
           # The action blocks mutating tools by default, so the review couldn't post.
           # Grant only what it needs to read the diff and post: scoped gh/git + file
           # write. NOT arbitrary Bash — this reviews untrusted PR diffs, and the token
