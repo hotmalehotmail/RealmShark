@@ -1,0 +1,103 @@
+name: resume
+
+# Resume path (mechanisms §6.3). A maintainer applies the `agent:retry` label to a
+# frozen agent PR (one the fix loop escalated with `agent:needs-human`) to grant it a
+# fresh set of automated fix attempts — optionally after leaving a steering comment.
+#
+# Security: applying a label requires write/triage permission, so GitHub already
+# guarantees the actor is a maintainer — the SAME gate as issue kickoff (§1). No
+# author_association check is needed. Agent PRs are same-repo (`claude/*`), so this
+# pull_request-triggered workflow has the secrets it needs (a fork PR gets none, but
+# its head isn't `claude/*` either, so the guard below no-ops it).
+#
+# What it does:
+#   1. Resets the budget by DELETING fixloop's own `<!-- fixloop:refire -->` marker
+#      comments. The fix loop counts those markers, NOT reviews (§6.1), so clearing
+#      them — not dismissing reviews — is what resets the count to 0.
+#   2. Clears the freeze (`agent:needs-human`) + the `agent:retry` trigger label.
+#   3. Re-fires the build agent in FIX MODE (this is attempt 1 of the fresh budget, so
+#      its comment carries the marker). The FIX-MODE agent reads the whole PR
+#      conversation, so any steering comment the maintainer left is picked up.
+#
+# Runs on the built-in GITHUB_TOKEN + the existing ROUTINE_FIRE_* secrets — no PAT.
+on:
+  pull_request:
+    types: [labeled]
+
+# Share fixloop's per-branch group so a resume can't race a fix-loop run on the same
+# branch (both would read/modify the marker count). Same group string => serialized.
+concurrency:
+  group: fixloop-${{ github.event.pull_request.head.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write # delete marker comments, edit labels/assignee, comment
+  pull-requests: write # comment on the PR
+
+jobs:
+  resume:
+    if: github.event.label.name == 'agent:retry'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reset the fix-loop budget and re-fire in FIX MODE
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD: ${{ github.event.pull_request.head.ref }}
+          ACTOR: ${{ github.actor }}
+          MAINTAINER: ${{ vars.MAINTAINER_HANDLE }}
+          FIRE_URL: ${{ secrets.ROUTINE_FIRE_URL }}
+          FIRE_TOKEN: ${{ secrets.ROUTINE_FIRE_TOKEN }}
+        run: |
+          set -euo pipefail
+          MAX_FIX_ROUNDS=3
+          # Only agent branches (mirror fixloop's scoping); a human's PR labeled agent:retry is a no-op.
+          case "$HEAD" in
+            claude/*) ;;
+            *) echo "PR #$PR head '$HEAD' is not a claude/* agent branch — nothing to resume."; exit 0;;
+          esac
+
+          # 1. Reset the budget: delete fixloop's own re-fire marker comments so the
+          #    marker count (§6.1) reads 0 again. They're authored by github-actions[bot]
+          #    = this GITHUB_TOKEN, so it is allowed to delete them.
+          MARKED="$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+                      -q '.[] | select(.user.login=="github-actions[bot]" and (.body|contains("<!-- fixloop:refire -->"))) | .id' 2>/dev/null || true)"
+          N=0
+          for CID in $MARKED; do
+            gh api -X DELETE "repos/$REPO/issues/comments/$CID" >/dev/null 2>&1 && N=$((N + 1)) || true
+          done
+          echo "Reset budget on PR #$PR — cleared $N prior re-fire marker(s)."
+
+          # 2. Clear the freeze + the trigger label, and drop the escalation assignee
+          #    (the maintainer fixloop assigned via MAINTAINER_HANDLE).
+          for L in agent:retry agent:needs-human; do gh pr edit "$PR" --repo "$REPO" --remove-label "$L" >/dev/null 2>&1 || true; done
+          [ -n "${MAINTAINER:-}" ] && gh pr edit "$PR" --repo "$REPO" --remove-assignee "$MAINTAINER" >/dev/null 2>&1 || true
+
+          # 3. Re-fire in FIX MODE — attempt 1 of the fresh budget (so its comment carries
+          #    the marker). Same /fire plumbing as kickoff (§1) / fixloop (§6.1).
+          if [ -z "${FIRE_URL:-}" ] || [ -z "${FIRE_TOKEN:-}" ]; then
+            gh pr comment "$PR" --repo "$REPO" --body "⚙️ \`agent:retry\`: budget reset ($N attempt(s) cleared), but can't re-fire — ROUTINE_FIRE_* secrets are unset."
+            exit 0
+          fi
+          # Untrusted review text -> jq via --arg (never interpolated into the shell).
+          REVIEW_BODY="$(gh api "repos/$REPO/pulls/$PR/reviews" -q '[.[] | select(.state=="CHANGES_REQUESTED")] | last | .body' 2>/dev/null || true)"
+          INLINE="$(gh api --paginate "repos/$REPO/pulls/$PR/comments" -q '.[] | "- \(.path):\(.line // .original_line // "?"): \(.body)"' 2>/dev/null || true)"
+          TEXT="$(printf 'FIX MODE. Repository %s. PR #%s, head branch `%s`, base `staging`.\nA maintainer (@%s) reset the fix budget and asked you to try again. Check out `%s`, read the full PR conversation (review findings AND any maintainer steering comments) for guidance, address every unresolved finding, and PUSH your fixes to `%s` — do NOT open a new PR. If you believe a finding is wrong, reply to that review comment explaining why instead of changing code.\n\nReviewer summary:\n%s\n\nInline review comments:\n%s\n' \
+            "$REPO" "$PR" "$HEAD" "$ACTOR" "$HEAD" "$HEAD" "${REVIEW_BODY:-(none)}" "${INLINE:-(none)}")"
+          jq -nc --arg t "$TEXT" '{text: $t}' > /tmp/fire.json
+          RESP="$(curl -sS -X POST "$FIRE_URL" \
+            -H "Authorization: Bearer $FIRE_TOKEN" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "anthropic-beta: experimental-cc-routine-2026-04-01" \
+            -H "Content-Type: application/json" \
+            --data @/tmp/fire.json || true)"
+          URL="$(printf '%s' "$RESP" | jq -r '.claude_code_session_url // empty' 2>/dev/null || true)"
+          if [ -n "$URL" ]; then
+            # Marker => this counts as attempt 1 of the fresh MAX_FIX_ROUNDS budget.
+            gh pr comment "$PR" --repo "$REPO" --body "♻️ Budget reset by @$ACTOR — re-fired the build agent in **FIX MODE** with a fresh ${MAX_FIX_ROUNDS}-attempt budget (attempt 1/${MAX_FIX_ROUNDS}). [Watch the session]($URL). <!-- fixloop:refire -->"
+          else
+            gh pr comment "$PR" --repo "$REPO" --body "$(printf '⚠️ Budget reset, but the FIX MODE re-fire failed. Routine response:\n```\n%s\n```' "$RESP")"
+            exit 1
+          fi
