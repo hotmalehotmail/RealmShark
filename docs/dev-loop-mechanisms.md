@@ -33,7 +33,7 @@ step that *runs* (driven) but is *not gated* (unenforced), or vice-versa.
 | 3 | Build agent → branch + PR | routine session (Opus 4.8) | GitHub App push scope; `claude/*` branch convention | 🟢 |
 | 4 | CI ground-truth checks | `pull_request` → `ci.yml` | branch protection required checks | 🟢 |
 | 5 | Independent review | `pull_request` → `review.yml` | workflow-validation guard | 🟢 verdict live |
-| 6 | Fix loop (review → re-fire builder, capped) | — | — | 🔴 |
+| 6 | Fix loop (review → re-fire builder, capped) | `workflow_run` of `review` → `fixloop.yml` | `review-verdict` status; `MAX_FIX_ROUNDS`; `agent:needs-human` freeze | 🟡 re-fire + escalate built; resume.yml + live-verify pending |
 | 7 | Gatekeeper auto-merge | `workflow_run` → arm auto-merge | native auto-merge + required checks | 🟢 verified (#19) |
 | 8 | Release (ship button) | `workflow_dispatch` → `release.yml` | manual-only dispatch | 🟢 (no captain notes) |
 | — | Branch protection | — | required checks (+ push restriction) | 🟢 verdict required (push restrict N/A on user repo) |
@@ -171,12 +171,18 @@ linchpin for §6 and §7. How it works:
 
 ## 6 · Fix loop — review requests changes → re-fire the builder (capped)
 
-**Status.** 🔴 Unbuilt. This is the single largest gap and the one most easily
-hand-waved, so it is specified in full below. Nothing today triggers on review
-events (`grep pull_request_review .github/workflows` → none).
+**Status.** 🟡 Partial — the converging path is built, the resume path and live
+verification are not. **Built:** `.github/workflows/fixloop.yml` (`on: workflow_run`
+of `review` → read `review-verdict` → round-count → re-fire in FIX MODE or escalate,
+per §6.1/§6.2) and the FIX-MODE branch of the routine prompt
+([build-agent-routine.md](build-agent-routine.md)). **Still to build:** `resume.yml`
++ the `agent:retry` label (§6.3), the gatekeeper's rebase-FIX-MODE on conflict
+(§6.5), and an end-to-end live verification (the loop hasn't yet run against a real
+change-request). Until the routine's live prompt is re-pasted with the FIX-MODE
+block, a re-fire is a no-op.
 
-**Depends on:** §5's `REQUEST_CHANGES` verdict, and §3's "operate on an existing
-branch" agent mode.
+**Depends on:** §5's `REQUEST_CHANGES` verdict (done), and §3's "operate on an existing
+branch" agent mode (done — the FIX-MODE prompt branch).
 
 ### 6.1 Normal (converging) path — exactly what happens
 
@@ -205,11 +211,19 @@ verdict is a no-op (the gatekeeper handles it).
 **Round counting (stateless, from the API — no fragile label state).** The job
 computes:
 ```
-rounds = count of non-dismissed CHANGES_REQUESTED reviews on this PR
+prior_refires = count of fixloop's own <!-- fixloop:refire --> re-fire comments on this PR
+attempt       = prior_refires + 1
 ```
-via `GET /repos/{repo}/pulls/{n}/reviews`. The review that just fired the workflow
-is included, so `rounds` is 1 on the first change-request, 2 on the second, etc. A
-label `loop:<rounds>` is set on the PR purely for human visibility (not read back).
+via `GET /repos/{repo}/issues/{n}/comments`, filtered to `github-actions[bot]` and the
+hidden marker. **It counts fixloop's own re-fire comments, not reviews** — because
+`review.yml` posts its verdict via a plain PR comment (no review object) when its
+`POST /reviews` call 422s (an inline comment on a line outside the diff rejects the
+whole review), while still posting `review-verdict = failure`. A review-based count
+would then stay `0` and re-fire forever; a self-authored marker is posted exactly once
+per successful attempt, so it increments every round regardless of how the review was
+delivered — and is inherently bounded. A label `loop:<attempt>` is set for human
+visibility (not read back). *(As implemented in `fixloop.yml`; the earlier
+review-dismissal design below is superseded by this — see the resume note in §6.3.)*
 
 **Cap.** `MAX_FIX_ROUNDS = 3`.
 - If `rounds <= 3` → **re-fire** (this is automated fix attempt #`rounds`).
@@ -275,10 +289,12 @@ small `.github/workflows/resume.yml` runs `on: pull_request: types: [labeled]` w
   GitHub already guarantees the actor is a maintainer. This is the *same* gate as
   kickoff (§1), so the resume path inherits one security model instead of a bespoke
   `author_association` check.
-- **Resets the budget** — **dismisses** the outstanding `CHANGES_REQUESTED` reviews
-  via `PUT /repos/{repo}/pulls/{n}/reviews/{id}/dismissals`. Because §6.1 counts only
-  *non-dismissed* change-requests, this cleanly resets `rounds` to 0 — a fresh set
-  of 3 automated attempts.
+- **Resets the budget** — because §6.1 now counts fixloop's own `<!-- fixloop:refire -->`
+  re-fire comments (not reviews), the reset must **neutralize those markers**: delete the
+  re-fire comments, or edit them to strip the marker, so the next count reads 0 — a fresh
+  set of 3 automated attempts. **Dismissing reviews does NOT reset a comment-based count.**
+  (The original design reset by dismissing `CHANGES_REQUESTED` reviews; that was superseded
+  when the count moved to markers to survive review.yml's comment-fallback path — §6.1.)
 - **Removes** `agent:retry` + `agent:needs-human`, clears the assignee.
 - **Re-fires** the builder in FIX MODE (as §6.1). The FIX-MODE prompt already reads
   the full PR conversation, so any comment you left is picked up as guidance
@@ -300,15 +316,20 @@ on merge. Nothing about the escalation leaves residue once resolved.
 
 ### 6.4 What must be built for §6
 
-- `fixloop.yml` (`on: workflow_run` of `review` → read `review-verdict` → round count,
-  re-fire, or escalate) — new. Uses the built-in `GITHUB_TOKEN`.
-- `resume.yml` (`on: pull_request` labeled `agent:retry` → dismiss reviews → re-fire) — new.
-- A repo label `agent:retry` (maintainer-applied resume trigger) — new.
-- FIX-MODE branch in the routine prompt (build-agent-routine.md) — edit.
-- FIX-MODE work-item construction in the fire call — new (shares the §1 `/fire` plumbing).
-- Repo variable `MAINTAINER_HANDLE` (escalation @-mention/assignee) — new.
-- **Conflict → rebase FIX MODE** — the branch described in §6.5.
-- §5 verdict (hard dependency).
+- ✅ `fixloop.yml` (`on: workflow_run` of `review` → read `review-verdict` → round count,
+  re-fire, or escalate) — **built.** Uses the built-in `GITHUB_TOKEN`.
+- ✅ FIX-MODE branch in the routine prompt (build-agent-routine.md) — **built** (but the
+  *live* routine prompt at claude.ai must be re-pasted; the doc edit alone doesn't take).
+- ✅ FIX-MODE work-item construction in the fire call — **built** (in `fixloop.yml`,
+  shares the §1 `/fire` plumbing).
+- ✅ Repo variable `MAINTAINER_HANDLE` (escalation @-mention/assignee) — already set.
+- ✅ §5 verdict (hard dependency) — done.
+- 🔲 `resume.yml` (`on: pull_request` labeled `agent:retry` → neutralize the `fixloop:refire`
+  marker comments to reset the budget → re-fire) — **next.**
+- 🔲 A repo label `agent:retry` (maintainer-applied resume trigger) — **next** (with resume.yml).
+- 🔲 **Conflict → rebase FIX MODE** — the gatekeeper branch described in §6.5 (the FIX-MODE
+  *prompt* already handles a rebase instruction; the gatekeeper doesn't yet emit one).
+- 🔲 Live end-to-end verification against a real change-request.
 - **No `GATEKEEPER_TOKEN` / PAT** — the `workflow_run` trigger (§6.1) sidesteps the
   recursion guard, and the re-fire happens through the routine (the `app/claude`
   App pushes, which already re-triggers CI/review). So the whole loop runs on the
@@ -531,8 +552,9 @@ Each item unlocks the next; do them in this order.
 5. ~~**Gatekeeper** (§7) → auto-merge on all-green.~~ **✅ Done & verified** — PR #19
    auto-merged into `staging` with zero human action (PR #25). **The happy path now
    closes.**
-6. **Fix loop** (§6) ← *next* → `fixloop.yml` + `resume.yml` + FIX-MODE prompt. Closes
-   the *iterate* path, with the exact 3-attempt cap and escalation above.
+6. **Fix loop** (§6) — `fixloop.yml` (re-fire + escalate) and the FIX-MODE routine-prompt
+   branch are **built**; `resume.yml` + the `agent:retry` label and a live end-to-end
+   run are what remain to fully close the *iterate* path (3-attempt cap + escalation).
 7. ~~**Workflow-parity guard** → prevents §5 from silently regressing.~~ **✅ Done &
    verified** — `workflow parity` ci job, required on both branches (PR #25).
 8. **Release captain** (§8, optional) → drafted notes.
