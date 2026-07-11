@@ -399,11 +399,13 @@ checks went green.
   PR head `claude/*` (base `staging`).
 - **Gate.** Merge only if **all** hold: both `ci` job contexts = `success`, the
   `review-verdict` context = `success`, and no `agent:needs-human` label present.
-- **Action.** `gh pr merge {n} --squash --auto` using the built-in `GITHUB_TOKEN`.
-  `--auto` hands off to *native* auto-merge, so branch protection itself does the
-  final "wait for green" — the job just arms it. (In this repo `GITHUB_TOKEN` can
-  merge: 0 required approvals, no push restrictions; and the staging merge doesn't
-  need to trigger anything downstream, so the recursion guard is a non-issue.)
+- **Action.** `gh pr merge {n} --squash --auto` using **`MERGE_PAT`** (the maintainer's
+  fine-grained PAT), *not* `GITHUB_TOKEN`. `--auto` hands off to *native* auto-merge, so
+  branch protection does the final "wait for green" — the job just arms it. The PAT is
+  required because the merge **must** trigger downstream: a `GITHUB_TOKEN` merge is swallowed
+  by the recursion guard, so `post-merge.yml` (`recut-alpha`) would never fire on a soak-fix
+  merge. A **loud preflight** validates the PAT and fails the run on an expired/missing token
+  rather than silently arming with `GITHUB_TOKEN`.
 - **On verdict = failure** it does nothing; §6 owns that path.
 - **On conflict (`DIRTY`)** it does not merge; it re-fires the rebase FIX MODE (§6.5).
 - **Prerequisites.** Enable the repo's **"Allow auto-merge"** setting (a repo toggle,
@@ -481,36 +483,40 @@ workflows scoped to issues that carry the `soak` label. Applying a label require
 write/triage permission, so — exactly like kickoff — GitHub guarantees a maintainer;
 no author check needed.
 
-### 9.3 · Pass → promote to `bridge` (PR-based, review-skipped, no elevated token)
-`soak:pass` promotes **via a PR, not a direct push** — so it needs **no non-default
-token at all** (a direct push to `bridge` would require the admin bypass, which the
-built-in token and a fine-grained PAT can't be relied on to inherit). Instead the
-`soak-verdict.yml` `soak:pass` handler, on the built-in `GITHUB_TOKEN`:
+### 9.3 · Pass → promote to `bridge` (PR-based, review-skipped, via `MERGE_PAT`)
+`soak:pass` promotes **via a PR, not a direct push**. The `soak-verdict.yml` `soak:pass`
+handler:
 
-1. Opens a `staging → bridge` PR ("Promote — soak v<version> passed").
-2. **Stamps `review-verdict = success`** on the PR head SHA — `soak:pass` *is* the
-   human approval, standing in for a re-review (the same "manually stamp the verdict"
-   pattern used for fork PRs under *Cross-cutting: merging outside / fork PRs*).
-3. Enables native auto-merge (`--merge`, to preserve per-commit history + `Closes #N`).
+1. Opens a `staging → bridge` PR ("Promote — soak v<version> passed"), **authored by
+   `MERGE_PAT`** — a fine-grained PAT owned by the maintainer (Contents + Pull requests, this
+   repo only).
+2. **Stamps `review-verdict = success`** on the PR head SHA (on the built-in `GITHUB_TOKEN`)
+   — `soak:pass` *is* the human approval, standing in for a re-review (the same "manually
+   stamp the verdict" pattern used for fork PRs under *Cross-cutting: merging outside*).
+3. Enables native auto-merge **with `MERGE_PAT`** (`--merge`, to preserve per-commit history
+   + `Closes #N`).
+
+A **loud PAT preflight** runs first: if `MERGE_PAT` is missing or fails (expired / revoked /
+insufficient scope) the handler comments on the soak issue and **fails the run**, rather than
+silently falling back to `GITHUB_TOKEN` (which would re-break the promotion invisibly).
 
 **The agent review is skipped on promotion PRs:** `review.yml` gets a one-line `if:`
 guard so it does *not* run on a `staging → bridge` PR (head `staging`, base `bridge`) —
-otherwise it would re-review the aggregate and could veto a soak you already approved.
+otherwise it would re-review the aggregate and could veto a soak you already approved. This
+guard is load-bearing precisely because the PAT-authored PR *is* a real `pull_request` that
+would otherwise trigger the review.
 
-**`ci` is *dispatched* on the promotion head, not left to auto-run.** The PR is opened by
-`GITHUB_TOKEN`, and GitHub's recursion guard suppresses `on: pull_request` runs for
-`GITHUB_TOKEN`-authored PRs — so `ci` (overlay typecheck/lint, the bridge jar, *and* the
-`workflow parity` job, all in `ci.yml`) would never run, the required checks would sit
-pending, and auto-merge would hang forever. So the handler also does `gh workflow run
-ci.yml --ref staging`: a `workflow_dispatch` **is** exempt from the recursion guard, and it
-posts the same required check runs to the same HEAD SHA. (`ci.yml` therefore carries a
-`workflow_dispatch` trigger; under dispatch the parity job has no PR base, so it compares
-`review.yml` against the default branch — exactly the check a promotion should enforce.)
-With `ci` + `workflow parity` green plus the stamped verdict, auto-merge merges. This trusts
-`soak:pass` as `bridge`'s approval instead of a bot re-review — correct, since a real Windows
-soak is a *stronger* gate than re-reviewing already-reviewed code. **Safety:** only the
-`soak:pass` handler stamps the verdict, so a promotion PR opened any other way still has *no*
-verdict → stays blocked.
+**Why the PAT — two GitHub gates both key on the actor.** Were the promotion PR authored by
+the built-in `GITHUB_TOKEN`: (a) the *recursion guard* would suppress its `on: pull_request`
+runs so `ci` never fires, **and** (b) the *"require approval for external contributors"*
+setting would park its `ci`/`review` runs in `action_required` (a `github-actions[bot]`
+author isn't a member). A PAT owned by the repo **owner** clears both — the promotion PR is
+an ordinary `pull_request` from a member, so `ci` (overlay/bridge/`workflow parity`) runs
+normally (no dispatch workaround), and the PAT-armed *merge* carries a member identity so
+`pull_request: closed` fires and `post-merge.yml`'s `cut-latest` runs. With `ci` + `workflow
+parity` green plus the stamped verdict, auto-merge merges. **Safety:** only the `soak:pass`
+handler stamps the verdict, so a promotion PR opened any other way still has *no* verdict →
+stays blocked.
 
 The promoted commits' `Closes #N` auto-close their issues (verified live: #36 closed on
 promotion). The soak issue is **closed when the promotion actually lands on `bridge`**
@@ -602,32 +608,42 @@ Built in **PR #41** (workflows) unless noted:
 - **`release.yml` → "release staging"**, channel-aware: `alpha` = soak build (patch+1,
   `-alpha`, `--prerelease`) that opens the soak issue after publish; `beta` = the **latest**
   release (minor bump, no suffix, `--latest` not `--prerelease`), auto-cut on promotion.
-- `soak-verdict.yml` (`on: issues: labeled`): `soak:pass` → open the `staging → bridge` PR,
-  stamp `review-verdict=success`, **dispatch `ci` on the head** (the recursion-guard
-  workaround, 9.3), arm auto-merge (the soak issue closes later, when the promotion lands; the
-  no-diff "nothing to promote" case closes + thaws here so the freeze can't wedge); `soak:fail`
-  → ensure the `soak-fix` label, then `/fire` the fix agent (`GITHUB_TOKEN` + `ROUTINE_FIRE_*`).
+- `soak-verdict.yml` (`on: issues: labeled`): `soak:pass` → open the `staging → bridge` PR
+  **as `MERGE_PAT`** (so `ci` runs naturally and the merge fires `post-merge`), stamp
+  `review-verdict=success` (on `GITHUB_TOKEN`), arm auto-merge **as `MERGE_PAT`** — all behind
+  a **loud PAT preflight** (the soak issue closes later, when the promotion lands; the no-diff
+  "nothing to promote" case closes + thaws here so the freeze can't wedge); `soak:fail` →
+  ensure the `soak-fix` label, then `/fire` the fix agent (`GITHUB_TOKEN` + `ROUTINE_FIRE_*`).
 - `post-merge.yml` (`on: pull_request: closed`; `actions: write` to dispatch, `issues: write`
   + `pull-requests: write` for the close + thaw): a staging merge during a soak re-cuts the
   alpha; a `staging → bridge` promotion landing cuts the latest release, closes the soak
-  issue, and thaws the freeze (arms any held agent PRs).
-- `ci.yml` gains a `workflow_dispatch` trigger so the promotion head can be gated (9.3).
-- Repo labels `soak` / `soak:pass` / `soak:fail` / `soak-fix`; repo settings **Allow merge commits** on and **Allow GitHub Actions to create and approve pull requests** on (`actions/permissions/workflow` → `can_approve_pull_request_reviews: true` — the `soak:pass` handler opens the promotion PR with `GITHUB_TOKEN`; off by default → `gh pr create` 403s).
+  issue, and thaws the freeze (arms any held agent PRs). Now reliably reached because the
+  gatekeeper/promotion merges are made by `MERGE_PAT`, not `GITHUB_TOKEN`.
+- `ci.yml` runs `on: pull_request` only — the promotion PR is a real `pull_request` authored
+  by `MERGE_PAT`, so `ci` runs naturally (the earlier `workflow_dispatch` workaround is gone).
+- Repo labels `soak` / `soak:pass` / `soak:fail` / `soak-fix`; repo setting **Allow merge commits** on. The promotion PR is authored by `MERGE_PAT` (a member), so neither the "Allow GitHub Actions to create PRs" toggle nor the "require approval for external contributors" gate applies to it — keep that external-contributor gate **on** for real fork PRs.
 - **The soak-freeze (§9.5)** — the §7 gatekeeper holds unrelated agent PRs while a `soak`
   issue is open, exempting soak-fix PRs (recognized by the `soak-fix` label, body reference as fallback),
   plus the `post-merge.yml` thaw. Folded into **PR #41**.
 - **`review.yml` skip-guard** for `staging → bridge` PRs — **PR #42** (parity-guarded →
   `bridge`-first, admin-merged, then synced to `staging`).
 
-**No non-default token needed** — the whole of §9 runs on the built-in `GITHUB_TOKEN`
-(the earlier `PROMOTE_TOKEN` is gone: promotion is a PR + stamped verdict, not a push).
+**`MERGE_PAT` is the one non-default credential.** A fine-grained PAT (owner: the maintainer;
+this repo only; Contents + Pull requests: read/write) used *only* to **create the promotion
+PR** and to **arm auto-merge** (gatekeeper agent PRs + the promotion). It makes those actions
+carry a member identity, so (a) downstream workflows fire on the merge and (b) the external-
+contributor approval gate doesn't apply. Everything else runs on the built-in `GITHUB_TOKEN`.
+A **loud preflight** in each PAT-using job fails the run — with a comment — on an expired or
+missing PAT, never a silent fallback. (The earlier `PROMOTE_TOKEN` idea, and the "no token at
+all" design, were both wrong: GitHub's recursion guard + the approval gate make a member-
+identity token unavoidable for the merge/promotion — see 9.3.)
 
 | Action | Token | Scope |
 |---|---|---|
-| Soak-issue open/close/comment + labels | `GITHUB_TOKEN` | `issues: write` |
+| Soak-issue open/close/comment + labels · verdict stamp | `GITHUB_TOKEN` | `issues: write` + `statuses: write` |
 | `soak:fail` → fire the fix agent | `GITHUB_TOKEN` + `ROUTINE_FIRE_*` | — |
-| Auto-cut → dispatch the alpha (`workflow_dispatch` is recursion-guard-exempt) | `GITHUB_TOKEN` | `actions: write` |
-| `soak:pass` → open promotion PR, stamp verdict, dispatch `ci` on the head, arm auto-merge | `GITHUB_TOKEN` | `pull-requests: write` + `statuses: write` + `actions: write` + `issues: write` |
+| Auto-cut / cut-latest → dispatch `release.yml` (`workflow_dispatch` is recursion-guard-exempt) | `GITHUB_TOKEN` | `actions: write` |
+| **Create the promotion PR + arm auto-merge** (gatekeeper + promotion) | **`MERGE_PAT`** | Contents R/W + Pull requests R/W |
 
 The auto-cut dispatch works on `GITHUB_TOKEN` because `workflow_dispatch` is one of the
 two events *exempt* from GitHub's recursion guard (so a token-fired dispatch still runs
