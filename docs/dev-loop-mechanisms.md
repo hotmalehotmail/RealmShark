@@ -409,9 +409,23 @@ checks went green.
 - **On verdict = failure** it does nothing; §6 owns that path.
 - **On conflict (`DIRTY`)** it does not merge; it re-fires the rebase FIX MODE (§6.5).
 - **Prerequisites.** Enable the repo's **"Allow auto-merge"** setting (a repo toggle,
-  not a token). **No `GATEKEEPER_TOKEN` needed.** If you later add automation that
-  must react to the staging merge (e.g. an auto-promotion `staging → bridge`), *that*
-  is when a non-default token becomes necessary — not before.
+  not a token). The arming itself uses **`MERGE_PAT`** (see 9.3) so the merge fires
+  `post-merge`.
+
+### 7.1 · The sweep — a level-triggered safety net (`sweep.yml`)
+The gatekeeper is **edge-triggered** (it acts on ci/review *completion*), which strands PRs
+in one case: a PR **held through a soak** is re-armed only by the `post-merge` thaw the instant
+a promotion lands — exactly when GitHub is recomputing mergeability (`UNKNOWN`), so arming can
+fail, and an idle held PR gets no fresh event to retry (this is what happened to #54). The
+**sweep** closes that gap by *reconciling to the desired state* on a timer (`on: schedule`,
+~30 min, + `workflow_dispatch`): when **no soak is open**, it merges any green, idle, un-armed
+agent PR — polling `mergeStateStatus` past the transient `UNKNOWN` first, then merging only the
+`CLEAN` ones. It is **exactly as restrictive as the gatekeeper** — same-repo `claude/*` only
+(`isCrossRepository == false`, so forks are excluded), skips `agent:needs-human`, and merges
+with a plain `gh pr merge` (**no `--admin`**) so branch protection — crucially `review-verdict`
+— still gates. A fork PR can't obtain `review-verdict` (no secrets on a `pull_request` from a
+fork), so the sweep can never merge one; this depends on `review.yml` staying `on: pull_request`
+(never `pull_request_target`). Same `MERGE_PAT` + loud preflight as the other merge paths.
 
 ---
 
