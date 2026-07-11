@@ -513,23 +513,45 @@ This deliberately covers **any** merge to `staging` during a soak — a `soak:fa
 *or* an unrelated agent PR — because either staleness means the installer under test no
 longer matches `staging`, so the honest thing is to re-soak the new HEAD.
 
-> **Release-gate note (for review).** The *initial* alpha is a manual dispatch — the
-> human chooses to start a soak. Auto-cut re-releases are continuations of that
-> already-started soak, not new unattended releases; but they **do publish alphas
-> without a per-release press**. That's the one place this trades a bit of the
-> "manual-dispatch-only" gate for a closed loop — intentional per the `auto-cut`
-> decision, called out here so it's a conscious choice.
+**Hard boundaries (both enforced by construction):**
+- **Strictly during a soak.** Auto-cut is a no-op unless an open `soak` issue exists —
+  so a `staging` merge with no soak in progress publishes nothing.
+- **Never to `bridge`.** Auto-cut *only* re-dispatches the **alpha** (`--ref staging`,
+  `channel=alpha`). It never promotes, never targets `bridge`, never cuts a beta. The
+  **only** path to `bridge` is your explicit `soak:pass` label (9.3). So nothing reaches
+  the trunk without a human press — auto-cut softens only the *alpha* re-release, never
+  the promotion.
+
+> **Release-gate note.** The *initial* alpha is a manual dispatch — the human chooses to
+> start a soak. Auto-cut re-releases are continuations of that already-started soak, not
+> new unattended releases; but they **do publish alphas without a per-release press**.
+> That's the one place this trades a bit of the "manual-dispatch-only" gate for a closed
+> loop — but only for the throwaway alpha, never for `bridge` (see boundaries above).
 
 ### 9.6 · What must be built for §9
 - `release.yml`: a step (alpha only) that opens the soak issue after a successful publish.
 - `soak-verdict.yml` (`on: issues: labeled`): `soak:pass` → promote via `PROMOTE_TOKEN`;
-  `soak:fail` → `/fire` the fix agent with the soak brief. Uses `GITHUB_TOKEN` +
-  `ROUTINE_FIRE_*` except for the promotion push (`PROMOTE_TOKEN`).
+  `soak:fail` → `/fire` the fix agent with the soak brief.
 - `soak-recut.yml` (`on: pull_request: closed`): re-dispatch alpha while a soak is open.
 - Repo labels: `soak`, `soak:pass`, `soak:fail`.
-- Secret **`PROMOTE_TOKEN`** — a fine-grained PAT (contents: write), owner-owned so it
-  bypasses `bridge` protection. This is the "non-default token" §7 anticipated for
-  automation that pushes to `bridge`.
+- Secret **`PROMOTE_TOKEN`**.
+
+**Token map (why each is what it is).**
+
+| Action | Token | Scope |
+|---|---|---|
+| Open / close / comment on the soak issue, apply labels | built-in `GITHUB_TOKEN` | `issues: write` |
+| `soak:fail` → fire the fix agent | built-in `GITHUB_TOKEN` + `ROUTINE_FIRE_*` | — |
+| Auto-cut → dispatch the alpha release | built-in `GITHUB_TOKEN` | `actions: write` |
+| `soak:pass` → **push `staging → bridge`** | **`PROMOTE_TOKEN`** | **`contents: write` only** |
+
+So **`PROMOTE_TOKEN` needs `contents: write` and nothing else** — *not* `pull-requests`,
+because the promotion is a **fast-forward push, not a PR merge** (§9.3). It's a
+fine-grained PAT, owner-owned, so it bypasses `bridge` protection (`enforce_admins`
+off). Everything else runs on the built-in token: the soak-issue bookkeeping is plain
+issue writes, and the auto-cut dispatch works on `GITHUB_TOKEN` because `workflow_dispatch`
+is one of the two events *exempt* from GitHub's recursion guard (so a token-fired dispatch
+still runs the release). This is the single "non-default token" §7 anticipated.
 
 ### 9.7 · Known limitation
 The fix agent is **headless — no game**. A live-game-only visual/UX soak failure can't
