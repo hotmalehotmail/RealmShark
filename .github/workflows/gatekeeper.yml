@@ -79,7 +79,10 @@ jobs:
             BODY="$(gh pr view "$NUM" --repo "$REPO" --json body -q '.body' 2>/dev/null || true)"
             SOAKFIX=0
             for S in $OPEN_SOAKS; do
-              if printf '%s' "$BODY" | grep -qE "#${S}\b"; then SOAKFIX=1; break; fi
+              # Match the exact phrase the soak:fail brief instructs ("Addresses soak #N"),
+              # not a bare "#N" — otherwise an unrelated PR that happens to reference an issue
+              # whose number equals the soak number would be wrongly exempted from the freeze.
+              if printf '%s' "$BODY" | grep -qiE "addresses soak #${S}\b"; then SOAKFIX=1; break; fi
             done
             if [ "$SOAKFIX" -eq 0 ]; then
               echo "Soak in progress — holding PR #$NUM (not a soak-fix); it is armed when the soak resolves."
