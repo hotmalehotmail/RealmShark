@@ -35,7 +35,8 @@ step that *runs* (driven) but is *not gated* (unenforced), or vice-versa.
 | 5 | Independent review | `pull_request` → `review.yml` | workflow-validation guard | 🟢 verdict live |
 | 6 | Fix loop (review → re-fire builder, capped) | `workflow_run` of `review` → `fixloop.yml`; `agent:retry` → `resume.yml`; conflict → `gatekeeper.yml` rebase | `review-verdict` status; `MAX_FIX_ROUNDS`; `agent:needs-human` freeze | 🟡 re-fire + escalate + resume + conflict-rebase built; live-verify pending |
 | 7 | Gatekeeper auto-merge | `workflow_run` → arm auto-merge | native auto-merge + required checks | 🟢 verified (#19) |
-| 8 | Release (ship button) | `workflow_dispatch` → `release.yml` | manual-only dispatch | 🟢 (captain notes best-effort built) |
+| 8 | Release (ship button) | `workflow_dispatch` → `release.yml` | manual-only dispatch | 🟢 (captain notes + auto-bump built) |
+| 9 | Alpha soak → promote or fix | `soak:pass`/`soak:fail` labels; auto-cut on staging merge; latest-on-promotion | maintainer-only labels; `soak:pass` = stamped `review-verdict` on the promotion PR | 🟡 built pending deploy (PRs #41 #42) — fix-forward, auto-cut, labels, PR-based promote (no token) |
 | — | Branch protection | — | required checks (+ push restriction) | 🟢 verdict required (push restrict N/A on user repo) |
 | — | Workflow-parity guard | `ci` job on each PR | required check (both branches) | 🟢 verified |
 
@@ -445,6 +446,181 @@ the dispatch itself, not the version bump.
 
 ---
 
+## 9 · Alpha soak → promote or fix (the release feedback loop)
+
+**Drives.** An alpha release (§8) publishes an installer; then the loop **doesn't end
+until the tested changes land on `bridge`**. On publish it opens a **soak tracking
+issue** and waits on a maintainer verdict expressed as a label: `soak:pass` promotes
+`staging → bridge`; `soak:fail` re-enters the fix loop (fix-forward). Any change that
+lands on `staging` while a soak is open **auto-cuts a fresh alpha** so the installer
+under test always matches `staging`'s HEAD.
+
+**Enforces.** The verdict labels are **maintainer-only** (applying a label needs write
+access — the same gate as §1 kickoff). Promotion to `bridge` is a **PR with a stamped
+`review-verdict`** (the built-in token can't *push* to protected `bridge`, so it merges
+via a PR instead — no elevated token, 9.3). The *initial* alpha dispatch (§8) remains
+the human release gate.
+
+**Status.** 🟡 Built, pending deploy (PRs #41 workflows + #42 review-skip). Decisions
+locked: **fix-forward, auto-cut, labels, PR-based promote (no token), latest-on-promotion**.
+The release pipeline was renamed **release staging**; the `bridge` "latest" release is
+its `beta` channel, auto-cut on promotion (9.3). Not yet live-verified.
+
+### 9.1 · The soak tracking issue
+On a successful alpha publish, the **release staging** pipeline (`release.yml`, alpha
+channel only) opens an issue
+`🧪 Alpha soak: v<version>`, labeled `soak`, whose body is the changes since the last
+promotion + the installer link + the verdict instructions. Opened with the built-in
+`GITHUB_TOKEN` (`issues: write`) — no PAT needed. **One soak issue per published
+alpha**: a re-cut (9.5) opens a new one and closes the prior as *superseded*, so each
+alpha keeps a clean, self-contained verdict record.
+
+### 9.2 · Verdict — `soak:pass` / `soak:fail`
+Two maintainer-applied labels on the soak issue, read by `on: issues: labeled`
+workflows scoped to issues that carry the `soak` label. Applying a label requires
+write/triage permission, so — exactly like kickoff — GitHub guarantees a maintainer;
+no author check needed.
+
+### 9.3 · Pass → promote to `bridge` (PR-based, review-skipped, no elevated token)
+`soak:pass` promotes **via a PR, not a direct push** — so it needs **no non-default
+token at all** (a direct push to `bridge` would require the admin bypass, which the
+built-in token and a fine-grained PAT can't be relied on to inherit). Instead the
+`soak-verdict.yml` `soak:pass` handler, on the built-in `GITHUB_TOKEN`:
+
+1. Opens a `staging → bridge` PR ("Promote — soak v<version> passed").
+2. **Stamps `review-verdict = success`** on the PR head SHA — `soak:pass` *is* the
+   human approval, standing in for a re-review (the same "manually stamp the verdict"
+   pattern used for fork PRs under *Cross-cutting: merging outside / fork PRs*).
+3. Enables native auto-merge (`--merge`, to preserve per-commit history + `Closes #N`).
+
+**The agent review is skipped on promotion PRs:** `review.yml` gets a one-line `if:`
+guard so it does *not* run on a `staging → bridge` PR (head `staging`, base `bridge`) —
+otherwise it would re-review the aggregate and could veto a soak you already approved.
+CI + `workflow parity` still run and gate; with those green plus the stamped verdict,
+auto-merge merges. This trusts `soak:pass` as `bridge`'s approval instead of a bot
+re-review — correct, since a real Windows soak is a *stronger* gate than re-reviewing
+already-reviewed code. **Safety:** only the `soak:pass` handler stamps the verdict, so a
+promotion PR opened any other way still has *no* verdict → stays blocked.
+
+The promoted commits' `Closes #N` auto-close their issues (verified live: #36 closed on
+promotion). The soak issue is **closed immediately when `soak:pass` fires** (not when the
+promotion lands) — so auto-cut (§9.5) can't fire during the promotion's in-flight window,
+avoiding a race where a fresh alpha supersedes a promotion already merging the older HEAD.
+
+**When the promotion lands on `bridge`, a LATEST release is auto-cut** (`post-merge.yml`,
+`cut-latest`): it dispatches the release pipeline on the `beta` channel from `bridge`,
+which does a **bigger (minor) version bump, no prerelease suffix, published as GitHub's
+"Latest" release** (not a prerelease). So the human `soak:pass` cascades to: land on
+`bridge` → stable/latest release. This is the one auto-trigger that *does* touch `bridge`
+— but only downstream of the human `soak:pass`, never from auto-cut (§9.5). Version
+scheme: alpha soak builds bump the **patch** (`0.9.29-alpha → 0.9.30-alpha`, prerelease);
+the latest bumps the **minor** (`0.9.29-alpha → 0.10.0`, Latest).
+
+*(Requires the review.yml skip-guard — a parity-guarded change, so it lands on `bridge`
+first, syncs to `staging`, admin-merged like the `allowed_bots` fix — and the repo's
+"Allow merge commits" setting on.)*
+
+### 9.4 · Fail → fix forward
+`soak:fail` fires the **build agent** through the routine `/fire` in **BUILD MODE** (a
+new fix, not an existing-branch FIX MODE) with a work item built from the soak issue:
+
+```
+ALPHA SOAK FAILED for v<version>. Reported broken during live testing:
+<soak issue body + comments>
+Diagnose and fix it; open a fix PR into `staging`. If a repro capture is included,
+reproduce it via FakePacketSource and add a regression test first.
+```
+
+The fix PR then flows through the normal loop unchanged — §4 CI, §5 review, §6 fix
+loop if the review requests changes, §7 gatekeeper auto-merge to `staging`.
+**Fix-forward** is the chosen default; reverting a specific offending change is a manual
+option, not automated. (No routine-prompt change is needed — the default new-branch
+routine mode, "BUILD MODE" in the routine prompt, already handles a bug brief; the
+soak-fail work item *is* one.)
+
+### 9.5 · Auto-cut — a fresh alpha whenever `staging` moves during a soak
+**Chosen: auto-cut.** A workflow `on: pull_request: closed` with
+`if: merged && base == staging` checks whether an open `soak` issue exists; if so it
+re-dispatches the alpha: `gh workflow run release.yml --ref staging -f channel=alpha`.
+That publishes a new installer, opens a new soak issue (9.1), and closes the prior soak
+as superseded. It's concurrency-guarded to debounce a burst of merges.
+
+This deliberately covers **any** merge to `staging` during a soak — a `soak:fail` fix
+*or* an unrelated agent PR — because either staleness means the installer under test no
+longer matches `staging`, so the honest thing is to re-soak the new HEAD.
+
+**Convergence hazard + resolution (soak-freeze).** Taken alone, "re-cut on *any* staging
+merge" can **livelock**: under sustained dev-loop traffic, unrelated `claude/*` PRs merge
+to `staging` continuously, each one re-cutting the alpha and superseding the soak issue
+before the maintainer can apply a verdict — so a soak never reaches `soak:pass` and
+`bridge` never gets promoted. The concurrency guard only debounces *bursts*, not sustained
+traffic. **Resolution — freeze `staging` for the soak's duration:** while an open `soak`
+issue exists, the **gatekeeper (§7) holds unrelated agent PRs** (does not arm auto-merge;
+they queue) so `staging`'s HEAD is stable during the soak. Only **`soak:fail` fixes** are
+exempt — they carry a `soak-fix` label and still merge + re-cut, since converging the soak
+*is* the point. When the soak resolves (`soak:pass` promotes, or the fix loop completes),
+the freeze lifts and the queued PRs drain. This keeps the "re-soak on change" guarantee
+(staging only moves for soak-fixes) while guaranteeing the soak converges. *(This freeze +
+the `soak-fix` label are a §7 gatekeeper change — a to-build refinement, see §9.6; not in
+the first cut PRs #41/#42.)*
+
+**Hard boundaries (both enforced by construction):**
+- **Strictly during a soak.** Auto-cut is a no-op unless an open `soak` issue exists —
+  so a `staging` merge with no soak in progress publishes nothing.
+- **Never to `bridge`.** Auto-cut *only* re-dispatches the **alpha** (`--ref staging`,
+  `channel=alpha`). It never promotes, never targets `bridge`, never cuts a beta. The
+  **only** path to `bridge` is your explicit `soak:pass` label (9.3). So nothing reaches
+  the trunk without a human press — auto-cut softens only the *alpha* re-release, never
+  the promotion.
+
+> **Release-gate note.** The *initial* alpha is a manual dispatch — the human chooses to
+> start a soak. Auto-cut re-releases are continuations of that already-started soak, not
+> new unattended releases; but they **do publish alphas without a per-release press**.
+> That's the one place this trades a bit of the "manual-dispatch-only" gate for a closed
+> loop — but only for the throwaway alpha, never for `bridge` (see boundaries above).
+
+### 9.6 · What must be built for §9
+Built in **PR #41** (workflows) unless noted:
+- **`release.yml` → "release staging"**, channel-aware: `alpha` = soak build (patch+1,
+  `-alpha`, `--prerelease`) that opens the soak issue after publish; `beta` = the **latest**
+  release (minor bump, no suffix, `--latest` not `--prerelease`), auto-cut on promotion.
+- `soak-verdict.yml` (`on: issues: labeled`): `soak:pass` → open the `staging → bridge` PR,
+  stamp `review-verdict=success`, auto-merge, close the soak issue; `soak:fail` → `/fire`
+  the fix agent (`GITHUB_TOKEN` + `ROUTINE_FIRE_*`).
+- `post-merge.yml` (`on: pull_request: closed`, `actions: write` to dispatch): a staging
+  merge during a soak re-cuts the alpha; a `staging → bridge` promotion landing cuts the
+  latest release.
+- Repo labels `soak` / `soak:pass` / `soak:fail`; repo setting **Allow merge commits** on.
+- **`review.yml` skip-guard** for `staging → bridge` PRs — **PR #42** (parity-guarded →
+  `bridge`-first, admin-merged, then synced to `staging`).
+
+**Still to build (refinement, not in #41/#42):** the **soak-freeze** (§9.5) — the §7
+gatekeeper holds unrelated agent PRs while a `soak` issue is open, exempting `soak-fix`-
+labelled PRs, so the soak converges instead of livelocking under sustained merge traffic.
+
+**No non-default token needed** — the whole of §9 runs on the built-in `GITHUB_TOKEN`
+(the earlier `PROMOTE_TOKEN` is gone: promotion is a PR + stamped verdict, not a push).
+
+| Action | Token | Scope |
+|---|---|---|
+| Soak-issue open/close/comment + labels | `GITHUB_TOKEN` | `issues: write` |
+| `soak:fail` → fire the fix agent | `GITHUB_TOKEN` + `ROUTINE_FIRE_*` | — |
+| Auto-cut → dispatch the alpha (`workflow_dispatch` is recursion-guard-exempt) | `GITHUB_TOKEN` | `actions: write` |
+| `soak:pass` → open promotion PR, stamp verdict, arm auto-merge | `GITHUB_TOKEN` | `contents: write` + `pull-requests: write` + `statuses: write` |
+
+The auto-cut dispatch works on `GITHUB_TOKEN` because `workflow_dispatch` is one of the
+two events *exempt* from GitHub's recursion guard (so a token-fired dispatch still runs
+the release). Nothing here needs a PAT or App — the promotion sidesteps the
+push-to-protected-branch problem by going through a PR (9.3) instead of a push.
+
+### 9.7 · Known limitation
+The fix agent is **headless — no game**. A live-game-only visual/UX soak failure can't
+be reproduced or regression-tested by the agent; those need precise written guidance or
+a manual fix. The auto-fixable class is logic/DPS/decode bugs that come with a
+FakePacketSource repro capture — same constraint as the normal `agent:fix` path.
+
+---
+
 ## Cross-cutting: branch protection
 
 **Enforces (should).** Per spec §03: required checks = `ci` **+ review**, 0 human
@@ -590,6 +766,12 @@ Each item unlocks the next; do them in this order.
    verified** — `workflow parity` ci job, required on both branches (PR #25).
 8. ~~**Release captain** (§8, optional) → drafted notes.~~ **✅ Built** — best-effort
    Haiku `notes` job in `release.yml`, static fallback; unexercised until a real dispatch.
+   Auto version-bump also built (seeds from the latest tag).
+9. **Alpha soak → promote or fix** (§9) — 🟡 **built pending deploy** (PRs #41 workflows
+   + #42 review-skip): soak issue + `soak:pass`/`soak:fail` verdict, PR-based `bridge`
+   promotion (stamped verdict, agent review skipped, **no token**), `soak:fail` →
+   fix-forward, auto-cut on staging merge, latest-release-on-promotion. Not yet
+   live-verified; the soak-freeze refinement (§9.5) is still to build.
 
 After 1–6, the spec's claim holds literally: a labeled issue produces a merged,
 tested change with two human touches — write the issue, press ship — and any PR the
