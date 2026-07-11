@@ -15,6 +15,7 @@ permissions:
   contents: read
   issues: read # check for an open soak issue
   actions: write # dispatch release.yml
+  pull-requests: write # thaw the soak freeze (arm held agent PRs after promotion)
 
 # Debounce a burst of merges into the same base.
 concurrency:
@@ -59,3 +60,12 @@ jobs:
           set -euo pipefail
           echo "Promotion landed on bridge — cutting the latest release (beta channel)."
           gh workflow run release.yml --repo "$REPO" --ref bridge -f channel=beta
+          # Thaw the soak freeze (§9.5): the soak is over, so arm any held (un-armed) agent
+          # PRs into staging. Ones not yet green just wait on branch protection.
+          gh pr list --repo "$REPO" --base staging --state open \
+            --json number,headRefName,autoMergeRequest \
+            -q '.[] | select((.headRefName|startswith("claude/")) and .autoMergeRequest==null) | .number' \
+            | while read -r P; do
+                [ -n "$P" ] && gh pr merge "$P" --repo "$REPO" --squash --auto >/dev/null 2>&1 || true
+              done
+          echo "Thawed held agent PRs (if any)."

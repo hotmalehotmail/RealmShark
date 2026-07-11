@@ -85,8 +85,8 @@ jobs:
           fi
           # Untrusted issue text (title/body/comments) -> jq via --arg, never the shell.
           COMMENTS="$(gh api --paginate "repos/$REPO/issues/$ISSUE/comments" -q '.[] | "- \(.user.login): \(.body)"' 2>/dev/null || true)"
-          TEXT="$(printf 'ALPHA SOAK FAILED (%s, issue #%s). Reported broken during live Windows testing:\n\nTitle: %s\n\n%s\n\nMaintainer comments:\n%s\n\nDiagnose and fix EACH reported bug, fix-forward. Open ONE fix PR into `staging` (BUILD MODE). If a repro capture is included, reproduce it via FakePacketSource and add a regression test first. A fresh alpha will auto-cut for re-soak when your fix merges.' \
-            "$TITLE" "$ISSUE" "$TITLE" "${BODY:-(no body)}" "${COMMENTS:-(none)}")"
+          TEXT="$(printf 'ALPHA SOAK FAILED (%s, issue #%s). Reported broken during live Windows testing:\n\nTitle: %s\n\n%s\n\nMaintainer comments:\n%s\n\nDiagnose and fix EACH reported bug, fix-forward. Open ONE fix PR into `staging` (BUILD MODE). IMPORTANT: put "Addresses soak #%s" in the PR body — the release loop uses that reference to recognise this as a soak-fix (so it merges to re-cut the alpha instead of being held by the soak freeze). If a repro capture is included, reproduce it via FakePacketSource and add a regression test first. A fresh alpha auto-cuts for re-soak when your fix merges.' \
+            "$TITLE" "$ISSUE" "$TITLE" "${BODY:-(no body)}" "${COMMENTS:-(none)}" "$ISSUE")"
           jq -nc --arg t "$TEXT" '{text: $t}' > /tmp/fire.json
           RESP="$(curl -sS -X POST "$FIRE_URL" \
             -H "Authorization: Bearer $FIRE_TOKEN" \

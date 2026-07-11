@@ -69,6 +69,25 @@ jobs:
             exit 0
           fi
 
+          # ---- Soak freeze (§9.5). While a soak is open, HOLD unrelated agent PRs (do
+          #      nothing) so the soak converges instead of livelocking under merge traffic.
+          #      Exempt soak-fix PRs — those whose body references the open soak issue (the
+          #      soak:fail brief tells the agent to). Held PRs are armed when the promotion
+          #      lands (post-merge.yml thaw). ----
+          OPEN_SOAKS="$(gh issue list --repo "$REPO" --state open --label soak --json number -q '.[].number' 2>/dev/null || true)"
+          if [ -n "$OPEN_SOAKS" ]; then
+            BODY="$(gh pr view "$NUM" --repo "$REPO" --json body -q '.body' 2>/dev/null || true)"
+            SOAKFIX=0
+            for S in $OPEN_SOAKS; do
+              if printf '%s' "$BODY" | grep -qE "#${S}\b"; then SOAKFIX=1; break; fi
+            done
+            if [ "$SOAKFIX" -eq 0 ]; then
+              echo "Soak in progress — holding PR #$NUM (not a soak-fix); it is armed when the soak resolves."
+              exit 0
+            fi
+            echo "PR #$NUM references an open soak issue — treating as a soak-fix, not frozen."
+          fi
+
           # ---- Not conflicted: arm native auto-merge (the §7 happy path). ----
           if [ "$MERGEABLE" != "CONFLICTING" ]; then
             if [ "$MERGEABLE" = "UNKNOWN" ]; then

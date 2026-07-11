@@ -200,4 +200,15 @@ jobs:
           BODY="$(printf 'Installer to test: %s\n\n### What changed\n%s\n\n### To verify\nInstall on the Windows PC and test against the live game, then apply a verdict label:\n\n- ✅ **Works** — apply `soak:pass`. Promotes `staging` to `bridge` and cuts a **latest** release.\n- ❌ **Broken** — describe each bug below (steps / expected / actual; add a FakePacketSource repro capture for packet/DPS/decode bugs), then apply `soak:fail`. The build agent fixes forward and a fresh alpha auto-cuts for re-soak.\n\n> While this soak is open, any change merged to `staging` auto-cuts a fresh alpha and supersedes this issue.' \
             "$REL_URL" "$CHANGES")"
           gh label create soak --repo "$GITHUB_REPOSITORY" --color 5319E7 --description "Alpha soak tracking issue" --force >/dev/null 2>&1 || true
-          gh issue create --repo "$GITHUB_REPOSITORY" --title "🧪 Alpha soak: v$VERSION" --label soak --body "$BODY"
+          NEW_URL="$(gh issue create --repo "$GITHUB_REPOSITORY" --title "🧪 Alpha soak: v$VERSION" --label soak --body "$BODY")"
+          NEW_NUM="${NEW_URL##*/}"
+          echo "Opened soak issue #$NEW_NUM ($NEW_URL)."
+          # Supersede any OTHER open soak issues (a re-cut replaces the prior soak) so exactly
+          # one soak is open at a time — the freeze/thaw (§9.5) keys on that count.
+          gh issue list --repo "$GITHUB_REPOSITORY" --state open --label soak --json number -q '.[].number' \
+            | while read -r I; do
+                if [ -n "$I" ] && [ "$I" != "$NEW_NUM" ]; then
+                  gh issue comment "$I" --repo "$GITHUB_REPOSITORY" --body "Superseded by a fresh alpha soak (v$VERSION, #$NEW_NUM) — \`staging\` moved during the soak." >/dev/null 2>&1 || true
+                  gh issue close "$I" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || true
+                fi
+              done
