@@ -35,7 +35,8 @@ step that *runs* (driven) but is *not gated* (unenforced), or vice-versa.
 | 5 | Independent review | `pull_request` → `review.yml` | workflow-validation guard | 🟢 verdict live |
 | 6 | Fix loop (review → re-fire builder, capped) | `workflow_run` of `review` → `fixloop.yml`; `agent:retry` → `resume.yml`; conflict → `gatekeeper.yml` rebase | `review-verdict` status; `MAX_FIX_ROUNDS`; `agent:needs-human` freeze | 🟡 re-fire + escalate + resume + conflict-rebase built; live-verify pending |
 | 7 | Gatekeeper auto-merge | `workflow_run` → arm auto-merge | native auto-merge + required checks | 🟢 verified (#19) |
-| 8 | Release (ship button) | `workflow_dispatch` → `release.yml` | manual-only dispatch | 🟢 (captain notes best-effort built) |
+| 8 | Release (ship button) | `workflow_dispatch` → `release.yml` | manual-only dispatch | 🟢 (captain notes + auto-bump built) |
+| 9 | Alpha soak → promote or fix | `soak:pass`/`soak:fail` labels; auto-cut on staging merge | maintainer-only labels; `PROMOTE_TOKEN` for the `bridge` push | 🔴 spec (§9) — fix-forward, auto-cut, labels |
 | — | Branch protection | — | required checks (+ push restriction) | 🟢 verdict required (push restrict N/A on user repo) |
 | — | Workflow-parity guard | `ci` job on each PR | required check (both branches) | 🟢 verified |
 
@@ -445,6 +446,99 @@ the dispatch itself, not the version bump.
 
 ---
 
+## 9 · Alpha soak → promote or fix (the release feedback loop)
+
+**Drives.** An alpha release (§8) publishes an installer; then the loop **doesn't end
+until the tested changes land on `bridge`**. On publish it opens a **soak tracking
+issue** and waits on a maintainer verdict expressed as a label: `soak:pass` promotes
+`staging → bridge`; `soak:fail` re-enters the fix loop (fix-forward). Any change that
+lands on `staging` while a soak is open **auto-cuts a fresh alpha** so the installer
+under test always matches `staging`'s HEAD.
+
+**Enforces.** The verdict labels are **maintainer-only** (applying a label needs write
+access — the same gate as §1 kickoff). Promotion to protected `bridge` requires a
+**non-default `PROMOTE_TOKEN`** — the built-in `GITHUB_TOKEN` can't push to a protected
+branch. The *initial* alpha dispatch (§8) remains the human release gate.
+
+**Status.** 🔴 Unbuilt — spec below (decisions locked: **fix-forward, auto-cut, labels**).
+
+### 9.1 · The soak tracking issue
+On a successful alpha publish, `release.yml` (alpha channel only) opens an issue
+`🧪 Alpha soak: v<version>`, labeled `soak`, whose body is the changes since the last
+promotion + the installer link + the verdict instructions. Opened with the built-in
+`GITHUB_TOKEN` (`issues: write`) — no PAT needed. **One soak issue per published
+alpha**: a re-cut (9.5) opens a new one and closes the prior as *superseded*, so each
+alpha keeps a clean, self-contained verdict record.
+
+### 9.2 · Verdict — `soak:pass` / `soak:fail`
+Two maintainer-applied labels on the soak issue, read by `on: issues: labeled`
+workflows scoped to issues that carry the `soak` label. Applying a label requires
+write/triage permission, so — exactly like kickoff — GitHub guarantees a maintainer;
+no author check needed.
+
+### 9.3 · Pass → promote to `bridge`
+`soak:pass` fires the promotion: **fast-forward `staging → bridge`** using
+`PROMOTE_TOKEN` (a fine-grained PAT owned by the maintainer). The built-in token can't
+push to protected `bridge`; an owner-owned PAT bypasses protection while
+`enforce_admins` is off — the same hatch used for the manual promotions to date. The
+promoted commits' `Closes #N` auto-close their issues (verified live: #36 closed on
+promotion), and the soak issue is closed with a "promoted to bridge" comment. A **beta**
+release from `bridge` stays a separate manual dispatch (out of scope here).
+
+### 9.4 · Fail → fix forward
+`soak:fail` fires the **build agent** through the routine `/fire` in **BUILD MODE** (a
+new fix, not an existing-branch FIX MODE) with a work item built from the soak issue:
+
+```
+ALPHA SOAK FAILED for v<version>. Reported broken during live testing:
+<soak issue body + comments>
+Diagnose and fix it; open a fix PR into `staging`. If a repro capture is included,
+reproduce it via FakePacketSource and add a regression test first.
+```
+
+The fix PR then flows through the normal loop unchanged — §4 CI, §5 review, §6 fix
+loop if the review requests changes, §7 gatekeeper auto-merge to `staging`.
+**Fix-forward** is the chosen default; reverting a specific offending change is a manual
+option, not automated. (No routine-prompt change is needed — BUILD MODE already handles
+a bug brief; the soak-fail work item *is* one.)
+
+### 9.5 · Auto-cut — a fresh alpha whenever `staging` moves during a soak
+**Chosen: auto-cut.** A workflow `on: pull_request: closed` with
+`if: merged && base == staging` checks whether an open `soak` issue exists; if so it
+re-dispatches the alpha: `gh workflow run release.yml --ref staging -f channel=alpha`.
+That publishes a new installer, opens a new soak issue (9.1), and closes the prior soak
+as superseded. It's concurrency-guarded to debounce a burst of merges.
+
+This deliberately covers **any** merge to `staging` during a soak — a `soak:fail` fix
+*or* an unrelated agent PR — because either staleness means the installer under test no
+longer matches `staging`, so the honest thing is to re-soak the new HEAD.
+
+> **Release-gate note (for review).** The *initial* alpha is a manual dispatch — the
+> human chooses to start a soak. Auto-cut re-releases are continuations of that
+> already-started soak, not new unattended releases; but they **do publish alphas
+> without a per-release press**. That's the one place this trades a bit of the
+> "manual-dispatch-only" gate for a closed loop — intentional per the `auto-cut`
+> decision, called out here so it's a conscious choice.
+
+### 9.6 · What must be built for §9
+- `release.yml`: a step (alpha only) that opens the soak issue after a successful publish.
+- `soak-verdict.yml` (`on: issues: labeled`): `soak:pass` → promote via `PROMOTE_TOKEN`;
+  `soak:fail` → `/fire` the fix agent with the soak brief. Uses `GITHUB_TOKEN` +
+  `ROUTINE_FIRE_*` except for the promotion push (`PROMOTE_TOKEN`).
+- `soak-recut.yml` (`on: pull_request: closed`): re-dispatch alpha while a soak is open.
+- Repo labels: `soak`, `soak:pass`, `soak:fail`.
+- Secret **`PROMOTE_TOKEN`** — a fine-grained PAT (contents: write), owner-owned so it
+  bypasses `bridge` protection. This is the "non-default token" §7 anticipated for
+  automation that pushes to `bridge`.
+
+### 9.7 · Known limitation
+The fix agent is **headless — no game**. A live-game-only visual/UX soak failure can't
+be reproduced or regression-tested by the agent; those need precise written guidance or
+a manual fix. The auto-fixable class is logic/DPS/decode bugs that come with a
+FakePacketSource repro capture — same constraint as the normal `agent:fix` path.
+
+---
+
 ## Cross-cutting: branch protection
 
 **Enforces (should).** Per spec §03: required checks = `ci` **+ review**, 0 human
@@ -590,6 +684,11 @@ Each item unlocks the next; do them in this order.
    verified** — `workflow parity` ci job, required on both branches (PR #25).
 8. ~~**Release captain** (§8, optional) → drafted notes.~~ **✅ Built** — best-effort
    Haiku `notes` job in `release.yml`, static fallback; unexercised until a real dispatch.
+   Auto version-bump also built (seeds from the latest tag).
+9. **Alpha soak → promote or fix** (§9) ← *next* → soak issue + `soak:pass`/`soak:fail`
+   verdict, PAT-driven `bridge` promotion, `soak:fail` → fix-forward, auto-cut on staging
+   merge. Needs the `PROMOTE_TOKEN` secret + the `soak*` labels. Closes the release
+   feedback loop so a soak-tested change lands on `bridge` without a manual promotion.
 
 After 1–6, the spec's claim holds literally: a labeled issue produces a merged,
 tested change with two human touches — write the issue, press ship — and any PR the
