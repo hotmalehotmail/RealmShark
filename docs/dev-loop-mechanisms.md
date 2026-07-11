@@ -461,10 +461,14 @@ access — the same gate as §1 kickoff). Promotion to `bridge` is a **PR with a
 via a PR instead — no elevated token, 9.3). The *initial* alpha dispatch (§8) remains
 the human release gate.
 
-**Status.** 🔴 Unbuilt — spec below (decisions locked: **fix-forward, auto-cut, labels**).
+**Status.** 🟡 Built, pending deploy (PRs #41 workflows + #42 review-skip). Decisions
+locked: **fix-forward, auto-cut, labels, PR-based promote (no token), latest-on-promotion**.
+The release pipeline was renamed **release staging**; the `bridge` "latest" release is
+its `beta` channel, auto-cut on promotion (9.3). Not yet live-verified.
 
 ### 9.1 · The soak tracking issue
-On a successful alpha publish, `release.yml` (alpha channel only) opens an issue
+On a successful alpha publish, the **release staging** pipeline (`release.yml`, alpha
+channel only) opens an issue
 `🧪 Alpha soak: v<version>`, labeled `soak`, whose body is the changes since the last
 promotion + the installer link + the verdict instructions. Opened with the built-in
 `GITHUB_TOKEN` (`issues: write`) — no PAT needed. **One soak issue per published
@@ -499,8 +503,16 @@ already-reviewed code. **Safety:** only the `soak:pass` handler stamps the verdi
 promotion PR opened any other way still has *no* verdict → stays blocked.
 
 The promoted commits' `Closes #N` auto-close their issues (verified live: #36 closed on
-promotion), and the soak issue is closed with a "promoted to bridge" comment. A **beta**
-release from `bridge` stays a separate manual dispatch (out of scope here).
+promotion), and the soak issue is closed with a "promoted to bridge" comment.
+
+**When the promotion lands on `bridge`, a LATEST release is auto-cut** (`post-merge.yml`,
+`cut-latest`): it dispatches the release pipeline on the `beta` channel from `bridge`,
+which does a **bigger (minor) version bump, no prerelease suffix, published as GitHub's
+"Latest" release** (not a prerelease). So the human `soak:pass` cascades to: land on
+`bridge` → stable/latest release. This is the one auto-trigger that *does* touch `bridge`
+— but only downstream of the human `soak:pass`, never from auto-cut (§9.5). Version
+scheme: alpha soak builds bump the **patch** (`0.9.29-alpha → 0.9.30-alpha`, prerelease);
+the latest bumps the **minor** (`0.9.29-alpha → 0.10.0`, Latest).
 
 *(Requires the review.yml skip-guard — a parity-guarded change, so it lands on `bridge`
 first, syncs to `staging`, admin-merged like the `allowed_bots` fix — and the repo's
