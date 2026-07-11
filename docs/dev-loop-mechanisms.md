@@ -618,7 +618,11 @@ Built in **PR #41** (workflows) unless noted:
   + `pull-requests: write` for the close + thaw): a staging merge during a soak re-cuts the
   alpha; a `staging → bridge` promotion landing cuts the latest release, closes the soak
   issue, and thaws the freeze (arms any held agent PRs). Now reliably reached because the
-  gatekeeper/promotion merges are made by `MERGE_PAT`, not `GITHUB_TOKEN`.
+  gatekeeper/promotion merges are made by `MERGE_PAT`, not `GITHUB_TOKEN`. **Code-gated:**
+  both auto-dispatches only fire when the merged PR touches *buildable* code — a PR whose
+  files are all `.github/**` / `docs/**` / `*.md` / root config yields a byte-identical app,
+  so the release is skipped (the close + thaw still run). Fail-safe: any file outside that set
+  counts as code. The *manual* `release.yml` dispatch is never gated.
 - `ci.yml` runs `on: pull_request` only — the promotion PR is a real `pull_request` authored
   by `MERGE_PAT`, so `ci` runs naturally (the earlier `workflow_dispatch` workaround is gone).
 - Repo labels `soak` / `soak:pass` / `soak:fail` / `soak-fix`; repo setting **Allow merge commits** on. The promotion PR is authored by `MERGE_PAT` (a member), so neither the "Allow GitHub Actions to create PRs" toggle nor the "require approval for external contributors" gate applies to it — keep that external-contributor gate **on** for real fork PRs.
