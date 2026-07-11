@@ -56,7 +56,13 @@ export function useSprites(): SpriteContextValue {
 }
 
 export interface EntityContextValue {
-  /** The objectType for a live objectId, or null if unknown. */
+  /**
+   * The objectType for a live objectId, or null if unknown. Kept for an
+   * objectId that has since left view (dropped from the roster) so a panel
+   * still tracking it - e.g. the DPS panel showing a just-killed enemy's
+   * rolling damage window - can keep resolving a sprite; cleared only on a
+   * full reset (instance change / overlay detach).
+   */
   objectType: (objectId: number | null | undefined) => number | null
   /** The equipped skin objectType (SKIN_ID) for a live objectId, or null if unset/unknown. */
   skin: (objectId: number | null | undefined) => number | null

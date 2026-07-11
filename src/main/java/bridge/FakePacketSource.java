@@ -42,7 +42,10 @@ import java.util.Random;
  * comma-appended title codes (so name-stripping is exercised), a non-local
  * player's weapon is swapped every ~10 ticks (so OTHER players' equipment updates
  * are exercised), and a transient 5th player joins/leaves on a cycle (so roster
- * removal via {@link UpdatePacket}.drops is exercised).
+ * removal via {@link UpdatePacket}.drops is exercised). The currently-hit enemy
+ * also briefly drops from view and reappears every cycle (view-radius churn on a
+ * still-alive, still-being-hit target), to exercise the DPS panel's sprite
+ * staying resolved across a drop instead of going blank.
  */
 public class FakePacketSource {
 
@@ -170,6 +173,18 @@ public class FakePacketSource {
             // player. Swap targets every ~20 ticks to exercise focus switching.
             short bulletId = (short) (tick % 100);
             int target = ENEMY_IDS[(tick / 20) % ENEMY_IDS.length];
+            // Simulate view-radius churn: the enemy currently being fought briefly
+            // drops out of the visible-object list (still alive, still landing
+            // hits) then reappears - a real client does this constantly in a
+            // crowded room even for a stationary melee target. Reproduces issue
+            // #48: the DPS panel's sprite going blank for a live focus target
+            // that's just momentarily out of view, not actually dead.
+            int churnPhase = tick % 20;
+            if (churnPhase == 8) {
+                Register.INSTANCE.emitPacketLogs(enemyDrop(target));
+            } else if (churnPhase == 11) {
+                Register.INSTANCE.emitPacketLogs(enemyUpdate());
+            }
             Register.INSTANCE.emitPacketLogs(localPlayerShoot(bulletId));
             Register.INSTANCE.emitPacketLogs(localPlayerHit(target, bulletId));
             Register.INSTANCE.emitPacketLogs(randomDamage());
@@ -418,6 +433,17 @@ public class FakePacketSource {
             obj.status = status;
             p.newObjects[i] = obj;
         }
+        return p;
+    }
+
+    /** Drops a single enemy from view without killing it - see the churnPhase simulation in loop(). */
+    private UpdatePacket enemyDrop(int enemyId) {
+        UpdatePacket p = new UpdatePacket();
+        p.levelType = 0;
+        p.pos = new WorldPosData();
+        p.tiles = new GroundTileData[0];
+        p.newObjects = new ObjectData[0];
+        p.drops = new int[]{enemyId};
         return p;
     }
 
