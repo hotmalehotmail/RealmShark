@@ -76,23 +76,28 @@ jobs:
           #      lands (post-merge.yml thaw). ----
           OPEN_SOAKS="$(gh issue list --repo "$REPO" --state open --label soak --json number -q '.[].number' 2>/dev/null || true)"
           if [ -n "$OPEN_SOAKS" ]; then
-            BODY="$(gh pr view "$NUM" --repo "$REPO" --json body -q '.body' 2>/dev/null || true)"
             SOAKFIX=0
-            # Known limitation: only *currently-open* soak numbers are matched. If a soak is
-            # superseded while a second fix PR referencing the old number is in flight, that PR
-            # is held until the soak fully resolves (its fix just isn't in the alpha under soak)
-            # — narrow, off the brief's "open ONE fix PR" happy path, so left as-is.
-            for S in $OPEN_SOAKS; do
-              # Match the exact phrase the soak:fail brief instructs ("Addresses soak #N"),
-              # not a bare "#N" — otherwise an unrelated PR that happens to reference an issue
-              # whose number equals the soak number would be wrongly exempted from the freeze.
-              if printf '%s' "$BODY" | grep -qiE "addresses soak #${S}\b"; then SOAKFIX=1; break; fi
-            done
+            # Primary signal: the workflow-defined `soak-fix` label (the soak:fail brief tells the
+            # agent to apply it). A discrete label the loop owns is robust against the free-text
+            # phrasing drift a body-only match would suffer.
+            if printf '%s' "$PR" | jq -e '.labels[]? | select(.name == "soak-fix")' >/dev/null; then
+              SOAKFIX=1
+            else
+              # Fallback: the PR body references the open soak ("Addresses soak #N"), in case the
+              # label wasn't applied. Known limitation: only *currently-open* soak numbers match —
+              # a second fix PR referencing a superseded soak is held until the soak fully resolves
+              # (narrow, off the brief's "open ONE fix PR" happy path). The `\b` (not a bare "#N")
+              # avoids exempting an unrelated PR that references an issue of the same number.
+              BODY="$(gh pr view "$NUM" --repo "$REPO" --json body -q '.body' 2>/dev/null || true)"
+              for S in $OPEN_SOAKS; do
+                if printf '%s' "$BODY" | grep -qiE "addresses soak #${S}\b"; then SOAKFIX=1; break; fi
+              done
+            fi
             if [ "$SOAKFIX" -eq 0 ]; then
               echo "Soak in progress — holding PR #$NUM (not a soak-fix); it is armed when the soak resolves."
               exit 0
             fi
-            echo "PR #$NUM references an open soak issue — treating as a soak-fix, not frozen."
+            echo "PR #$NUM is a soak-fix (soak-fix label or soak reference) — not frozen."
           fi
 
           # ---- Not conflicted: arm native auto-merge (the §7 happy path). ----

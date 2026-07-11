@@ -213,11 +213,13 @@ jobs:
           NEW_NUM="${NEW_URL##*/}"
           echo "Opened soak issue #$NEW_NUM ($NEW_URL)."
           # Supersede any OTHER open soak issues (a re-cut replaces the prior soak) so exactly
-          # one soak is open at a time — the freeze/thaw (§9.5) keys on that count.
-          gh issue list --repo "$GITHUB_REPOSITORY" --state open --label soak --json number -q '.[].number' \
-            | while read -r I; do
-                if [ -n "$I" ] && [ "$I" != "$NEW_NUM" ]; then
-                  gh issue comment "$I" --repo "$GITHUB_REPOSITORY" --body "Superseded by a fresh alpha soak (v$VERSION, #$NEW_NUM) — \`staging\` moved during the soak." >/dev/null 2>&1 || true
-                  gh issue close "$I" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || true
-                fi
-              done
+          # one soak is open at a time — the freeze/thaw (§9.5) keys on that count. Capture the
+          # list first (guarded `|| true`): under `set -euo pipefail` a transient `gh issue list`
+          # failure inside a `... | while` would fail the step *after* the release published.
+          PRIOR_SOAKS="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label soak --json number -q '.[].number' 2>/dev/null || true)"
+          for I in $PRIOR_SOAKS; do
+            if [ "$I" != "$NEW_NUM" ]; then
+              gh issue comment "$I" --repo "$GITHUB_REPOSITORY" --body "Superseded by a fresh alpha soak (v$VERSION, #$NEW_NUM) — \`staging\` moved during the soak." >/dev/null 2>&1 || true
+              gh issue close "$I" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || true
+            fi
+          done

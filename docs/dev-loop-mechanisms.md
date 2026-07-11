@@ -572,13 +572,15 @@ before the maintainer can apply a verdict — so a soak never reaches `soak:pass
 traffic. **Resolution — freeze `staging` for the soak's duration:** while an open `soak`
 issue exists, the **gatekeeper (§7) holds unrelated agent PRs** (does not arm auto-merge;
 they queue) so `staging`'s HEAD is stable during the soak. Only **`soak:fail` fixes** are
-exempt — recognized because their PR body references the open soak issue (`Addresses soak
-#N`, which the `soak:fail` brief instructs the agent to include); they still merge + re-cut,
-since converging the soak *is* the point. When the soak resolves (`soak:pass` promotes and
-lands, or the fix loop completes), the freeze lifts — `post-merge.yml`'s **thaw** arms the
-held PRs — and the queue drains. This keeps the "re-soak on change" guarantee (staging only
-moves for soak-fixes) while guaranteeing the soak converges. *(Built in PR #41: the
-gatekeeper hold, the soak-issue-reference exemption, and the `post-merge.yml` thaw.)*
+exempt — recognized primarily by a workflow-defined **`soak-fix` label** the fix agent
+applies (the `soak:fail` brief instructs it; a label the loop owns is robust against
+free-text phrasing drift), with a `Addresses soak #N` body reference as a fallback; they
+still merge + re-cut, since converging the soak *is* the point. When the soak resolves
+(`soak:pass` promotes and lands, or the fix loop completes), the freeze lifts —
+`post-merge.yml`'s **thaw** arms the held PRs — and the queue drains. This keeps the
+"re-soak on change" guarantee (staging only moves for soak-fixes) while guaranteeing the
+soak converges. *(Built in PR #41: the gatekeeper hold, the `soak-fix` label/reference
+exemption, and the `post-merge.yml` thaw.)*
 
 **Hard boundaries (both enforced by construction):**
 - **Strictly during a soak.** Auto-cut is a no-op unless an open `soak` issue exists —
@@ -602,16 +604,17 @@ Built in **PR #41** (workflows) unless noted:
   release (minor bump, no suffix, `--latest` not `--prerelease`), auto-cut on promotion.
 - `soak-verdict.yml` (`on: issues: labeled`): `soak:pass` → open the `staging → bridge` PR,
   stamp `review-verdict=success`, **dispatch `ci` on the head** (the recursion-guard
-  workaround, 9.3), arm auto-merge (the soak issue closes later, when the promotion lands);
-  `soak:fail` → `/fire` the fix agent (`GITHUB_TOKEN` + `ROUTINE_FIRE_*`).
+  workaround, 9.3), arm auto-merge (the soak issue closes later, when the promotion lands; the
+  no-diff "nothing to promote" case closes + thaws here so the freeze can't wedge); `soak:fail`
+  → ensure the `soak-fix` label, then `/fire` the fix agent (`GITHUB_TOKEN` + `ROUTINE_FIRE_*`).
 - `post-merge.yml` (`on: pull_request: closed`; `actions: write` to dispatch, `issues: write`
   + `pull-requests: write` for the close + thaw): a staging merge during a soak re-cuts the
   alpha; a `staging → bridge` promotion landing cuts the latest release, closes the soak
   issue, and thaws the freeze (arms any held agent PRs).
 - `ci.yml` gains a `workflow_dispatch` trigger so the promotion head can be gated (9.3).
-- Repo labels `soak` / `soak:pass` / `soak:fail`; repo setting **Allow merge commits** on.
+- Repo labels `soak` / `soak:pass` / `soak:fail` / `soak-fix`; repo setting **Allow merge commits** on.
 - **The soak-freeze (§9.5)** — the §7 gatekeeper holds unrelated agent PRs while a `soak`
-  issue is open, exempting soak-fix PRs (recognized by their body referencing the soak),
+  issue is open, exempting soak-fix PRs (recognized by the `soak-fix` label, body reference as fallback),
   plus the `post-merge.yml` thaw. Folded into **PR #41**.
 - **`review.yml` skip-guard** for `staging → bridge` PRs — **PR #42** (parity-guarded →
   `bridge`-first, admin-merged, then synced to `staging`).

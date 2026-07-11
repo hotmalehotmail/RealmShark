@@ -54,7 +54,18 @@ jobs:
           fi
           PR="$(gh pr list --repo "$REPO" --base bridge --head staging --state open --json number,headRefOid -q '.[0]')"
           if [ -z "$PR" ] || [ "$PR" = "null" ]; then
-            gh issue comment "$ISSUE" --repo "$REPO" --body "⚠️ \`soak:pass\` — but there's nothing to promote (no diff between \`staging\` and \`bridge\`)."
+            # Nothing to promote (staging == bridge). There's no promotion PR to land, so the
+            # deferred close (post-merge.yml) never fires — close the soak and thaw HERE, else
+            # the §9.5 freeze would persist indefinitely with no automated recovery.
+            gh issue comment "$ISSUE" --repo "$REPO" --body "⚠️ \`soak:pass\` — nothing to promote (no diff between \`staging\` and \`bridge\`). Closing the soak and lifting the freeze."
+            gh issue close "$ISSUE" --repo "$REPO" >/dev/null 2>&1 || true
+            HELD_PRS="$(gh pr list --repo "$REPO" --base staging --state open \
+              --json number,headRefName,autoMergeRequest \
+              -q '.[] | select((.headRefName|startswith("claude/")) and .autoMergeRequest==null) | .number' 2>/dev/null || true)"
+            for P in $HELD_PRS; do
+              gh pr merge "$P" --repo "$REPO" --squash --auto >/dev/null 2>&1 \
+                || echo "::warning::Could not arm held PR #$P during thaw."
+            done
             exit 0
           fi
           NUM="$(printf '%s' "$PR" | jq -r '.number')"
@@ -103,9 +114,13 @@ jobs:
             gh issue comment "$ISSUE" --repo "$REPO" --body "⚙️ \`soak:fail\` — but the fix agent can't be fired (missing ROUTINE_FIRE_* secrets)."
             exit 0
           fi
+          # Ensure the `soak-fix` label exists so the agent can apply it (below). The gatekeeper
+          # keys the freeze exemption on this label first — a discrete, workflow-defined signal,
+          # robust against free-text phrasing drift — with the body reference only as a fallback.
+          gh label create soak-fix --repo "$REPO" --color 1D76DB --description "Fixes an open alpha soak — exempt from the §9.5 soak freeze" --force >/dev/null 2>&1 || true
           # Untrusted issue text (title/body/comments) -> jq via --arg, never the shell.
           COMMENTS="$(gh api --paginate "repos/$REPO/issues/$ISSUE/comments" -q '.[] | "- \(.user.login): \(.body)"' 2>/dev/null || true)"
-          TEXT="$(printf 'ALPHA SOAK FAILED (issue #%s). Reported broken during live Windows testing:\n\nTitle: %s\n\n%s\n\nMaintainer comments:\n%s\n\nDiagnose and fix EACH reported bug, fix-forward. Open ONE fix PR into `staging` (BUILD MODE). IMPORTANT: put "Addresses soak #%s" in the PR body — the release loop uses that reference to recognise this as a soak-fix (so it merges to re-cut the alpha instead of being held by the soak freeze). If a repro capture is included, reproduce it via FakePacketSource and add a regression test first. A fresh alpha auto-cuts for re-soak when your fix merges.' \
+          TEXT="$(printf 'ALPHA SOAK FAILED (issue #%s). Reported broken during live Windows testing:\n\nTitle: %s\n\n%s\n\nMaintainer comments:\n%s\n\nDiagnose and fix EACH reported bug, fix-forward. Open ONE fix PR into `staging` (BUILD MODE). IMPORTANT: apply the `soak-fix` label to your PR AND put "Addresses soak #%s" in its body — the release loop uses either signal to recognise this as a soak-fix (so it merges to re-cut the alpha instead of being held by the soak freeze). If a repro capture is included, reproduce it via FakePacketSource and add a regression test first. A fresh alpha auto-cuts for re-soak when your fix merges.' \
             "$ISSUE" "$TITLE" "${BODY:-(no body)}" "${COMMENTS:-(none)}" "$ISSUE")"
           jq -nc --arg t "$TEXT" '{text: $t}' > /tmp/fire.json
           RESP="$(curl -sS -X POST "$FIRE_URL" \
