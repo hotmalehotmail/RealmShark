@@ -7,7 +7,9 @@ const MAX_ROWS: Record<PanelSize, number> = { sm: 3, md: 6, lg: 12 }
 
 function DpsPanel({ size }: PanelContentProps): React.JSX.Element {
   const snapshot = useDpsTracker()
-  return <DpsList snapshot={snapshot} maxRows={MAX_ROWS[size]} showHeader={size !== 'sm'} />
+  return (
+    <DpsList snapshot={snapshot} maxRows={MAX_ROWS[size]} showHeader={size !== 'sm'} size={size} />
+  )
 }
 
 export default DpsPanel
