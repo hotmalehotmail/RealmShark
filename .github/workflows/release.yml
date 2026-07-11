@@ -22,6 +22,15 @@ on:
         options: [alpha, beta]
         default: alpha
 
+# Serialize releases per channel. Two staging merges close together can each dispatch an
+# alpha (post-merge.yml) that seeds from the same latest tag and computes the SAME version
+# — the second `gh release create` would then collide on the already-created tag. Queuing
+# the second run (cancel-in-progress:false) makes it seed from the just-published tag and
+# bump past it instead of racing.
+concurrency:
+  group: release-${{ github.event.inputs.channel }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
