@@ -69,6 +69,37 @@ jobs:
             exit 0
           fi
 
+          # ---- Soak freeze (§9.5). While a soak is open, HOLD unrelated agent PRs (do
+          #      nothing) so the soak converges instead of livelocking under merge traffic.
+          #      Exempt soak-fix PRs — those whose body references the open soak issue (the
+          #      soak:fail brief tells the agent to). Held PRs are armed when the promotion
+          #      lands (post-merge.yml thaw). ----
+          OPEN_SOAKS="$(gh issue list --repo "$REPO" --state open --label soak --json number -q '.[].number' 2>/dev/null || true)"
+          if [ -n "$OPEN_SOAKS" ]; then
+            SOAKFIX=0
+            # Primary signal: the workflow-defined `soak-fix` label (the soak:fail brief tells the
+            # agent to apply it). A discrete label the loop owns is robust against the free-text
+            # phrasing drift a body-only match would suffer.
+            if printf '%s' "$PR" | jq -e '.labels[]? | select(.name == "soak-fix")' >/dev/null; then
+              SOAKFIX=1
+            else
+              # Fallback: the PR body references the open soak ("Addresses soak #N"), in case the
+              # label wasn't applied. Known limitation: only *currently-open* soak numbers match —
+              # a second fix PR referencing a superseded soak is held until the soak fully resolves
+              # (narrow, off the brief's "open ONE fix PR" happy path). The `\b` (not a bare "#N")
+              # avoids exempting an unrelated PR that references an issue of the same number.
+              BODY="$(gh pr view "$NUM" --repo "$REPO" --json body -q '.body' 2>/dev/null || true)"
+              for S in $OPEN_SOAKS; do
+                if printf '%s' "$BODY" | grep -qiE "addresses soak #${S}\b"; then SOAKFIX=1; break; fi
+              done
+            fi
+            if [ "$SOAKFIX" -eq 0 ]; then
+              echo "Soak in progress — holding PR #$NUM (not a soak-fix); it is armed when the soak resolves."
+              exit 0
+            fi
+            echo "PR #$NUM is a soak-fix (soak-fix label or soak reference) — not frozen."
+          fi
+
           # ---- Not conflicted: arm native auto-merge (the §7 happy path). ----
           if [ "$MERGEABLE" != "CONFLICTING" ]; then
             if [ "$MERGEABLE" = "UNKNOWN" ]; then
