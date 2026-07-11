@@ -50,7 +50,11 @@ jobs:
           # any file outside the set), treat it as code and build.
           has_code_changes() {
             local files f
-            files="$(gh api --paginate "repos/$REPO/pulls/$PR_NUM/files" -q '.[].filename' 2>/dev/null || true)"
+            # Fail-safe: only evaluate a COMPLETE list. If the (paginated) fetch fails or is
+            # cut short — non-zero exit — build rather than risk skipping a real release.
+            if ! files="$(gh api --paginate "repos/$REPO/pulls/$PR_NUM/files" -q '.[].filename' 2>/dev/null)"; then
+              return 0
+            fi
             [ -z "$files" ] && return 0
             while IFS= read -r f; do
               [ -z "$f" ] && continue
@@ -92,7 +96,11 @@ jobs:
           # Fail-safe: on any doubt (no file list, or any file outside the set), build.
           has_code_changes() {
             local files f
-            files="$(gh api --paginate "repos/$REPO/pulls/$PR_NUM/files" -q '.[].filename' 2>/dev/null || true)"
+            # Fail-safe: only evaluate a COMPLETE list. If the (paginated) fetch fails or is
+            # cut short — non-zero exit — build rather than risk skipping a real release.
+            if ! files="$(gh api --paginate "repos/$REPO/pulls/$PR_NUM/files" -q '.[].filename' 2>/dev/null)"; then
+              return 0
+            fi
             [ -z "$files" ] && return 0
             while IFS= read -r f; do
               [ -z "$f" ] && continue
