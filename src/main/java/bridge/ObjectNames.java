@@ -2,6 +2,7 @@ package bridge;
 
 import assets.AssetExtractor;
 import assets.IdToAsset;
+import bridge.dps.enums.CharacterClass;
 import com.google.gson.Gson;
 import packets.data.ObjectData;
 import packets.data.StatData;
@@ -43,6 +44,11 @@ public class ObjectNames {
             if (!fake) {
                 try {
                     AssetExtractor.extractHeadless("bridge");
+                    // CharacterClass's static initializer races this thread reading
+                    // assets/xml/players.xml - if packet processing touched it before
+                    // extraction finished, it cached empty data forever. Now that
+                    // extraction has written the file, give it a chance to reload.
+                    CharacterClass.reload();
                 } catch (Throwable e) {
                     System.out.println("[bridge] asset extraction skipped: " + e);
                 }

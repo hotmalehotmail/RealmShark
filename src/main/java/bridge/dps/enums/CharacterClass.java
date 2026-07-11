@@ -42,15 +42,32 @@ public class CharacterClass {
     }
 
     // Static structures to hold dynamic data
-    public static final CharacterClass[] CHAR_CLASS_LIST;
+    public static CharacterClass[] CHAR_CLASS_LIST;
     private static final TreeMap<Integer, CharacterClass> CHARACTER_CLASS = new TreeMap<>();
     private static final TreeMap<Integer, String> CLASS_NAME = new TreeMap<>();
     private static final TreeMap<Integer, int[]> CLASS_MAX_STATS = new TreeMap<>();
     private static final TreeMap<Integer, int[]> WEAPON_CLASSES = new TreeMap<>();
     private static final TreeSet<Integer> CHARACTER_IDS = new TreeSet<>();
 
-    // Static initialization block
     static {
+        load();
+    }
+
+    /**
+     * Re-reads players.xml from disk. The bridge's asset-extraction runs on a
+     * background thread (see {@code ObjectNames.init}) that can still be
+     * writing this file the first time this class is touched from the
+     * packet-processing thread - a JVM only runs a class's static
+     * initializer once, so that first attempt seeing no file would otherwise
+     * leave every lookup table empty (and {@link #isPlayerCharacter}
+     * permanently false) for the rest of the process. Callers that know
+     * extraction has since finished should call this to pick up the data.
+     */
+    public static synchronized void reload() {
+        load();
+    }
+
+    private static synchronized void load() {
         List<CharacterClass> charClassList = new ArrayList<>();
         try {
             FileInputStream file = new FileInputStream(PLAYERS_XML_PATH);
@@ -59,6 +76,11 @@ public class CharacterClass {
             e.printStackTrace();
         }
         CHAR_CLASS_LIST = charClassList.toArray(new CharacterClass[0]);
+        CHARACTER_IDS.clear();
+        CHARACTER_CLASS.clear();
+        CLASS_NAME.clear();
+        WEAPON_CLASSES.clear();
+        CLASS_MAX_STATS.clear();
         for (CharacterClass o : CHAR_CLASS_LIST) {
                 CHARACTER_IDS.add(o.id);
                 CHARACTER_CLASS.put(o.id, o);
