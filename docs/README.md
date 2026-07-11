@@ -87,8 +87,6 @@ moving parts, each with its own doc below.
 - **[build-agent-routine.md](build-agent-routine.md)** — how a labeled issue
   becomes a PR: `implement.yml` fires the build-agent Routine over its `/fire`
   endpoint, and the one-time account-side setup.
-- **[doc-sync.md](doc-sync.md)** — the `post-commit` hook that keeps these docs in
-  sync as a backstop.
 
 ---
 

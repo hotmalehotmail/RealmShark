@@ -13,8 +13,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `docs/asset-pipeline.md` / `docs/dyes-and-textiles.md` — sprite and dye/textile rendering
 - `docs/build-and-release.md` — build, packaging, and release steps
 
-A `post-commit` doc-sync hook (see `docs/doc-sync.md`) auto-updates stale docs as a backstop, but it is conservative — prefer updating docs yourself.
-
 ## What this repo is
 
 Two projects in one repo, on the `bridge` branch:
