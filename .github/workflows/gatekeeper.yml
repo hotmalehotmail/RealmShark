@@ -78,6 +78,10 @@ jobs:
           if [ -n "$OPEN_SOAKS" ]; then
             BODY="$(gh pr view "$NUM" --repo "$REPO" --json body -q '.body' 2>/dev/null || true)"
             SOAKFIX=0
+            # Known limitation: only *currently-open* soak numbers are matched. If a soak is
+            # superseded while a second fix PR referencing the old number is in flight, that PR
+            # is held until the soak fully resolves (its fix just isn't in the alpha under soak)
+            # — narrow, off the brief's "open ONE fix PR" happy path, so left as-is.
             for S in $OPEN_SOAKS; do
               # Match the exact phrase the soak:fail brief instructs ("Addresses soak #N"),
               # not a bare "#N" — otherwise an unrelated PR that happens to reference an issue

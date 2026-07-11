@@ -67,23 +67,25 @@ jobs:
           # a visible warning to re-cut the latest manually.
           gh workflow run release.yml --repo "$REPO" --ref bridge -f channel=beta \
             || echo "::warning::Could not dispatch the latest (beta) release — re-run 'release staging' (beta) manually. Promotion landed; cleanup continues."
-          # Close the passing soak issue(s) now — deferred from soak:pass so the freeze stayed
+          # Capture the cleanup lists FIRST, each guarded with `|| true`. These run under
+          # `set -euo pipefail`, so a transient `gh list` failure inside a `... | while` would
+          # abort the step and skip the thaw — re-introducing the exact wedge the deferred
+          # close exists to avoid (soak left open → §9.5 freeze persists → staging frozen).
+          OPEN_SOAKS="$(gh issue list --repo "$REPO" --state open --label soak --json number -q '.[].number' 2>/dev/null || true)"
+          HELD_PRS="$(gh pr list --repo "$REPO" --base staging --state open \
+            --json number,headRefName,autoMergeRequest \
+            -q '.[] | select((.headRefName|startswith("claude/")) and .autoMergeRequest==null) | .number' 2>/dev/null || true)"
+          # Close the passing soak issue(s) — deferred from soak:pass so the freeze stayed
           # active through the promotion window (a failed promotion must not leave the loop
           # wedged with no tracking issue). Should be exactly one open.
-          gh issue list --repo "$REPO" --state open --label soak --json number -q '.[].number' \
-            | while read -r I; do
-                [ -n "$I" ] || continue
-                gh issue comment "$I" --repo "$REPO" --body "✅ Promotion landed on \`bridge\` — soak complete. Cutting the latest release." >/dev/null 2>&1 || true
-                gh issue close "$I" --repo "$REPO" >/dev/null 2>&1 || true
-              done
-          # Thaw the soak freeze (§9.5): the soak is over, so arm any held (un-armed) agent
-          # PRs into staging. Ones not yet green just wait on branch protection.
-          gh pr list --repo "$REPO" --base staging --state open \
-            --json number,headRefName,autoMergeRequest \
-            -q '.[] | select((.headRefName|startswith("claude/")) and .autoMergeRequest==null) | .number' \
-            | while read -r P; do
-                [ -n "$P" ] || continue
-                gh pr merge "$P" --repo "$REPO" --squash --auto >/dev/null 2>&1 \
-                  || echo "::warning::Could not arm auto-merge on held PR #$P during thaw (conflict/ineligible) — it re-arms on its next ci/review completion."
-              done
+          for I in $OPEN_SOAKS; do
+            gh issue comment "$I" --repo "$REPO" --body "✅ Promotion landed on \`bridge\` — soak complete. Cutting the latest release." >/dev/null 2>&1 || true
+            gh issue close "$I" --repo "$REPO" >/dev/null 2>&1 || true
+          done
+          # Thaw the soak freeze (§9.5): arm any held (un-armed) agent PRs into staging. Ones
+          # not yet green just wait on branch protection.
+          for P in $HELD_PRS; do
+            gh pr merge "$P" --repo "$REPO" --squash --auto >/dev/null 2>&1 \
+              || echo "::warning::Could not arm auto-merge on held PR #$P during thaw (conflict/ineligible) — it re-arms on its next ci/review completion."
+          done
           echo "Thawed held agent PRs (if any)."
