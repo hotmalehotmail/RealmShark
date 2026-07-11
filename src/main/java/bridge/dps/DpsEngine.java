@@ -135,6 +135,31 @@ public class DpsEngine {
     }
 
     /**
+     * Resolve a non-local player into {@code playerList} from a live signal, the
+     * same way {@link #resolveLocalPlayer} does for the local player - needed
+     * because {@link #entityUpdate} only adds an object to {@code playerList}
+     * when {@code CharacterClass.isPlayerCharacter} recognizes its object type,
+     * which depends on {@code assets/xml/players.xml} having been extracted. When
+     * that classification doesn't happen (missing/stale asset extraction), every
+     * other player's damage fell into {@link #damage}'s {@code attacker == null}
+     * branch and never showed up in the DPS list, even though the local player's
+     * own damage kept working via {@code resolveLocalPlayer}'s bypass of the same
+     * gate. {@code ServerPlayerShootPacket.ownerId} with {@code summonerId == 0}
+     * is a direct player shot (not a pet/minion/trap), so it unambiguously
+     * identifies a real player - and it arrives before the resulting
+     * {@link DamagePacket}, in time to resolve the attacker.
+     *
+     * @param candidateId a player's objectId known to be a direct shooter.
+     */
+    private void resolveOtherPlayer(int candidateId) {
+        if (candidateId <= 0 || candidateId == worldPlayerId) return;
+        if (playerList.containsKey(candidateId)) return;
+        Entity e = entityList.get(candidateId);
+        if (e == null) return; // stats not seen yet; a later shot will resolve it
+        playerList.put(candidateId, e);
+    }
+
+    /**
      * Sets the time of the server.
      *
      * @param serverRealTimeMS Server time in milliseconds.
@@ -306,6 +331,12 @@ public class DpsEngine {
      * @param p Projectile info
      */
     public void serverPlayerShoot(ServerPlayerShootPacket p) {
+        // A direct shot (no summoner) unambiguously identifies ownerId as a real
+        // player - resolve them into playerList now, in time for their DamagePacket.
+        if (p.summonerId == 0) {
+            resolveOtherPlayer(p.ownerId);
+        }
+
         // Track SlotType 18 ability usage for DamagePacket invulnerability bypass
         Entity ownerEntity = playerList.get(p.ownerId);
         if (ownerEntity != null) {
