@@ -27,6 +27,12 @@ permissions:
 jobs:
   review:
     name: agent review
+    # Skip the agent on a `staging -> bridge` promotion PR (§9.3): its changes were
+    # already reviewed on their way into staging, and `soak:pass` stamps the
+    # `review-verdict` itself — re-reviewing the aggregate here would just risk vetoing
+    # a soak the maintainer already approved. `agent review` isn't a required check
+    # (`review-verdict` is), so skipping it is safe; CI + parity still gate the merge.
+    if: ${{ !(github.event.pull_request.head.ref == 'staging' && github.event.pull_request.base.ref == 'bridge') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
