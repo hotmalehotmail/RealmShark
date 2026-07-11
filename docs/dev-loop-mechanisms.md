@@ -35,7 +35,7 @@ step that *runs* (driven) but is *not gated* (unenforced), or vice-versa.
 | 5 | Independent review | `pull_request` → `review.yml` | workflow-validation guard | 🟢 verdict live |
 | 6 | Fix loop (review → re-fire builder, capped) | `workflow_run` of `review` → `fixloop.yml`; `agent:retry` → `resume.yml`; conflict → `gatekeeper.yml` rebase | `review-verdict` status; `MAX_FIX_ROUNDS`; `agent:needs-human` freeze | 🟡 re-fire + escalate + resume + conflict-rebase built; live-verify pending |
 | 7 | Gatekeeper auto-merge | `workflow_run` → arm auto-merge | native auto-merge + required checks | 🟢 verified (#19) |
-| 8 | Release (ship button) | `workflow_dispatch` → `release.yml` | manual-only dispatch | 🟢 (no captain notes) |
+| 8 | Release (ship button) | `workflow_dispatch` → `release.yml` | manual-only dispatch | 🟢 (captain notes best-effort built) |
 | — | Branch protection | — | required checks (+ push restriction) | 🟢 verdict required (push restrict N/A on user repo) |
 | — | Workflow-parity guard | `ci` job on each PR | required check (both branches) | 🟢 verified |
 
@@ -419,14 +419,18 @@ publishes without a human pressing it, which encodes the never-release-without-a
 explicit-ask rule. Version is read from `overlay/package.json` (single source of
 truth), bumped by a human before dispatch, so a dispatch can't silently re-version.
 
-**Status.** 🟢 Built. Two optional pieces are TODO in the file:
+**Status.** 🟢 Built, incl. the release-notes captain.
 
-**To-build (optional).**
-- **Release-notes "captain".** A preceding job runs a Haiku agent over the
-  Conventional Commits since the last tag to draft notes, wired into `gh release
-  create --notes-file`. Today notes are static (`"Automated {channel} build from
-  {ref}"`). Model per spec §04: `claude-haiku-4-5`, low effort.
-- **Auto version-bump** before tagging (kept manual by design for now).
+- **Release-notes "captain" — built.** A preceding `notes` job runs a Haiku agent
+  (`claude-haiku-4-5`, `CLAUDE_CODE_OAUTH_TOKEN`) over the Conventional Commits since
+  the last tag (`git describe --tags` → `git log`), which writes `release-notes.md`;
+  the Windows publish job downloads it and passes `--notes-file`. **Best-effort:**
+  every captain step is `continue-on-error` and the publish job falls back to the old
+  static note (`"Automated {channel} build from {ref}"`) if no notes were produced, so
+  a captain failure can never block a release. Not yet exercised live (needs a real
+  dispatch). Model per spec §04: `claude-haiku-4-5`.
+- **Auto version-bump** before tagging — still a TODO (kept manual by design so a
+  dispatch can never silently rewrite the version).
 
 ---
 
@@ -573,7 +577,8 @@ Each item unlocks the next; do them in this order.
    pasted). What remains: a live end-to-end run to move §6 from 🟡 to verified.
 7. ~~**Workflow-parity guard** → prevents §5 from silently regressing.~~ **✅ Done &
    verified** — `workflow parity` ci job, required on both branches (PR #25).
-8. **Release captain** (§8, optional) → drafted notes.
+8. ~~**Release captain** (§8, optional) → drafted notes.~~ **✅ Built** — best-effort
+   Haiku `notes` job in `release.yml`, static fallback; unexercised until a real dispatch.
 
 After 1–6, the spec's claim holds literally: a labeled issue produces a merged,
 tested change with two human touches — write the issue, press ship — and any PR the
