@@ -219,7 +219,7 @@ per-panel scale tables at the top of each file.
 | Panel | Title | Data source | Notes |
 | --- | --- | --- | --- |
 | `StatusPanel` | "RealmShark" | `window.overlay.*` directly | Connection dot, hotkey hint, packet count, JS heap MB, app version + **auto-update** UI. |
-| `DpsPanel` | "DPS" | `useDpsTracker()` → `<DpsList>` | Rows per attacker vs. the focused enemy (§5). `MAX_ROWS = {sm:3, md:6, lg:12}`. |
+| `DpsPanel` | "DPS" | `useDpsTracker()` → `<DpsList>` | Rows per attacker vs. the focused enemy (§5). `MAX_ROWS = {sm:3, md:6, lg:12}`. Each row also renders that attacker's dyed `CharacterSprite` + equip-slot icons (gear hidden at `sm`), resolved from `EntityRegistry` by `row.objectId`. |
 | `ConsolePanel` | "Console" | `consoleLog.ts` buffer | Live log with search (Ctrl/Cmd+F), level colours, clear. |
 | `CharacterPanel` | "Character" | `EntityRegistry` (local player) | Big dyed sprite + 4 equip icons + username. |
 | `InstancePanel` | "Instance" | `EntityRegistry.characters()` | Every named player in the instance, dyed sprites + gear. |
@@ -317,7 +317,11 @@ and only then does a local `setInterval` at `frameMs` re-render it
 `CharacterSprite` (`sprites/CharacterSprite.tsx`) takes an **`objectId`** and
 resolves everything from the entity registry: base type is the equipped `skin` if
 set, else the class `objectType`; dyes come from `clothingDye`/`accessoryDye`
-(`CharacterSprite.tsx:22-34`). It then delegates to `<Sprite>`.
+(`CharacterSprite.tsx:22-34`). It then delegates to `<Sprite>` — except when the
+registry has no `objectType` at all for that `objectId` yet (e.g. a DPS row for a
+player the registry hasn't seen an `UpdatePacket` for), in which case it renders
+the same bordered-chip placeholder as an unresolved equipment slot instead of
+nothing, so callers never get a blank gap.
 
 ### `EntityRegistry` (`sprites/EntityRegistry.tsx`)
 
@@ -442,10 +446,12 @@ Two things the renderer **always** owns regardless of source:
   (e.g. "Wizard") when a player object lacks `NAME_STAT`.
 
 > **Non-obvious fact — names are tracked twice.** `DpsTracker` keeps its **own**
-> `entityNames` map from `NAME_STAT`, separate from `EntityRegistry`. DPS rows use
-> the tracker's map; the DPS panel's *target sprite* uses `EntityRegistry`
-> (`DpsList` calls `entities.objectType(...)`, `DpsList.tsx:26`). They're built
-> from the same stat but are independent stores — and the tracker only reads
+> `entityNames` map from `NAME_STAT`, separate from `EntityRegistry`. Row *names*
+> come from the tracker's map; each row's *sprite/gear* (`CharacterSprite` +
+> equip icons) and the header's target sprite come from `EntityRegistry`
+> (`DpsList` calls `entities.objectType(...)` for the header and
+> `entities.equipment(...)`/`CharacterSprite` per row). They're built from the
+> same underlying stats but are independent stores — and the tracker only reads
 > `NAME_STAT` from `UpdatePacket`, not `NewTickPacket`.
 
 ### `useDpsTracker` (`dps/useDpsTracker.ts`)
@@ -480,12 +486,24 @@ locally, and `saveSettings()` returns `{ needsRestart, hotkeyRegistered }`
 reported inline while the previous hotkey stays. See `overlay-main-process.md`
 for how these settings are applied.
 
-**`DpsList.tsx`** — pure presentation for a `DpsSnapshot`. Renders "No target
+**`DpsList.tsx`** — pure presentation for a `DpsSnapshot`, now also takes the
+panel's `size` (`sm`/`md`/`lg`) so rows can scale down. Renders "No target
 attacked yet" when `targetId === null`, an optional header with the target sprite
 (`<Sprite objectType={entities.objectType(targetId)} />`) + name, then up to
-`maxRows` rows of `name — {dps} dps ({damage})`, formatted with
-`Math.round(...).toLocaleString()` (`DpsList.tsx:5-46`). It reads
-`useEntityRegistry()` only for the target sprite.
+`maxRows` rows. Each row is `<CharacterSprite objectId={row.objectId}>` (the
+attacker's dyed skin/class sprite, same path `CharacterPanel` uses) + that
+player's 4 equip-slot icons (`entities.equipment(row.objectId)`, empty slots as
+bordered chips, hidden entirely at `sm` — `ROW_SLOT_SIZE.sm = 0` — the one
+"reduced detail" concession for the smallest panel size) + the truncating name +
+`{dps} dps ({damage})`. Numbers are formatted **compact** (`formatCompact`:
+`12.3k`, `1.2m`) rather than `toLocaleString()`, so the dps/total figures stay
+narrow enough to survive next to a sprite + 4 gear icons in a ~180-320px-wide
+panel (`DpsList.tsx`). It reads `useEntityRegistry()` for the target sprite and,
+per row, `objectType`/`skin`/dyes (via `CharacterSprite`) and `equipment` — all
+keyed by `row.objectId`, which is already the *owning player's* id even for
+pet/minion damage (the bridge's `DpsEngine.minionOwnerMap` and the local-estimate
+fallback's `minionOwners` map both attribute to the owner before the row is ever
+built — see `dps-engine.md`), so a summoned entity never gets its own row.
 
 **`consoleLog.ts`** — a module-level ring buffer (max 2000 entries,
 `consoleLog.ts:10`) with a listener set. `installConsoleCapture()`
