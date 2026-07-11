@@ -1,4 +1,5 @@
 import { createContext, useContext } from 'react'
+import type { DyeBake } from './dyeBake'
 
 /** Shared sprite/entity contexts + hooks, kept out of the provider component
  *  files so those export only components (react-refresh requirement). */
@@ -13,7 +14,9 @@ export interface SpriteContextValue {
   /**
    * Like getSprite, but composites clothing/accessory dyes (their objectTypes)
    * onto the character sprite. Falls back to the plain sprite when there's no
-   * dye or the sprite has no mask. Usable from any panel.
+   * dye or the sprite has no mask. Usable from any panel. Never called for a
+   * dyeAnimated sprite (see bakeAnimatedDye) - a continuously-animated dye
+   * always renders via the canvas path instead.
    */
   getDyedSprite: (
     baseType: number,
@@ -23,9 +26,8 @@ export interface SpriteContextValue {
   ) => string | null
   /**
    * Whether the given sprite animates - the base sprite has >1 idle frame, or a
-   * clothing/accessory dye is a multi-frame textile. Lets a <Sprite> tick only
-   * when there's actually something to animate. getSprite/getDyedSprite read the
-   * current frame from the clock internally.
+   * clothing/accessory dye is a multi-frame textile or has continuous motion.
+   * Lets a <Sprite> tick only when there's actually something to animate.
    */
   isAnimated: (
     objectType: number | null | undefined,
@@ -34,12 +36,30 @@ export interface SpriteContextValue {
   ) => boolean
   /**
    * Whether a clothing/accessory dye scrolls/rotates continuously (has an
-   * <AnimatedDye>), as opposed to a multi-frame textile. Lets a <Sprite> pick
-   * the smooth animation tick instead of the coarse frame rate.
+   * <AnimatedDye>), as opposed to a multi-frame textile. Lets a <Sprite> route
+   * to the rAF-driven canvas renderer (bakeAnimatedDye) instead of the plain
+   * <img>/getDyedSprite path.
    */
   dyeAnimated: (clothingDye?: number | null, accessoryDye?: number | null) => boolean
+  /**
+   * Bakes the static composite + per-region motion mask for a dyeAnimated
+   * sprite (base silhouette, any static dye, region/shade masks for each
+   * animated layer), or null when the pack/atlases aren't ready yet. Cheap to
+   * call repeatedly - memoised internally, keyed on everything except the
+   * continuous motion phase.
+   */
+  bakeAnimatedDye: (
+    baseType: number,
+    size: number,
+    clothingDye?: number | null,
+    accessoryDye?: number | null
+  ) => DyeBake | null
   /** Milliseconds per animation frame (from Settings). */
   frameMs: number
+  /** Animated-cloth scroll rate: output pattern-pixels/sec per unit of the dye's own speed. */
+  scrollSpeed: number
+  /** Animated-cloth rotate rate: radians/sec per unit of the dye's own speed. */
+  rotateSpeed: number
 }
 
 export const SpriteContext = createContext<SpriteContextValue>({
@@ -48,7 +68,10 @@ export const SpriteContext = createContext<SpriteContextValue>({
   getDyedSprite: () => null,
   isAnimated: () => false,
   dyeAnimated: () => false,
-  frameMs: 200
+  bakeAnimatedDye: () => null,
+  frameMs: 200,
+  scrollSpeed: 1.5,
+  rotateSpeed: 0.15
 })
 
 export function useSprites(): SpriteContextValue {
