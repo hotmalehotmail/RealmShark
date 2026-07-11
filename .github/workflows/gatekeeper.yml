@@ -43,6 +43,7 @@ jobs:
       - name: Arm auto-merge, or drive the rebase FIX MODE on a conflict
         env:
           GH_TOKEN: ${{ github.token }}
+          MERGE_PAT: ${{ secrets.MERGE_PAT }}
           REPO: ${{ github.repository }}
           HEAD: ${{ github.event.workflow_run.head_branch }}
           SHA: ${{ github.event.workflow_run.head_sha }}
@@ -110,11 +111,25 @@ jobs:
               echo "PR #$NUM already has auto-merge armed; nothing to do."
               exit 0
             fi
-            echo "Arming auto-merge on PR #$NUM."
+            # --- MERGE_PAT preflight (LOUD). Arm with the PAT (a member identity) so the eventual
+            #     merge fires pull_request:closed -> post-merge recut-alpha. A GITHUB_TOKEN merge is
+            #     swallowed by the recursion guard, so a silent fallback to it would re-break the
+            #     re-cut. If the PAT is missing/expired we FAIL the run instead.
+            if [ -z "${MERGE_PAT:-}" ]; then
+              echo "::error::MERGE_PAT is empty/unset — required to arm auto-merge. Add the fine-grained PAT (this repo · Contents + Pull requests: R/W) as MERGE_PAT."
+              gh pr comment "$NUM" --repo "$REPO" --body "❌ Can't arm auto-merge — the \`MERGE_PAT\` secret is missing. Add it, then re-run ci (or push) to re-trigger." || true
+              exit 1
+            fi
+            if ! GH_TOKEN="$MERGE_PAT" gh api "repos/$REPO/pulls?per_page=1" >/dev/null 2>/tmp/pat_err; then
+              echo "::error::MERGE_PAT failed (expired, revoked, or missing Contents/Pull-requests access) — rotate it. gh: $(tr '\n' ' ' </tmp/pat_err)"
+              gh pr comment "$NUM" --repo "$REPO" --body "❌ Can't arm auto-merge — \`MERGE_PAT\` failed (expired/revoked/insufficient access). Rotate it; this PR re-arms on its next ci/review run." || true
+              exit 1
+            fi
+            echo "Arming auto-merge on PR #$NUM (via MERGE_PAT)."
             # --auto hands off to native auto-merge; branch protection waits for all required
             # checks (ci + review-verdict) before it actually merges.
-            gh pr merge "$NUM" --repo "$REPO" --squash --auto \
-              || echo "Could not arm auto-merge on #$NUM (ineligible); leaving it."
+            GH_TOKEN="$MERGE_PAT" gh pr merge "$NUM" --repo "$REPO" --squash --auto \
+              || echo "::warning::Could not arm auto-merge on #$NUM (ineligible); leaving it."
             exit 0
           fi
 
