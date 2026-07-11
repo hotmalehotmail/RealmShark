@@ -1,0 +1,91 @@
+name: post-merge release
+
+# §9.5 auto-cut + §9.3 latest-on-promotion. Reacts to a merged PR:
+#   - into `staging` while a soak is open  -> re-cut a fresh alpha (the installer under
+#     test must always match staging's HEAD). Strictly during a soak; NEVER to bridge.
+#   - the `staging -> bridge` promotion PR  -> cut the LATEST release from `bridge`.
+#
+# Both just dispatch `release staging` (release.yml) with the right channel — which
+# works on GITHUB_TOKEN because workflow_dispatch is exempt from the recursion guard.
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+  issues: write # check for an open soak issue; close it when the promotion lands
+  actions: write # dispatch release.yml
+  pull-requests: write # thaw the soak freeze (arm held agent PRs after promotion)
+
+# Serialize (not coalesce) runs per base branch: cancel-in-progress:false queues rather
+# than merges bursts, so each PR still gets its own run. release.yml's own concurrency
+# guard is what actually prevents two same-channel releases from colliding on a tag.
+concurrency:
+  group: post-merge-${{ github.event.pull_request.base.ref }}
+  cancel-in-progress: false
+
+jobs:
+  recut-alpha:
+    # A merge into staging, while a soak is open, re-cuts the alpha.
+    if: >
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'staging'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Re-cut the alpha if a soak is in progress
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          OPEN="$(gh issue list --repo "$REPO" --state open --label soak --json number -q 'length')"
+          if [ "${OPEN:-0}" -gt 0 ]; then
+            echo "Soak in progress ($OPEN open soak issue(s)) — re-cutting the alpha."
+            gh workflow run release.yml --repo "$REPO" --ref staging -f channel=alpha
+          else
+            echo "No soak open — nothing to re-cut (auto-cut is strictly during a soak)."
+          fi
+
+  cut-latest:
+    # The staging -> bridge promotion landing cuts the LATEST release.
+    if: >
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'bridge' &&
+      github.event.pull_request.head.ref == 'staging'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cut the latest release (promotion landed on bridge)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          echo "Promotion landed on bridge — cutting the latest release (beta channel)."
+          # Guard the dispatch: under `set -e` an unguarded failure here would abort BEFORE the
+          # close+thaw below, wedging the loop (soak open, staging frozen, no beta). The
+          # promotion has already landed, so cleanup must run regardless; a failed dispatch is
+          # a visible warning to re-cut the latest manually.
+          gh workflow run release.yml --repo "$REPO" --ref bridge -f channel=beta \
+            || echo "::warning::Could not dispatch the latest (beta) release — re-run 'release staging' (beta) manually. Promotion landed; cleanup continues."
+          # Capture the cleanup lists FIRST, each guarded with `|| true`. These run under
+          # `set -euo pipefail`, so a transient `gh list` failure inside a `... | while` would
+          # abort the step and skip the thaw — re-introducing the exact wedge the deferred
+          # close exists to avoid (soak left open → §9.5 freeze persists → staging frozen).
+          OPEN_SOAKS="$(gh issue list --repo "$REPO" --state open --label soak --json number -q '.[].number' 2>/dev/null || true)"
+          HELD_PRS="$(gh pr list --repo "$REPO" --base staging --state open \
+            --json number,headRefName,autoMergeRequest \
+            -q '.[] | select((.headRefName|startswith("claude/")) and .autoMergeRequest==null) | .number' 2>/dev/null || true)"
+          # Close the passing soak issue(s) — deferred from soak:pass so the freeze stayed
+          # active through the promotion window (a failed promotion must not leave the loop
+          # wedged with no tracking issue). Should be exactly one open.
+          for I in $OPEN_SOAKS; do
+            gh issue comment "$I" --repo "$REPO" --body "✅ Promotion landed on \`bridge\` — soak complete. Cutting the latest release." >/dev/null 2>&1 || true
+            gh issue close "$I" --repo "$REPO" >/dev/null 2>&1 || true
+          done
+          # Thaw the soak freeze (§9.5): arm any held (un-armed) agent PRs into staging. Ones
+          # not yet green just wait on branch protection.
+          for P in $HELD_PRS; do
+            gh pr merge "$P" --repo "$REPO" --squash --auto >/dev/null 2>&1 \
+              || echo "::warning::Could not arm auto-merge on held PR #$P during thaw (conflict/ineligible) — it re-arms on its next ci/review completion."
+          done
+          echo "Thawed held agent PRs (if any)."
