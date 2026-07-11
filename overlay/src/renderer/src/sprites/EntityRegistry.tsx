@@ -47,9 +47,11 @@ interface EntityRecord {
  * (emitted on every one of our hits, so it re-establishes identity mid-instance).
  * Records are removed when their objectId appears in UpdatePacket.drops (the
  * entity left view / the instance), so the roster tracks players leaving as well
- * as joining. Kept in refs (no re-render per packet); consumers read it during
- * their own render cycle (e.g. a polling interval). Cleared on map change /
- * overlay detach.
+ * as joining - except objectType, which is kept separately and survives a drop,
+ * so a panel still referencing a since-left objectId (e.g. the DPS panel showing
+ * a just-killed enemy for its rolling damage window) doesn't lose its sprite.
+ * Kept in refs (no re-render per packet); consumers read it during their own
+ * render cycle (e.g. a polling interval). Cleared on map change / overlay detach.
  */
 export function EntityRegistryProvider({
   children
@@ -57,6 +59,12 @@ export function EntityRegistryProvider({
   children: React.ReactNode
 }): React.JSX.Element {
   const recordsRef = useRef<Map<number, EntityRecord>>(new Map())
+  // objectType survives a drop (unlike the rest of the record), so a panel that
+  // keeps referencing an objectId after it leaves view - e.g. the DPS panel,
+  // which shows a killed/out-of-view enemy for its rolling damage window - can
+  // still resolve a sprite instead of going blank. Cleared only on a full reset
+  // (instance change / overlay detach), same as recordsRef.
+  const lastObjectTypeRef = useRef<Map<number, number>>(new Map())
   const localPlayerRef = useRef<number | null>(null)
   const listenersRef = useRef<Set<() => void>>(new Set())
   const notifyPending = useRef(false)
@@ -81,6 +89,7 @@ export function EntityRegistryProvider({
 
     const clear = (): void => {
       recordsRef.current.clear()
+      lastObjectTypeRef.current.clear()
       localPlayerRef.current = null
       scheduleNotify()
     }
@@ -100,8 +109,10 @@ export function EntityRegistryProvider({
       if (!rec) {
         if (objectType == null) return false
         rec = { objectType }
+        lastObjectTypeRef.current.set(objectId, objectType)
       } else if (objectType != null) {
         rec.objectType = objectType
+        lastObjectTypeRef.current.set(objectId, objectType)
       }
       let changed = false
       for (const s of stats ?? []) {
@@ -188,7 +199,11 @@ export function EntityRegistryProvider({
 
   const objectType = useCallback(
     (objectId: number | null | undefined): number | null =>
-      objectId == null ? null : (recordsRef.current.get(objectId)?.objectType ?? null),
+      objectId == null
+        ? null
+        : (recordsRef.current.get(objectId)?.objectType ??
+          lastObjectTypeRef.current.get(objectId) ??
+          null),
     []
   )
   const skin = useCallback(
