@@ -44,7 +44,10 @@ jobs:
           # One bullet per non-merge commit subject -> the captain's raw material.
           git log --no-merges --pretty=format:'- %s' "$RANGE" > "$GITHUB_WORKSPACE/commits.txt" || true
           printf '\n' >> "$GITHUB_WORKSPACE/commits.txt"
-          echo "Collected $(grep -c . "$GITHUB_WORKSPACE/commits.txt" || echo 0) commit(s) in range $RANGE."
+          # `grep -c .` exits non-zero on an empty file, so `|| true` (not `|| echo 0`,
+          # which would print a second 0 next to grep's own).
+          N="$(grep -c . "$GITHUB_WORKSPACE/commits.txt" || true)"
+          echo "Collected ${N:-0} commit(s) in range $RANGE."
 
       - name: Draft release notes (Haiku)
         id: captain
@@ -75,6 +78,12 @@ jobs:
           if-no-files-found: warn
 
   build-and-publish:
+    # `needs: notes` serializes the Windows build behind the captain. Chosen over
+    # running them concurrently: the download step can only see the artifact once the
+    # notes job has finished, so a concurrent build could reach it first and silently
+    # fall back to static notes. The captain (Haiku) is fast relative to the Windows
+    # build, and a release is a rare manual action, so the added latency is cheap
+    # insurance that a successful captain's notes are actually used.
     needs: notes
     if: ${{ !cancelled() }} # publish even if the captain job hiccups (static fallback below)
     permissions:
