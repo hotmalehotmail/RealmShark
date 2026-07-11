@@ -115,16 +115,38 @@ jobs:
         working-directory: overlay
         run: npm ci
 
+      - name: Auto-bump the version (patch+1, channel-suffixed)
+        id: v
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          case "${{ inputs.channel }}" in
+            beta) SUFFIX="beta" ;;
+            *)    SUFFIX="alpha" ;;
+          esac
+          # Seed from the latest published release tag — the record of what's actually
+          # shipped — so versions increase monotonically without persisting anything back
+          # to the (protected) branch. Fall back to package.json for the very first
+          # release. Increment the patch, keep the channel suffix: v0.9.27-alpha -> 0.9.28-alpha.
+          LATEST="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName -q '.[0].tagName // empty' 2>/dev/null || true)"
+          SEED="${LATEST#v}"
+          SEED="${SEED:-$(node -p "require('./overlay/package.json').version")}"
+          CORE="${SEED%%-*}"
+          IFS=. read -r MA MI PA <<< "$CORE"
+          NEW="${MA}.${MI}.$((PA + 1))-${SUFFIX}"
+          echo "version=$NEW" >> "$GITHUB_OUTPUT"
+          # Write it into package.json so the built app (app.getVersion) + installer name
+          # carry it. NEW is computed (semver chars only) — safe to interpolate.
+          node -e "const fs=require('fs'),f='overlay/package.json',p=JSON.parse(fs.readFileSync(f));p.version='$NEW';fs.writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
+          echo "Auto-bumped ${SEED} -> ${NEW} (seed: ${LATEST:-package.json})."
+
       - name: Build + package (Windows x64)
         working-directory: overlay
         run: |
           npm run build
           npx electron-builder --win --x64   # -> overlay/dist/realmshark-overlay-<version>-setup.exe
-
-      - name: Read version
-        id: v
-        shell: bash
-        run: echo "version=$(node -p "require('./overlay/package.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: Download drafted notes
         continue-on-error: true # fall back to static notes if the captain produced none

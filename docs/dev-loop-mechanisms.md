@@ -422,8 +422,8 @@ checks went green.
 
 **Enforces.** The manual-dispatch-only trigger *is* the release gate — nothing
 publishes without a human pressing it, which encodes the never-release-without-an-
-explicit-ask rule. Version is read from `overlay/package.json` (single source of
-truth), bumped by a human before dispatch, so a dispatch can't silently re-version.
+explicit-ask rule. The version now **auto-bumps** on dispatch (see below); the gate is
+the dispatch itself, not the version bump.
 
 **Status.** 🟢 Built, incl. the release-notes captain.
 
@@ -435,8 +435,13 @@ truth), bumped by a human before dispatch, so a dispatch can't silently re-versi
   static note (`"Automated {channel} build from {ref}"`) if no notes were produced, so
   a captain failure can never block a release. Not yet exercised live (needs a real
   dispatch). Model per spec §04: `claude-haiku-4-5`.
-- **Auto version-bump** before tagging — still a TODO (kept manual by design so a
-  dispatch can never silently rewrite the version).
+- **Auto version-bump — built.** A step seeds from the latest published release tag,
+  increments the patch, and applies the channel suffix (`v0.9.27-alpha` → `0.9.28-alpha`
+  for alpha, `-beta` for beta), writing it into `overlay/package.json` in the runner
+  before the build so the app + installer carry it. Nothing is committed back — the
+  **latest release tag becomes the source of truth** (no push to a protected branch
+  needed), so the repo's `overlay/package.json` version is now only a fallback seed and
+  may lag. The release gate is unchanged: the human dispatch is still the only trigger.
 
 ---
 
