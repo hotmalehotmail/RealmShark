@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import type { PacketEnvelope } from '../../../shared/ipc'
 import { EntityContext } from './context'
+import { equipmentRarityFromUniqueDataString } from './enchantRarity'
 
 /** StatType numeric ids we consume here (packets/data/enums/StatType.java). */
 const SKIN_ID_STAT = 25
@@ -8,6 +9,7 @@ const INVENTORY_0_STAT = 8
 const NAME_STAT = 31
 const CLOTHING_DYE_STAT = 32 // TEX1 - clothing dye objectType
 const ACCESSORY_DYE_STAT = 33 // TEX2 - accessory dye objectType
+const UNIQUE_DATA_STRING_STAT = 80 // per-slot encoded enchant data - see sprites/enchantRarity.ts
 
 interface StatEntry {
   statTypeNum: number
@@ -30,6 +32,8 @@ interface EntityRecord {
   skin?: number
   /** 4 equipped slots (INVENTORY_0..3). Empty slots are `<= 0`. */
   equipment?: number[]
+  /** Rarity-border tier (0-4) per equipped slot, decoded from UNIQUE_DATA_STRING - see sprites/enchantRarity.ts. */
+  equipmentRarity?: number[]
   /** Clothing (Tex1) / accessory (Tex2) dye, as dye objectTypes. */
   clothingDye?: number
   accessoryDye?: number
@@ -133,6 +137,9 @@ export function EntityRegistryProvider({
         } else if (s.statTypeNum === ACCESSORY_DYE_STAT && s.statValue != null) {
           rec.accessoryDye = s.statValue
           changed = true
+        } else if (s.statTypeNum === UNIQUE_DATA_STRING_STAT && s.stringStatValue) {
+          rec.equipmentRarity = equipmentRarityFromUniqueDataString(s.stringStatValue)
+          changed = true
         } else if (s.statTypeNum === NAME_STAT && s.stringStatValue) {
           // The NAME_STAT wire value is comma-separated: the username followed by
           // title/label cosmetic codes (e.g. "PlayerName,a0ca"). Show only the
@@ -216,6 +223,11 @@ export function EntityRegistryProvider({
       objectId == null ? null : (recordsRef.current.get(objectId)?.equipment ?? null),
     []
   )
+  const equipmentRarity = useCallback(
+    (objectId: number | null | undefined): number[] | null =>
+      objectId == null ? null : (recordsRef.current.get(objectId)?.equipmentRarity ?? null),
+    []
+  )
   const name = useCallback(
     (objectId: number | null | undefined): string | null =>
       objectId == null ? null : (recordsRef.current.get(objectId)?.name ?? null),
@@ -249,6 +261,7 @@ export function EntityRegistryProvider({
         objectType,
         skin,
         equipment,
+        equipmentRarity,
         clothingDye,
         accessoryDye,
         name,

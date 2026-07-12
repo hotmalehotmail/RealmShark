@@ -282,6 +282,27 @@ public class ParseEnchants {
     }
 
     /**
+     * Test/fixture helper - the inverse of {@link #extractEnchantIds}. Encodes
+     * {@code count} arbitrary positive enchant ids into one slot's raw
+     * UNIQUE_DATA_STRING code (header byte + type 1026 + {@code count}
+     * little-endian shorts + a -3 terminator, six-bit encoded). Used by
+     * {@code FakePacketSource} and tests to synthesize enchant data with no game
+     * running; never used on the live decode path.
+     */
+    public static String encodeEnchantSlot(int count) {
+        ByteBuffer buf = ByteBuffer
+            .allocate(1 + 2 + (count * 2) + 2)
+            .order(ByteOrder.LITTLE_ENDIAN);
+        buf.put((byte) 0); // header byte, value unused by the decoder
+        buf.putShort((short) 1026); // type
+        for (int i = 0; i < count; i++) {
+            buf.putShort((short) (100 + i)); // arbitrary plausible enchant id
+        }
+        buf.putShort((short) -3); // terminator
+        return PcStatsDecoder.bytesToSixBitString(buf.array());
+    }
+
+    /**
      * Helper: get first enchant id in code, or -1 if not present.
      */
     public static int getEnchantId(String code) {
