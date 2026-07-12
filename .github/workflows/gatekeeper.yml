@@ -31,6 +31,8 @@ on:
     branches: ['session-done/**'] # a SessionEnd marker landing -> (re)evaluate arming
   pull_request:
     types: [synchronize] # head moved -> disarm until the new head has a marker
+  issue_comment:
+    types: [created] # a session-triaged marker comment -> (re)evaluate arming (triage gate, §7.3)
 
 # Serialize with the fix loop / resume on the same head branch: all three re-fire the
 # agent and read the same marker count, so they must not run concurrently on one PR.
@@ -38,7 +40,7 @@ on:
 # head ref; push(marker) -> the marker ref name (arming is idempotent, so its exact
 # grouping doesn't matter, and it never re-fires an agent).
 concurrency:
-  group: fixloop-${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref || github.ref_name }}
+  group: fixloop-${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref || github.event.issue.number || github.ref_name }}
   cancel-in-progress: false
 
 permissions:
@@ -61,7 +63,10 @@ jobs:
        startsWith(github.ref, 'refs/heads/session-done/')) ||
       (github.event_name == 'pull_request' &&
        github.event.pull_request.head.repo.full_name == github.repository &&
-       startsWith(github.event.pull_request.head.ref, 'claude/'))
+       startsWith(github.event.pull_request.head.ref, 'claude/')) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request != null &&
+       contains(github.event.comment.body, '<!-- session-triaged:'))
     steps:
       - name: Arm auto-merge, or drive the rebase FIX MODE on a conflict
         env:
@@ -76,6 +81,7 @@ jobs:
           PUSH_REF: ${{ github.ref }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ISSUE_NUM: ${{ github.event.issue.number }}
         run: |
           set -euo pipefail
 
@@ -83,6 +89,14 @@ jobs:
           case "$EVT" in
             workflow_run) HEAD="$WR_HEAD"; SHA="$WR_SHA" ;;
             pull_request) HEAD="$PR_HEAD_REF"; SHA="$PR_HEAD_SHA" ;;
+            issue_comment)
+              # A session-triaged marker comment landed. Resolve the PR it's on.
+              HEAD="$(gh pr view "$ISSUE_NUM" --repo "$REPO" --json headRefName -q '.headRefName' 2>/dev/null || true)"
+              SHA="$(gh pr view "$ISSUE_NUM" --repo "$REPO" --json headRefOid -q '.headRefOid' 2>/dev/null || true)"
+              if [ -z "$HEAD" ] || ! printf '%s' "$HEAD" | grep -q '^claude/'; then
+                echo "session-triaged comment is not on a claude/* PR; nothing to do."
+                exit 0
+              fi ;;
             push)
               # refs/heads/session-done/<sha> -> the sha; act only if it is some open PR's
               # CURRENT head (a stale marker for a since-superseded head matches nothing).
@@ -214,7 +228,36 @@ jobs:
               echo "PR #$NUM: no session-done marker for current head ${PR_HEAD_OID:-unknown} — authoring session not finished; holding (the marker push will re-trigger arming)."
               exit 0
             fi
-            echo "PR #$NUM: session-done marker present for head $PR_HEAD_OID — session finished; proceeding to arm."
+            echo "PR #$NUM: session-done marker present for head $PR_HEAD_OID — session finished."
+            # ---- Triage gate (docs §7.3; Q2 = the agent's call is final). A PASSING review
+            #      can still carry medium/low findings, which never fail the verdict and so were
+            #      historically never acted on. Require, when the current head has such findings,
+            #      that they were triaged — the agent fixed the worthwhile ones or replied to
+            #      decline the rest, then posted a `session-triaged: <head>` marker comment (or
+            #      the fix loop auto-accepted once its triage budget was spent). First ensure the
+            #      current head's review is COMPLETE (verdict=success on THIS sha) so the finding
+            #      count is stable, not mid-flight. ----
+            RV="$(gh api "repos/$REPO/commits/$PR_HEAD_OID/status" -q '.statuses[] | select(.context=="review-verdict") | .state' 2>/dev/null | head -n1 || true)"
+            if [ "$RV" != "success" ]; then
+              echo "PR #$NUM: review-verdict for current head $PR_HEAD_OID is '${RV:-absent}' — review not complete/passed for this sha; holding until it is."
+              exit 0
+            fi
+            # Inline review comments the reviewer left on THIS head = its unaddressed findings.
+            # (File-level findings with no line anchor live only in the review body — a known,
+            # rare gap; they don't get a triage pass. Count with the ...| .id | wc -l idiom, not
+            # `-q length`, which miscounts under --paginate.)
+            FINDINGS="$(gh api --paginate "repos/$REPO/pulls/$NUM/comments" \
+                          -q ".[] | select(.user.login==\"github-actions[bot]\" and .commit_id==\"$PR_HEAD_OID\") | .id" 2>/dev/null | wc -l | tr -d ' ')"
+            if [ "${FINDINGS:-0}" -gt 0 ]; then
+              if gh api --paginate "repos/$REPO/issues/$NUM/comments" \
+                   -q ".[] | select(.body | contains(\"<!-- session-triaged: $PR_HEAD_OID -->\")) | .id" 2>/dev/null | grep -q .; then
+                echo "PR #$NUM: $FINDINGS finding(s) on head $PR_HEAD_OID, session-triaged marker present — proceeding to arm."
+              else
+                echo "PR #$NUM: $FINDINGS unaddressed review finding(s) on head $PR_HEAD_OID and no session-triaged marker — holding for the triage pass (its marker comment re-triggers arming)."
+                exit 0
+              fi
+            fi
+            echo "PR #$NUM: gates satisfied — proceeding to arm."
             # --- MERGE_PAT preflight (LOUD). Arm with the PAT (a member identity) so the eventual
             #     merge fires pull_request:closed -> post-merge recut-alpha. A GITHUB_TOKEN merge is
             #     swallowed by the recursion guard, so a silent fallback to it would re-break the
