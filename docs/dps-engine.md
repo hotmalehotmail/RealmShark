@@ -214,6 +214,15 @@ appends to `damageList` and merges into a per-owner `damagePlayer` map (this is 
 reflectors, Chancellor Dammah) are set in `bossPhaseDamage` and only affect the
 "counter damage" accounting, not the totals (`Entity.java:495-511`, `Damage.addCounters`).
 
+> **Non-obvious fact / discrepancy.** Despite the name, `bossPhaseDamage`
+> (`Entity.java:495-511`) does **not** aggregate a boss's damage across phase/objectId
+> changes - it only flags three specific counter-damage mechanics. A boss changing
+> form gets a brand new `objectId`, hence a brand new `Entity` in `entityList` with a
+> damage total starting at zero; the engine has no notion of "this new id is the same
+> encounter as that old id." The renderer's `DpsTracker` is what carries a boss's
+> total across a phase transition (via `QuestObjectIdPacket` - see
+> [overlay-renderer.md](overlay-renderer.md) §5) - entirely client-side, no change here.
+
 ## Character-stat decoding
 
 - `Stat` (`Stat.java`) is a `StatData[200]` indexed by `statTypeNum`; `get(StatType)`
@@ -300,8 +309,10 @@ In `snapshot()` (`:291-337`) it **prefers the bridge's computed DPS** for the fo
 enemy when present — precisely because that path includes the local player's own
 reconstructed damage, which the renderer's packet-only estimate cannot see — and
 **falls back** to its own rolling-window numbers otherwise. It always uses its own
-`entityNames`/`objectNames` maps for display names and its own `EnemyHitPacket`-driven
-focus target. Both feed the same `DpsPanel`.
+`entityNames`/`objectNames` maps for display names and its own focus target — sticky
+on the game's quest objective (`QuestObjectIdPacket`) when one is active, falling
+back to `EnemyHitPacket`/`DamagePacket` last-hit otherwise; see `overlay-renderer.md`
+§5. Both feed the same `DpsPanel`.
 
 So: **the Java engine's snapshot is authoritative and primary; the renderer tracker
 is a self-damage-blind fallback plus the naming/focus layer.** For the internals of
