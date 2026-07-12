@@ -22,6 +22,9 @@ export interface StatData {
 /** packets/data/enums/StatType.java: NAME_STAT(31) */
 export const NAME_STAT_TYPE_NUM = 31
 
+/** packets/data/enums/StatType.java: MAX_HP_STAT(0) */
+export const MAX_HP_STAT_TYPE_NUM = 0
+
 export interface ObjectStatusData {
   objectId: number
   stats: StatData[]
@@ -34,6 +37,18 @@ export interface ObjectData {
 
 export interface UpdatePacketData {
   newObjects: ObjectData[]
+  /** objectIds that left view/despawned this update - packets/incoming/UpdatePacket.java. */
+  drops: number[]
+}
+
+/**
+ * packets/incoming/QuestObjectIdPacket.java: tells the client the objectId of
+ * its current quest objective (in a dungeon, the main boss). `list` is the
+ * full quest-object candidate list; the tracker only needs `objectId`.
+ */
+export interface QuestObjectIdPacketData {
+  objectId: number
+  list: number[]
 }
 
 /** packets/incoming/CreateSuccessPacket.java: server's own confirmation of "you are this objectId". */

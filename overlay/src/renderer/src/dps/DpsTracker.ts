@@ -1,11 +1,13 @@
 import type { PacketEnvelope } from '../../../shared/ipc'
 import {
+  MAX_HP_STAT_TYPE_NUM,
   NAME_STAT_TYPE_NUM,
   type BridgeDpsData,
   type CreateSuccessPacketData,
   type DamagePacketData,
   type EnemyHitPacketData,
   type PlayerDps,
+  type QuestObjectIdPacketData,
   type ServerPlayerShootPacketData,
   type UpdatePacketData
 } from './types'
@@ -27,7 +29,8 @@ const RELEVANT_TYPES = [
   'UpdatePacket',
   'ServerPlayerShootPacket',
   'EnemyHitPacket',
-  'DamagePacket'
+  'DamagePacket',
+  'QuestObjectIdPacket'
 ] as const
 
 function dlog(...args: unknown[]): void {
@@ -50,11 +53,17 @@ export interface DpsSnapshot {
 export const EMPTY_SNAPSHOT: DpsSnapshot = { targetId: null, targetName: '', rows: [] }
 
 /**
- * Tracks damage-per-second per enemy target, focused on whichever enemy the
- * local player last hit. Reset on instance change (MapInfoPacket) and meant to
- * also be reset externally when the game closes (electron-overlay-window's
- * "detach" event) - both wipe the same state, just triggered from different
- * places.
+ * Tracks damage-per-second per enemy target. When a quest objective is active
+ * (QuestObjectIdPacket - the game's own boss/objective marker in a dungeon),
+ * focus locks onto that entity and stays there ("sticky") even while AoEing
+ * other enemies, only moving when the locked target dies/despawns or a new
+ * quest objective is set - a boss phase change re-points the objective at the
+ * next phase's objectId, and the prior phase's per-player damage is carried
+ * forward so the total doesn't reset. Outside a quest objective (e.g. open
+ * world) it falls back to focusing whichever enemy the local player last hit.
+ * Reset on instance change (MapInfoPacket) and meant to also be reset
+ * externally when the game closes (electron-overlay-window's "detach" event) -
+ * both wipe the same state, just triggered from different places.
  *
  * The local player's objectId is resolved from two sources: CreateSuccessPacket
  * (authoritative but sent only once, at map load - missed if we attach
@@ -74,6 +83,24 @@ export class DpsTracker {
   private localPlayerId: number | null = null
   /** Summoned entity id -> owning player id, from ServerPlayerShootPacket. */
   private minionOwners = new Map<number, number>()
+  /** Enemy/NPC id -> MAX_HP_STAT, from UpdatePacket - used only for the fallback last-hit preference below. */
+  private enemyMaxHp = new Map<number, number>()
+  /**
+   * The current quest-objective entity id (QuestObjectIdPacket.objectId), or
+   * null when no quest objective is active (open world - fallback to last-hit).
+   * Non-null gates focusTargetId against last-hit updates (sticky boss lock).
+   */
+  private lockedBossId: number | null = null
+  /** Whether `lockedBossId`'s entity is still alive - false once it dies/despawns, until a new objective re-locks. */
+  private bossAlive = false
+  /**
+   * Per-attacker damage carried forward from earlier phases of the current
+   * boss lock (keyed by attacker objectId), accumulated in carryForwardBossDamage
+   * whenever the quest objective moves to a new objectId while one was already
+   * locked. snapshot() adds this on top of the current phase's live rows so a
+   * boss's total doesn't reset across a phase/form change.
+   */
+  private bossCarry = new Map<number, { name: string; damage: number }>()
   /** Debug: how many of each packet type we've ingested (all types, not just relevant ones). */
   private typeCounts = new Map<string, number>()
   /** Debug: types whose field keys we've already dumped once (to avoid per-packet spam). */
@@ -110,6 +137,9 @@ export class DpsTracker {
         case 'DamagePacket':
           this.ingestDamage(envelope.data as DamagePacketData, envelope.time)
           break
+        case 'QuestObjectIdPacket':
+          this.ingestQuestObjectId(envelope.data as QuestObjectIdPacketData)
+          break
         default:
           break
       }
@@ -144,6 +174,16 @@ export class DpsTracker {
         // stripped here too (the bridge already strips its own copy).
         this.entityNames.set(obj.status.objectId, nameStat.stringStatValue.split(',')[0])
       }
+      const maxHpStat = obj.status?.stats?.find((s) => s.statTypeNum === MAX_HP_STAT_TYPE_NUM)
+      if (maxHpStat?.statValue !== undefined) {
+        this.enemyMaxHp.set(obj.status.objectId, maxHpStat.statValue)
+      }
+    }
+    // An entity leaving view covers both despawn (killed) and the game simply
+    // no longer rendering it - either way, if it's our locked boss target we
+    // can no longer assume it's alive; see onBossDespawn.
+    for (const dropId of data.drops ?? []) {
+      this.onBossDespawn(dropId)
     }
   }
 
@@ -218,14 +258,109 @@ export class DpsTracker {
       dlog('local player id =', playerId, '(from EnemyHitPacket)')
       this.localPlayerId = playerId
     }
-    if (Number.isFinite(data.targetId) && this.focusTargetId !== data.targetId) {
-      dlog(
-        'focus target ->',
-        data.targetId,
-        `(${this.nameOf(data.targetId)}) (from EnemyHitPacket)`
-      )
-      this.focusTargetId = data.targetId
+    if (Number.isFinite(data.targetId)) {
+      this.onLocalHit(data.targetId)
+      // `kill` is only set on the hit that actually finishes the target off -
+      // a direct, immediate despawn signal for whoever gets the killing blow.
+      if (data.kill) this.onBossDespawn(data.targetId)
     }
+  }
+
+  /**
+   * The local player's shot/damage landed on `targetId`. While a quest
+   * objective is locked and still alive, this is ignored entirely - AoEing
+   * adds must not steal focus from the boss (issue: sticky DPS focus). Once
+   * that lock ends (no objective, or the locked target died/despawned), this
+   * drives the last-hit fallback focus.
+   */
+  private onLocalHit(targetId: number): void {
+    if (this.lockedBossId !== null && this.bossAlive) return
+    this.maybeSwitchFallbackFocus(targetId)
+  }
+
+  /**
+   * Last-hit fallback focus, with one refinement over pure last-hit: don't let
+   * a hit on a smaller add steal focus away from a bigger enemy already being
+   * fought, whenever both max-HPs are actually known (from UpdatePacket's
+   * MAX_HP_STAT - never a new bridge dependency). Falls straight through to
+   * plain last-hit whenever HP is unknown for either side, which is the common
+   * case, so default behavior is unchanged from before this feature.
+   */
+  private maybeSwitchFallbackFocus(newTargetId: number): void {
+    if (this.focusTargetId === newTargetId) return
+    if (this.focusTargetId !== null) {
+      const currentMax = this.enemyMaxHp.get(this.focusTargetId)
+      const newMax = this.enemyMaxHp.get(newTargetId)
+      if (currentMax !== undefined && newMax !== undefined && currentMax > newMax) {
+        return
+      }
+    }
+    dlog('focus target ->', newTargetId, `(${this.nameOf(newTargetId)}) (from last hit)`)
+    this.focusTargetId = newTargetId
+  }
+
+  /**
+   * The current quest objective changed (QuestObjectIdPacket.objectId) - the
+   * game's own boss/objective marker, e.g. a dungeon's main boss. Locks DPS
+   * focus onto it (sticky - see onLocalHit) and, if a boss was already locked,
+   * carries its accumulated per-player damage forward so a phase/form change
+   * (a new objectId) doesn't reset the fight's total.
+   */
+  private ingestQuestObjectId(data: QuestObjectIdPacketData): void {
+    const newId = data.objectId
+    if (!Number.isFinite(newId) || newId <= 0 || newId === this.lockedBossId) return
+    if (this.lockedBossId !== null) {
+      this.carryForwardBossDamage(this.lockedBossId)
+    }
+    dlog('quest objective ->', newId, `(${this.nameOf(newId)}) - locking DPS focus`)
+    this.lockedBossId = newId
+    this.bossAlive = true
+    this.focusTargetId = newId
+  }
+
+  /**
+   * The locked boss target died/despawned (a kill on it, or it left view via
+   * UpdatePacket.drops). Only marks it no-longer-alive - it does NOT clear
+   * focusTargetId, so the panel keeps showing the final numbers until either a
+   * new quest objective re-locks (phase transition) or the next hit elsewhere
+   * moves focus via the last-hit fallback (see onLocalHit).
+   */
+  private onBossDespawn(id: number): void {
+    if (this.lockedBossId === id) {
+      this.bossAlive = false
+    }
+  }
+
+  /** Snapshot `oldId`'s current per-player damage into `bossCarry`, summing across phases. */
+  private carryForwardBossDamage(oldId: number): void {
+    for (const [attackerId, row] of this.totalDamageRows(oldId)) {
+      const existing = this.bossCarry.get(attackerId)
+      if (existing) {
+        existing.damage += row.damage
+        if (row.name) existing.name = row.name
+      } else {
+        this.bossCarry.set(attackerId, { name: row.name, damage: row.damage })
+      }
+    }
+  }
+
+  /** Per-attacker cumulative damage against `targetId` - bridge rows (authoritative) if present, else the local buffer. */
+  private totalDamageRows(targetId: number): Map<number, { name: string; damage: number }> {
+    const result = new Map<number, { name: string; damage: number }>()
+    const bridge = this.bridgeEnemies.get(targetId)
+    if (bridge) {
+      for (const row of bridge.rows)
+        result.set(row.objectId, { name: row.name, damage: row.damage })
+      return result
+    }
+    const byAttacker = this.targets.get(targetId)
+    if (byAttacker) {
+      for (const [attackerId, buffer] of byAttacker) {
+        const damage = buffer.reduce((sum, hit) => sum + hit.damage, 0)
+        result.set(attackerId, { name: this.nameOf(attackerId), damage })
+      }
+    }
+    return result
   }
 
   private ingestDamage(data: DamagePacketData, time: number): void {
@@ -252,10 +387,7 @@ export class DpsTracker {
     }
 
     if (this.localPlayerId !== null && attackerId === this.localPlayerId) {
-      if (this.focusTargetId !== data.targetId) {
-        dlog('focus target ->', data.targetId, `(${this.nameOf(data.targetId)})`)
-      }
-      this.focusTargetId = data.targetId
+      this.onLocalHit(data.targetId)
     }
   }
 
@@ -268,6 +400,10 @@ export class DpsTracker {
     this.focusTargetId = null
     this.localPlayerId = null
     this.minionOwners.clear()
+    this.enemyMaxHp.clear()
+    this.lockedBossId = null
+    this.bossAlive = false
+    this.bossCarry.clear()
     // Deliberately keep typeCounts/dumpedKeys across resets so the running
     // totals (and one-time key dumps) survive instance changes - they describe
     // the whole session's traffic, not a single instance.
@@ -286,6 +422,7 @@ export class DpsTracker {
     for (const n of this.typeCounts.values()) total += n
     return (
       `state[local=${this.localPlayerId} focus=${this.focusTargetId} ` +
+      `bossLock=${this.lockedBossId}(alive=${this.bossAlive}) ` +
       `targets=${this.targets.size} names=${this.entityNames.size}] ` +
       `pkts[total=${total} ${counts}]`
     )
@@ -294,6 +431,13 @@ export class DpsTracker {
   snapshot(nowMs: number, windowMs: number = WINDOW_MS): DpsSnapshot {
     if (this.focusTargetId === null) {
       return EMPTY_SNAPSHOT
+    }
+
+    // Mid (or just past) a sticky boss lock with carried-forward damage from an
+    // earlier phase: merge that carry with the current phase's live rows so the
+    // fight's total spans the whole encounter, not just the latest objectId.
+    if (this.bossCarry.size > 0 && this.focusTargetId === this.lockedBossId) {
+      return this.bossSnapshot(nowMs, windowMs)
     }
 
     // Prefer the bridge's authoritative computed DPS for the focused enemy (it
@@ -337,6 +481,60 @@ export class DpsTracker {
     rows.sort((a, b) => b.dps - a.dps)
 
     return { targetId: this.focusTargetId, targetName, rows }
+  }
+
+  /**
+   * Same shape as `snapshot`, but for the locked boss target once a phase
+   * transition has carried forward damage from an earlier phase into
+   * `bossCarry`: adds each attacker's carry on top of the current phase's live
+   * rows (bridge preferred, else the local rolling-window buffer), so `damage`
+   * spans every phase seen so far while `dps` reflects the current phase's
+   * live rate.
+   */
+  private bossSnapshot(nowMs: number, windowMs: number): DpsSnapshot {
+    const targetId = this.lockedBossId as number
+    const targetName = this.bridgeEnemies.get(targetId)?.name || this.nameOf(targetId)
+
+    const merged = new Map<number, PlayerDps>()
+    for (const [attackerId, carry] of this.bossCarry) {
+      merged.set(attackerId, {
+        objectId: attackerId,
+        name: carry.name || this.nameOf(attackerId),
+        damage: carry.damage,
+        dps: 0
+      })
+    }
+
+    const addLive = (attackerId: number, name: string, damage: number, dps: number): void => {
+      const existing = merged.get(attackerId)
+      if (existing) {
+        existing.damage += damage
+        existing.dps = dps
+        if (name) existing.name = name
+      } else {
+        merged.set(attackerId, { objectId: attackerId, name, damage, dps })
+      }
+    }
+
+    const bridge = this.bridgeEnemies.get(targetId)
+    if (bridge) {
+      for (const row of bridge.rows) addLive(row.objectId, row.name, row.damage, row.dps)
+    } else {
+      const byAttacker = this.targets.get(targetId)
+      if (byAttacker) {
+        const cutoff = nowMs - windowMs
+        const windowSeconds = windowMs / 1000
+        for (const [attackerId, buffer] of byAttacker) {
+          while (buffer.length > 0 && buffer[0].time < cutoff) buffer.shift()
+          if (buffer.length === 0) continue
+          const damage = buffer.reduce((sum, hit) => sum + hit.damage, 0)
+          addLive(attackerId, this.nameOf(attackerId), damage, damage / windowSeconds)
+        }
+      }
+    }
+
+    const rows = Array.from(merged.values()).sort((a, b) => b.damage - a.damage)
+    return { targetId, targetName, rows }
   }
 
   private nameOf(id: number): string {

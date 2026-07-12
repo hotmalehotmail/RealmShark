@@ -379,35 +379,68 @@ objectId with a non-empty `name` — i.e. the instance's players.
 ### `DpsTracker` (`dps/DpsTracker.ts`)
 
 A framework-agnostic class (no React) that ingests `PacketEnvelope[]` and answers
-`snapshot(nowMs)`. Its `ingest` switch (`DpsTracker.ts:82-117`) consumes **six**
-envelope types — more than the task's summary implies:
+`snapshot(nowMs)`. Its `ingest` switch consumes **seven** envelope types — more
+than the task's summary implies:
 
 | Envelope | Handler | What it builds |
 | --- | --- | --- |
 | `CreateSuccessPacket` | sets `localPlayerId` | local-player identity (one-shot) |
-| `EnemyHitPacket` | `ingestEnemyHit` | local-player id (from `mainID`) **and** the focus target (from `targetId`) |
+| `EnemyHitPacket` | `ingestEnemyHit` | local-player id (from `mainID`), a last-hit focus signal (via `onLocalHit`), and a despawn signal when `kill` is set |
 | `ServerPlayerShootPacket` | `ingestShoot` | `minionOwners`: minion/pet id → owning player |
-| `DamagePacket` | `ingestDamage` | per-target, per-attacker rolling hit buffers |
-| `UpdatePacket` | `ingestUpdate` | `entityNames`: objectId → `NAME_STAT` username |
+| `DamagePacket` | `ingestDamage` | per-target, per-attacker rolling hit buffers, and a last-hit focus signal for the local player's own attributed hits |
+| `UpdatePacket` | `ingestUpdate` | `entityNames` (`NAME_STAT`), `enemyMaxHp` (`MAX_HP_STAT`), and a despawn signal per dropped id |
 | `objectNames` (synthetic) | `ingestObjectNames` | enemy names resolved bridge-side |
 | `dps` (synthetic) | `ingestBridgeDps` | **the Java engine's computed DPS snapshot** |
+| `QuestObjectIdPacket` | `ingestQuestObjectId` | locks/re-locks the sticky boss focus, carrying forward the prior phase's damage on a phase change |
 | `MapInfoPacket` | `reset()` | wipes all state on instance change |
 
-**Focus target.** The tracker only ever reports DPS against *one* enemy: the one
-the local player last hit (`focusTargetId`), set from `EnemyHitPacket.targetId`
-(`DpsTracker.ts:218-225`) and from a local-player `DamagePacket`
-(`DpsTracker.ts:251-256`).
+**Focus target — sticky quest-objective lock, falling back to last-hit.** The
+tracker reports DPS against *one* enemy (`focusTargetId`), chosen by:
 
-**Local rolling window.** `ingestDamage` (`DpsTracker.ts:228-257`) buckets hits as
+1. **Quest-objective lock** (`lockedBossId`, `bossAlive`) — set from
+   `QuestObjectIdPacket.objectId` (`ingestQuestObjectId`), the game's own boss/
+   objective marker (in a dungeon, the main boss). While locked and alive, every
+   last-hit signal (`onLocalHit`, called from both `ingestEnemyHit` and
+   `ingestDamage`) is a no-op — AoEing adds cannot steal focus from the boss.
+   The lock only moves when either (a) a *different*, non-zero objective id
+   arrives (a phase/form change re-points the objective at the next phase's
+   entity), or (b) the locked entity despawns (`onBossDespawn`, driven by
+   `EnemyHitPacket.kill` on it or its id appearing in `UpdatePacket.drops`) — at
+   which point `bossAlive` goes false and last-hit resumes until a new objective
+   re-locks. Despawning does **not** itself clear `focusTargetId`, so the panel
+   keeps showing the final numbers rather than blanking mid-transition.
+2. **Last-hit fallback** (`maybeSwitchFallbackFocus`) — used whenever no quest
+   objective is locked (open world, or after the locked boss despawned with no
+   new objective yet). Ordinarily this is plain last-hit, same as before this
+   feature; the one refinement is that a hit on a new target does **not** steal
+   focus away from the current one when both entities' `MAX_HP_STAT` are known
+   (from `UpdatePacket`, no bridge dependency) and the current target's is
+   larger — so an AoE tick on a small add can't flip focus off a bigger enemy
+   already being fought. Falls straight through to plain last-hit whenever
+   either max-HP is unknown, which is the common case.
+
+**Boss-phase damage carryover.** A boss changing form gets a brand-new
+`objectId` server-side (a new `Entity` in the bridge's `DpsEngine`, damage
+total starting at zero — see the discrepancy note in `dps-engine.md`), so
+carrying a boss's total across phases is entirely the renderer's job.
+`ingestQuestObjectId` calls `carryForwardBossDamage` on the *previous*
+`lockedBossId` before switching, which snapshots its current per-attacker
+damage (`totalDamageRows` — bridge rows if present, else the summed local
+buffer) into `bossCarry`. `snapshot()` then takes the `bossSnapshot` branch
+whenever `bossCarry` is non-empty and the focus is still the locked boss:
+each row's `damage` is `bossCarry + the current phase's live damage`, while
+`dps` is just the current phase's live rate (not a whole-encounter average).
+
+**Local rolling window.** `ingestDamage` buckets hits as
 `targets[targetId][attackerId] = HitEvent[]`, redirecting a minion's `objectId`
-to its owner via `minionOwners` (`DpsTracker.ts:231`). `snapshot` trims each
-buffer to the last **`WINDOW_MS = 8000`** ms (`DpsTracker.ts:13,314-332`) and
-computes `dps = windowDamage / 8`.
+to its owner via `minionOwners`. `snapshot` trims each buffer to the last
+**`WINDOW_MS = 8000`** ms and computes `dps = windowDamage / 8`.
 
-**Reset.** `reset()` (`DpsTracker.ts:260-271`) wipes names, minion map, targets,
-focus, and local id. It runs on `MapInfoPacket` internally and is also called from
-the hook on detach. Debug counters are deliberately *kept* across resets. Note
-`CreateSuccessPacket` does **not** reset — it only sets the local id.
+**Reset.** `reset()` wipes names, minion map, targets, focus, local id, the
+boss lock (`lockedBossId`/`bossAlive`/`bossCarry`), and `enemyMaxHp`. It runs on
+`MapInfoPacket` internally and is also called from the hook on detach. Debug
+counters are deliberately *kept* across resets. Note `CreateSuccessPacket` does
+**not** reset — it only sets the local id.
 
 ### Which DPS numbers the UI renders — the two paths reconciled
 
@@ -438,8 +471,9 @@ enemy does it fall back to the locally-computed rolling window
 
 Two things the renderer **always** owns regardless of source:
 
-- **The focus target** is chosen locally (from `EnemyHitPacket`/local
-  `DamagePacket`); the bridge snapshot is only *looked up* by that id.
+- **The focus target** is chosen locally (sticky quest-objective lock, falling
+  back to `EnemyHitPacket`/local `DamagePacket` last-hit — see above); the
+  bridge snapshot is only *looked up* by that id.
 - **Player row names** are overridden with the renderer's `entityNames`
   (`NAME_STAT`) map: `this.entityNames.get(p.id) ?? p.name`
   (`DpsTracker.ts:176-181`), because the bridge falls back to a class name
@@ -460,8 +494,10 @@ The React wrapper: one `DpsTracker` per hook instance (`useState(() => new
 DpsTracker())`), a mount effect that pipes `onPacketBatch` into `tracker.ingest`
 and immediately re-snapshots whenever a batch contains a `dps` envelope
 (`useDpsTracker.ts:17-26`) — the bridge pushes one within ~50 ms of any damage
-packet (coalesced) plus a 250 ms heartbeat (see `bridge-server.md`), so the
-panel is effectively event-driven, not polled — `onOverlayDetach` into
+packet (coalesced) plus a 250 ms heartbeat (see `bridge-server.md`) — or a
+`QuestObjectIdPacket` envelope, so a boss lock/phase transition renders
+immediately rather than waiting for the 1 s fallback tick below. This keeps the
+panel effectively event-driven, not polled — `onOverlayDetach` into
 `tracker.reset()` + empty snapshot, and a slow **1000 ms** `FALLBACK_INTERVAL_MS`
 `setInterval` recomputing `snapshot(Date.now())` (`useDpsTracker.ts:31-34`) that
 exists only so the client-side rolling-window fallback (used when the bridge

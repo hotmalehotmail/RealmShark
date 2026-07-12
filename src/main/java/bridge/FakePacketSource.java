@@ -10,6 +10,7 @@ import packets.incoming.CreateSuccessPacket;
 import packets.incoming.DamagePacket;
 import packets.incoming.MapInfoPacket;
 import packets.incoming.NewTickPacket;
+import packets.incoming.QuestObjectIdPacket;
 import packets.incoming.ServerPlayerShootPacket;
 import packets.incoming.UpdatePacket;
 import packets.outgoing.EnemyHitPacket;
@@ -46,6 +47,16 @@ import java.util.Random;
  * also briefly drops from view and reappears every cycle (view-radius churn on a
  * still-alive, still-being-hit target), to exercise the DPS panel's sprite
  * staying resolved across a drop instead of going blank.
+ * <p>
+ * Each ~40-tick map life also runs a fake boss encounter, to exercise the DPS
+ * panel's sticky quest-objective lock (see {@code DpsTracker.ts}): a
+ * {@link QuestObjectIdPacket} locks focus onto a fake boss while regular
+ * {@link DamagePacket}s keep landing on the two "add" enemies above (proving
+ * the panel doesn't flip away from the boss while AoEing them), a mid-fight
+ * phase transition swaps the boss to a new objectId via {@link UpdatePacket}.drops
+ * + a fresh {@code QuestObjectIdPacket} (proving the damage total carries over
+ * instead of resetting), and the fight ends with the final phase despawning
+ * with no new objective (proving focus falls back to last-hit afterward).
  */
 public class FakePacketSource {
 
@@ -61,6 +72,13 @@ public class FakePacketSource {
     // (see the synthetic assets/ObjectID.list used for local testing). Unlike
     // players, enemies carry no NAME_STAT, so their name comes from the type.
     private static final int[] ENEMY_TYPES = {1900, 1901};
+
+    // The two phases of a fake boss encounter - a new objectId per phase, like a
+    // real multi-phase boss (e.g. Oryx). QuestObjectIdPacket locks DPS focus onto
+    // whichever of these is currently the quest objective; see loop()'s offset-based
+    // boss-encounter schedule.
+    private static final int[] BOSS_PHASE_IDS = {100_002, 100_003};
+    private static final int[] BOSS_PHASE_TYPES = {1902, 1903};
 
     // A fake pet owned by the local player, to exercise minion-damage attribution.
     private static final int PET_ID = 50;
@@ -153,6 +171,30 @@ public class FakePacketSource {
                 Register.INSTANCE.emitPacketLogs(transientJoin());
             } else if (tick % 24 == 18) {
                 Register.INSTANCE.emitPacketLogs(transientLeave());
+            }
+            // Fake boss encounter, scheduled against this map's 40-tick life (see the
+            // tick%40==0 instance-reset block above): phase 1 locks in at offset 2,
+            // transitions to phase 2 (new objectId) at offset 20 - dropping phase 1 and
+            // carrying its damage forward - and phase 2 dies at offset 38 with no
+            // further QuestObjectIdPacket, so focus falls back to last-hit for the rest
+            // of the map's life. Damage keeps landing on both fake "adds" (ENEMY_IDS)
+            // throughout via the existing localPlayerHit/randomDamage calls below, so a
+            // correct tracker must never flip focus to them while the boss is locked.
+            int bossOffset = tick % 40;
+            if (bossOffset == 2) {
+                Register.INSTANCE.emitPacketLogs(bossUpdate(0));
+                Register.INSTANCE.emitPacketLogs(questObjective(BOSS_PHASE_IDS[0]));
+            } else if (bossOffset == 20) {
+                Register.INSTANCE.emitPacketLogs(enemyDrop(BOSS_PHASE_IDS[0]));
+                Register.INSTANCE.emitPacketLogs(bossUpdate(1));
+                Register.INSTANCE.emitPacketLogs(questObjective(BOSS_PHASE_IDS[1]));
+            } else if (bossOffset == 38) {
+                Register.INSTANCE.emitPacketLogs(enemyDrop(BOSS_PHASE_IDS[1]));
+            }
+            if (bossOffset >= 2 && bossOffset < 20) {
+                Register.INSTANCE.emitPacketLogs(bossDamage(BOSS_PHASE_IDS[0]));
+            } else if (bossOffset >= 21 && bossOffset < 38) {
+                Register.INSTANCE.emitPacketLogs(bossDamage(BOSS_PHASE_IDS[1]));
             }
             // A NewTickPacket every tick, like a real client. It carries the
             // server clock the DPS engine uses as its time base - without it the
@@ -444,6 +486,62 @@ public class FakePacketSource {
         p.tiles = new GroundTileData[0];
         p.newObjects = new ObjectData[0];
         p.drops = new int[]{enemyId};
+        return p;
+    }
+
+    /** Boss stat block - a much higher max HP than the regular fake enemies. */
+    private StatData[] bossStats() {
+        return new StatData[]{
+            stat(StatType.MAX_HP_STAT, 500_000), stat(StatType.HP_STAT, 500_000),
+            stat(StatType.DEFENSE_STAT, 0),
+            stat(StatType.CONDITION_STAT, 0), stat(StatType.NEW_CON_STAT, 0)
+        };
+    }
+
+    /** Introduces one phase of the fake boss encounter (see BOSS_PHASE_IDS/TYPES). */
+    private UpdatePacket bossUpdate(int phase) {
+        UpdatePacket p = new UpdatePacket();
+        p.levelType = 0;
+        p.pos = new WorldPosData();
+        p.tiles = new GroundTileData[0];
+        p.drops = new int[0];
+
+        ObjectStatusData status = new ObjectStatusData();
+        status.objectId = BOSS_PHASE_IDS[phase];
+        status.pos = new WorldPosData();
+        status.stats = bossStats();
+
+        ObjectData obj = new ObjectData();
+        obj.objectType = BOSS_PHASE_TYPES[phase];
+        obj.status = status;
+        p.newObjects = new ObjectData[]{obj};
+        return p;
+    }
+
+    /** Sets the quest objective to `objectId` - what a real client sees when entering/progressing a boss fight. */
+    private QuestObjectIdPacket questObjective(int objectId) {
+        QuestObjectIdPacket p = new QuestObjectIdPacket();
+        p.objectId = objectId;
+        p.list = new int[]{objectId};
+        return p;
+    }
+
+    /**
+     * A damage hit against the fake boss, attributed to a random roster member
+     * or the fake pet - same shape as {@link #randomDamage()} but targeting the
+     * boss specifically, so the boss encounter accrues its own DPS totals
+     * alongside (not instead of) the regular adds' damage.
+     */
+    private DamagePacket bossDamage(int bossId) {
+        int attacker = rng.nextInt(5) == 0 ? PET_ID : ROSTER_IDS[rng.nextInt(ROSTER_IDS.length)];
+
+        DamagePacket p = new DamagePacket();
+        p.targetId = bossId;
+        p.effects = new int[0];
+        p.damageAmount = 200 + rng.nextInt(800);
+        p.damageProperties = rng.nextBoolean();
+        p.bulletId = rng.nextInt(256);
+        p.objectId = attacker;
         return p;
     }
 
