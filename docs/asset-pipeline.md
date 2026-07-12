@@ -27,6 +27,7 @@ feeding the overlay's Loot panel — see
 | `src/main/java/assets/AssetExtractor.java` | Orchestrator: locates `resources.assets`, freshness check, drives extraction, then parses XML → `ObjectID.list`/`TileID.list`. |
 | `src/main/java/assets/resextractor/*` | Reverse-engineered Unity serialized-file reader (ported from UnityPy). |
 | `src/main/java/assets/resextractor/UnityExtractor.java` | Top-level extract step: writes atlas PNGs, `spritesheetf`, and XML files. |
+| `src/main/java/assets/resextractor/AssetProbe.java` | Diagnostic-only feasibility probe for enchant pip/icon sprite extraction (issue #107) — see "The asset probe" below. |
 | `src/main/java/assets/flattbuffer/*` | Generated FlatBuffers schema for RotMG's own sprite-sheet (`SpriteSheetRoot → SpriteSheet → Sprite`/`AnimatedSprite`, `Position`, `Color`). |
 | `src/main/java/assets/SpriteFlatBuffer.java` | Loads `spritesheetf`; resolves `(sheetName,index) → atlas rect` / mask rect; representative-frame facing selection. |
 | `src/main/java/assets/SpriteJson.java` | Legacy JSON sprite loader; **not used** by the current pipeline (see note). |
@@ -392,6 +393,53 @@ pack's atlas-readiness gate.
 > `reloadAssets()` call (real or fake), so they survive regardless of
 > call-order races with `ObjectNames.init`'s own background reload.
 
+### The asset probe — enchant pip/icon extraction feasibility (issue #107)
+
+The overlay's enchant rarity-border feature (issue #107 part 1 — see
+`docs/overlay-renderer.md` §4.1) only needs an item's enchant *count*, which
+`bridge.dps.ParseEnchants.extractEnchantIds` already decodes headlessly with
+no game assets. Rendering the game's own enchant "pip" (slot-count) icons and
+per-enchantment icons — a follow-up feature — needs actual UI art the
+extraction pipeline has never pulled: `UnityExtractor.extractSprites` only
+writes the four `Texture2D.SPRITESHEET_NAMES` atlases (`characters`,
+`characters_masks`, `groundTiles`, `mapObjects`); `enchantments.xml` is parsed
+by `ParseEnchants.loadEnchants` for only `<id>`/`<type>`/`<Mutators>`, so any
+icon/texture reference on an `<Enchantment>` node is silently ignored today.
+
+`AssetProbe` (`assets/resextractor/AssetProbe.java`) answers "is that art
+reachable, and where" with a **read-only** three-part report over what the
+extraction pipeline already walks — it writes nothing to disk itself:
+
+1. **Every `Texture2D` name in `resources.assets`**, not just the four
+   extracted today, flagging (`*`) any whose name contains `enchant`, `pip`,
+   `rarity`, or `engrave` (case-insensitive).
+2. **Every sheet name in the extracted `spritesheetf` manifest** (both static
+   `SpriteSheet`s and `AnimatedSprite` entries), via the same
+   `SpriteSheetRoot` FlatBuffer reader `SpriteFlatBuffer` uses, flagged the
+   same way.
+3. **Every distinct XML tag seen under `assets/xml/enchantments.xml`**, via a
+   plain regex scan (not a DOM parse — a diagnostic report doesn't need one),
+   flagging tags `ParseEnchants.loadEnchants` doesn't read (candidates for
+   icon/pip fields) and any tag whose name looks icon/texture-related
+   (`tex`/`icon`/`image` substrings) regardless.
+
+**Run it:** `./gradlew probeAssets > probe-report.txt`, or
+`java -jar bridge.jar --probe-assets` (the flag `bridge.PacketBridge.main`
+checks before starting the bridge server — it prints the report and exits,
+never starting the WebSocket server). Output is plain text to stdout, one
+line per finding (`TAG\t<name>\t<count>` etc.), so it's directly greppable
+and pasteable as evidence into a follow-up issue.
+
+**Degrades gracefully with no game installed** (the normal case on CI and
+most dev machines, same as the rest of this pipeline — see "Best-effort
+everywhere" below): sections 1-2 need `resources.assets`
+(`AssetExtractor.assetFile()`); when it's null/missing or fails to parse,
+`AssetProbe.run` prints a clear status line and moves on to section 3, which
+only needs `assets/xml/enchantments.xml` (itself only present after a real
+extraction) and reports "NOT FOUND" the same way when absent. Never throws.
+`AssetProbeTest` covers both the no-assets path and the XML tag scan without
+needing a real game install.
+
 ### `ImageBuffer` — desktop-side cropping (`ImageBuffer.java`)
 
 `ImageBuffer` performs that final crop for the **Swing desktop app**:
@@ -502,3 +550,6 @@ mask-compositing model, and the renderer side are documented in
   color, or (on a `Class=Bag` object) a bag entity's self-identified color —
   see "BagType — loot categorization" above. `IdToAsset.registerFake` is the
   seam that makes it demonstrable with no game installed.
+- **`AssetProbe` writes nothing** — it's a read-only diagnostic pass over what
+  `UnityExtractor`/`ParseEnchants` already parse, reported to stdout only. See
+  "The asset probe" above.

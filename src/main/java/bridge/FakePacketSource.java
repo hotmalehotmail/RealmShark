@@ -1,6 +1,7 @@
 package bridge;
 
 import assets.IdToAsset;
+import bridge.dps.ParseEnchants;
 import packets.data.GroundTileData;
 import packets.data.ObjectData;
 import packets.data.ObjectStatusData;
@@ -76,6 +77,13 @@ import java.util.Random;
  * player's bag inventory slots (INVENTORY_4..11) via {@link #lootPickupStatus},
  * so the Loot panel's asset-derived BagType categorization is demonstrable and
  * regression-testable with no game installed (issue #105).
+ * <p>
+ * Every roster member's UNIQUE_DATA_STRING stat also carries synthetic
+ * per-slot enchant data ({@link #ROSTER_ENCHANTS}, encoded via
+ * {@link ParseEnchants#encodeEnchantSlot}), covering all four enchant-count
+ * rarity tiers (1-4 filled slots) plus unenchanted (0) gear across the roster
+ * - so the overlay's rarity-border rendering (issue #107) is demonstrable and
+ * regression-testable with no game installed.
  */
 public class FakePacketSource {
 
@@ -124,6 +132,18 @@ public class FakePacketSource {
         {4003, 4103, 4203, 4303}       // Dave
     };
 
+    // Per-roster-member filled-enchant-slot counts (weapon/ability/armor/ring),
+    // 0-4 each - the rarity derivation issue #107 uses (0=common/no border,
+    // 1=uncommon, 2=rare, 3=legendary, 4=divine). Alice covers all four tiers
+    // in one row; Bob is fully unenchanted; Carol/Dave mix both so the roster
+    // as a whole exercises every tier plus unenchanted gear.
+    private static final int[][] ROSTER_ENCHANTS = {
+        {1, 2, 3, 4}, // Alice (local): one of each tier
+        {0, 0, 0, 0}, // Bob: fully unenchanted
+        {4, 0, 2, 0}, // Carol: mixed
+        {0, 3, 0, 1}  // Dave: mixed
+    };
+
     // A non-local player whose weapon we periodically swap, to prove OTHER players'
     // equipment updates render (not just the local player's) - the merge/render path
     // is identical for every objectId. Cycling the weapon objectType changes the
@@ -136,6 +156,7 @@ public class FakePacketSource {
     private static final int TRANSIENT_ID = 5;
     private static final String TRANSIENT_NAME = "Eve,7f2c";
     private static final int[] TRANSIENT_EQUIPMENT = {4005, 4105, 4205, 4305};
+    private static final int[] TRANSIENT_ENCHANTS = {2, 0, 4, 1};
 
     // Loot panel demo (issue #105): the ground-bag entities the two tracked
     // BagTypes (6 = white, 8 = orange/ST - see docs/asset-pipeline.md) resolve
@@ -417,8 +438,8 @@ public class FakePacketSource {
             // Every player carries name + 4 equipped slots; the local player also
             // gets a skin + dyes, so both the Character and Instance panels render.
             status.stats = ROSTER_IDS[i] == LOCAL_PLAYER_ID
-                ? localPlayerStats(ROSTER_NAMES[i], ROSTER_EQUIPMENT[i])
-                : playerStats(ROSTER_NAMES[i], ROSTER_EQUIPMENT[i]);
+                ? localPlayerStats(ROSTER_NAMES[i], ROSTER_EQUIPMENT[i], ROSTER_ENCHANTS[i])
+                : playerStats(ROSTER_NAMES[i], ROSTER_EQUIPMENT[i], ROSTER_ENCHANTS[i]);
 
             ObjectData obj = new ObjectData();
             obj.objectType = 0x0300; // player class 768, matches the synthetic players.xml
@@ -494,7 +515,7 @@ public class FakePacketSource {
         ObjectStatusData status = new ObjectStatusData();
         status.objectId = TRANSIENT_ID;
         status.pos = new WorldPosData();
-        status.stats = playerStats(TRANSIENT_NAME, TRANSIENT_EQUIPMENT);
+        status.stats = playerStats(TRANSIENT_NAME, TRANSIENT_EQUIPMENT, TRANSIENT_ENCHANTS);
 
         ObjectData obj = new ObjectData();
         obj.objectType = 0x0300; // player class 768, matches the synthetic players.xml
@@ -524,13 +545,40 @@ public class FakePacketSource {
         return s;
     }
 
+    /** A string stat entry (e.g. NAME_STAT, UNIQUE_DATA_STRING). */
+    private static StatData stringStat(StatType type, String value) {
+        StatData s = new StatData();
+        s.statTypeNum = type.get();
+        s.statType = type;
+        s.stringStatValue = value;
+        s.statValueTwo = -1;
+        return s;
+    }
+
+    /**
+     * Encodes 4 per-slot enchant counts (weapon/ability/armor/ring, 0-4 each)
+     * into UNIQUE_DATA_STRING's comma-separated 4-slot wire shape - see
+     * {@link ParseEnchants#getEnchantStrings}/{@link ParseEnchants#encodeEnchantSlot}.
+     */
+    private static String enchantUniqueDataString(int[] slotEnchantCounts) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < slotEnchantCounts.length; i++) {
+            if (i > 0) sb.append(',');
+            sb.append(ParseEnchants.encodeEnchantSlot(slotEnchantCounts[i]));
+        }
+        return sb.toString();
+    }
+
     /**
      * A realistic player stat block. The DPS engine reads the full base+boost
      * stat set (Entity.calculateBaseStats) plus ATTACK/CONDITION/exalt for the
      * damage multiplier, so a real client always sends all of these - the fake
      * source must too or the engine can't compute a maxed player's damage.
+     *
+     * @param enchantCounts filled-enchant-slot count per equipped slot (0-4 each,
+     *                      weapon/ability/armor/ring) - see {@link #ROSTER_ENCHANTS}.
      */
-    private StatData[] playerStats(String name, int[] equipment) {
+    private StatData[] playerStats(String name, int[] equipment, int[] enchantCounts) {
         StatData nameStat = new StatData();
         nameStat.statTypeNum = StatType.NAME_STAT.get();
         nameStat.statType = StatType.NAME_STAT;
@@ -542,6 +590,7 @@ public class FakePacketSource {
             stat(StatType.INVENTORY_1_STAT, equipment[1]),
             stat(StatType.INVENTORY_2_STAT, equipment[2]),
             stat(StatType.INVENTORY_3_STAT, equipment[3]),
+            stringStat(StatType.UNIQUE_DATA_STRING, enchantUniqueDataString(enchantCounts)),
             stat(StatType.MAX_HP_STAT, 770), stat(StatType.HP_STAT, 770),
             stat(StatType.MAX_MP_STAT, 252), stat(StatType.MP_STAT, 252),
             stat(StatType.ATTACK_STAT, 75), stat(StatType.DEFENSE_STAT, 25),
@@ -562,8 +611,8 @@ public class FakePacketSource {
      * so the overlay's Character panel renders the player's skinned, dyed sprite +
      * loadout. Same shape a real client sends.
      */
-    private StatData[] localPlayerStats(String name, int[] equipment) {
-        StatData[] base = playerStats(name, equipment);
+    private StatData[] localPlayerStats(String name, int[] equipment, int[] enchantCounts) {
+        StatData[] base = playerStats(name, equipment, enchantCounts);
         StatData[] extra = {
             stat(StatType.SKIN_ID, LOCAL_SKIN_ID),
             // Clothing (Tex1) / accessory (Tex2) dyes, as dye objectTypes, so the

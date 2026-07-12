@@ -123,7 +123,11 @@ function DpsList({ snapshot, maxRows, showHeader, size }: DpsListProps): React.J
             return (
               <MeterRow key={row.objectId} fillPct={fillPct} highlight={isLocal} height={rowHeight}>
                 <CharacterSprite objectId={row.objectId} size={spriteSize} className="shrink-0" />
-                <GearRow equipment={entities.equipment(row.objectId)} slotSize={slotSize} />
+                <GearRow
+                  equipment={entities.equipment(row.objectId)}
+                  rarity={entities.equipmentRarity(row.objectId)}
+                  slotSize={slotSize}
+                />
                 <span className="min-w-0 flex-1 truncate text-fg-muted">
                   {isLocal && (
                     <span className="mr-1 font-mono text-2xs text-accent/80">#{rank}</span>

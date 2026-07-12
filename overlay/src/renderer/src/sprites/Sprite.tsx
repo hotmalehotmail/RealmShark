@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { AnimatedDyeCanvas } from './AnimatedDyeCanvas'
 import { useSprites } from './context'
+import { RARITY_RING_CLASS } from './enchantRarity'
 
 interface SpriteProps {
   /** The RotMG objectType to render. Null/undefined renders nothing. */
@@ -11,6 +12,12 @@ interface SpriteProps {
   clothingDye?: number | null
   /** Accessory dye objectType (Tex2) to composite onto a character sprite. */
   accessoryDye?: number | null
+  /**
+   * Enchant rarity-border tier (0=common/no border..4=divine) - see
+   * sprites/enchantRarity.ts. Renders as a coloured ring around the sprite so
+   * it never changes the sprite's own layout size.
+   */
+  rarity?: number | null
   className?: string
 }
 
@@ -18,6 +25,11 @@ interface SpriteProps {
 function placeholderColor(objectType: number): string {
   const hue = (objectType * 47) % 360
   return `hsl(${hue} 45% 40%)`
+}
+
+/** Ring utility classes for a rarity tier, or '' for tier 0/unset (no border). */
+function rarityRingClassName(rarity: number | null | undefined): string {
+  return rarity ? (RARITY_RING_CLASS[rarity] ?? '') : ''
 }
 
 /**
@@ -31,6 +43,7 @@ export function Sprite({
   size = 32,
   clothingDye,
   accessoryDye,
+  rarity,
   className
 }: SpriteProps): React.JSX.Element | null {
   const {
@@ -65,6 +78,8 @@ export function Sprite({
 
   const dyed =
     (clothingDye != null && clothingDye > 0) || (accessoryDye != null && accessoryDye > 0)
+  const rarityClass = rarityRingClassName(rarity)
+  const combinedClassName = [className, rarityClass].filter(Boolean).join(' ') || undefined
 
   if (dyed && smooth) {
     const bake = bakeAnimatedDye(objectType, size, clothingDye, accessoryDye)
@@ -75,7 +90,7 @@ export function Sprite({
           size={size}
           scrollSpeed={scrollSpeed}
           rotateSpeed={rotateSpeed}
-          className={className}
+          className={combinedClassName}
         />
       )
     }
@@ -90,7 +105,7 @@ export function Sprite({
         src={url}
         width={size}
         height={size}
-        className={className}
+        className={combinedClassName}
         style={{ imageRendering: 'pixelated' }}
         alt=""
       />
@@ -99,7 +114,7 @@ export function Sprite({
 
   return (
     <span
-      className={className}
+      className={combinedClassName}
       style={{
         width: size,
         height: size,
