@@ -123,6 +123,24 @@ export class LootTracker {
       // whatever was already sitting in the bag at login/instance-entry reads
       // as prev=-1 -> next=populated, an "empty -> populated" transition
       // indistinguishable from a real drop, and gets logged as one.
+      //
+      // This does NOT create a false negative for a genuine first pickup
+      // right after an instance change: resetPerInstance() (on MapInfoPacket)
+      // clears localPlayerId, but CreateSuccessPacket re-fires on every map
+      // load, not just once at initial connection (see FakePacketSource.loop,
+      // which re-emits it alongside every periodic MapInfoPacket - the same
+      // "authoritative but one-shot, AT MAP LOAD" packet overlay-renderer.md
+      // §4's EntityRegistry section describes, meaning one-shot per load, not
+      // per session). localPlayerId is therefore re-resolved before any real
+      // gameplay in the new instance, so ingestStats runs against the local
+      // player's own post-transition UpdatePacket - which, since the object
+      // is newly (re)created server-side, carries a full re-serialization of
+      // all 12 inventory slots (occupied ones AND empty ones, using the same
+      // <=0 sentinel this method already treats as "empty") - not just a
+      // delta for whichever slot happens to change first. That first
+      // UpdatePacket seeds every slot's baseline (via this same
+      // first-sighting check) before any subsequent NewTickPacket delta could
+      // report a real pickup.
       const seenBefore = this.slotValues.has(slot)
       const prev = this.slotValues.get(slot) ?? -1
       const next = s.statValue

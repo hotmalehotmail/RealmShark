@@ -43,14 +43,27 @@ public class EnchantNames {
      * pre-extraction, near-empty state (just the built-in {@code -1} entry)
      * the first time this runs, since extraction happens on a background
      * thread this class has no ordering guarantee against.
+     * <p>
+     * Runs on the bridge's periodic-broadcast scheduler thread, a different
+     * thread than the asset-loader thread that calls {@code reload()} - since
+     * {@link ParseEnchants#ENCHANTS} is a plain (non-thread-safe) HashMap that
+     * {@code reload()} clears and repopulates in place, reading its size and
+     * iterating it here must happen under the same {@code ParseEnchants.class}
+     * monitor {@code reload()} uses, or a concurrent reload could throw
+     * {@code ConcurrentModificationException} from the fail-fast iterator -
+     * which, uncaught in this method's caller (a bare
+     * {@code scheduleAtFixedRate} lambda), would silently cancel all future
+     * runs of this broadcast.
      */
     public synchronized String envelopeJson() {
-        int count = ParseEnchants.ENCHANTS.size();
-        if (cachedJson != null && count == cachedEnchantCount) return cachedJson;
-
         Map<String, String> names = new LinkedHashMap<>();
-        for (Map.Entry<Short, String> e : ParseEnchants.ENCHANTS.entrySet()) {
-            names.put(String.valueOf(e.getKey()), e.getValue());
+        int count;
+        synchronized (ParseEnchants.class) {
+            count = ParseEnchants.ENCHANTS.size();
+            if (cachedJson != null && count == cachedEnchantCount) return cachedJson;
+            for (Map.Entry<Short, String> e : ParseEnchants.ENCHANTS.entrySet()) {
+                names.put(String.valueOf(e.getKey()), e.getValue());
+            }
         }
 
         Envelope env = new Envelope();

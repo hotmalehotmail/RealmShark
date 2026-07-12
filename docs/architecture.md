@@ -394,17 +394,23 @@ equipped item (issue #109):
 }
 ```
 
-Reflects `bridge.dps.ParseEnchants.ENCHANTS` (loaded once from
+Reflects `bridge.dps.ParseEnchants.ENCHANTS` (loaded from
 `assets/xml/enchantments.xml` - see [dps-engine.md](dps-engine.md)), built by
 `EnchantNames.envelopeJson()` (`bridge/EnchantNames.java`). Unlike every other
-synthetic envelope here, there's no async readiness gate: `ParseEnchants`'s
+synthetic envelope here, there's no explicit `ready()` check gating it - but
+that does **not** mean the map is final by construction. `ParseEnchants`'s
 static initializer reads its XML file synchronously the first time the class
-is referenced, so the map (real names, or just its built-in `"-1":"[empty]"`
-entry when the XML is missing - e.g. `--fake` mode) is already final for the
-process's lifetime by the time `PacketBridge` constructs this class. Still
-re-sent on the same 2 s poll as `itemInfo`/`lootBagTypes` (no separate
-request/response), just without a `ready()` check gating it. Consumed by
-`ItemInfoProvider`, same as `itemInfo`.
+is referenced, which on a real (non-`--fake`) machine can be this envelope's
+own first broadcast (2s after bridge startup), well before `ObjectNames`'s
+background extraction thread has finished writing that file - the same race
+`CharacterClass.reload()` already guards against for `players.xml`. `bridge.dps.ParseEnchants#reload`
+(called from `ObjectNames.init` once extraction completes) re-reads the file,
+and `EnchantNames.envelopeJson()` tracks `ENCHANTS.size()` (like `itemInfo`/
+`lootBagTypes` track `loadedObjectCount()`) to rebuild its cached envelope
+when a reload changes it, both under `ParseEnchants.class`'s lock so a reload
+can't race the envelope build's read of the map. Still re-sent on the same
+2 s poll as `itemInfo`/`lootBagTypes` (no separate request/response). Consumed
+by `ItemInfoProvider`, same as `itemInfo`.
 
 The *item's* enchant data itself is not a separate envelope - `UNIQUE_DATA_STRING`
 (StatType 80) already crosses the wire as an ordinary stat on every player's

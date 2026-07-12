@@ -209,8 +209,10 @@ public class ParseEnchants {
     /**
      * Parse an encoded enchantment string into a human-readable multi-line list of
      * "DisplayName(id)" entries. Keeps legacy locked/empty handling.
+     * {@code synchronized} - see {@link #reload}: {@link #ENCHANTS} is a plain
+     * HashMap {@code reload()} can mutate concurrently from another thread.
      */
-    public static String parse(String code) {
+    public static synchronized String parse(String code) {
         if (code == null || code.isEmpty()) return "";
         byte[] rawBytes = PcStatsDecoder.sixBitStringToBytes(code);
 
@@ -490,8 +492,10 @@ public class ParseEnchants {
     /**
      * Compute life (HP) regeneration bonuses from a single encoded enchant string.
      * Uses parsed ActivateOnEquip(mutators) for FlatRegen/PercentageRegen on HP.
+     * {@code synchronized} - see {@link #reload}: {@link #ENCHANT_REGEN} is a
+     * plain HashMap {@code reload()} can mutate concurrently from another thread.
      */
-    public static RegenTotals computeLifeRegenBonuses(String code) {
+    public static synchronized RegenTotals computeLifeRegenBonuses(String code) {
         RegenTotals totals = new RegenTotals();
         if (code == null || code.isEmpty()) return totals;
 
@@ -573,8 +577,11 @@ public class ParseEnchants {
      * - Damage Bonus I-IV (MultiplyMinDamage/MultiplyMaxDamage)
      * - FireRate Bonus I-IV (MultiplyRateOfFire)
      * - Tradeoffs (combinations of the above)
+     * {@code synchronized} - see {@link #reload}: {@link #ENCHANT_EFFECTS} is a
+     * plain HashMap {@code reload()} can mutate concurrently from another
+     * thread, and this method is on the hot per-hit DPS-computation path.
      */
-    public static Totals computeWeaponMultipliers(String code) {
+    public static synchronized Totals computeWeaponMultipliers(String code) {
         Totals totals = new Totals();
         if (code == null || code.isEmpty()) return totals;
 
@@ -634,8 +641,11 @@ public class ParseEnchants {
      * Any <ActivateOnEquip amount="X">LootBonus</ActivateOnEquip> encountered for an enchant is
      * aggregated during XML load and stored in ENCHANT_LOOT_BONUS; this method just decodes the
      * enchant IDs and sums those mapped values.
+     * {@code synchronized} - see {@link #reload}: {@link #ENCHANT_LOOT_BONUS}
+     * is a plain HashMap {@code reload()} can mutate concurrently from another
+     * thread.
      */
-    public static float computeLootBonus(String code) {
+    public static synchronized float computeLootBonus(String code) {
         if (code == null || code.isEmpty()) return 0f;
 
         byte[] rawBytes = PcStatsDecoder.sixBitStringToBytes(code);
