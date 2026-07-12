@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
 #
-# SMOKE TEST — hook-alive probe for the SessionEnd merge-race interlock.
+# SMOKE TEST v2 — hook-alive probe for the SessionEnd merge-race interlock.
 # TEMPORARY: delete this file + the hooks block in .claude/settings.json once the
-# real session-complete marker gate is built (or if the probe shows hooks don't
-# fire in the cloud Routine). See the conflict-watch/merge-race investigation.
+# real session-complete marker gate is built.
 #
-# Goal: in ONE remote run, confirm all of:
-#   1. a committed .claude/settings.json hook fires in the cloud/web environment,
-#   2. SessionEnd (and/or Stop) actually fires there, and
-#   3. the session has gh credentials to post to the PR.
-# It posts a visible "hook-alive" comment on the current branch's open PR.
+# WHY THIS SHAPE: in the cloud/web env, `gh` is NOT installed and GitHub access is
+# meant to go through a scoped MCP server (agent-only) or plain `git` (which here
+# routes through a local authenticated proxy, so `git push` works with no token in
+# the process). A hook is a *subprocess* — it cannot call MCP tools — so its only
+# sanctioned GitHub channel is `git push`. This probe therefore reports by pushing
+# a marker ref/tag, and also drops a creds-free local breadcrumb so "did the hook
+# fire?" is observable even with zero network.
 #
-# BLAST RADIUS — this is a NO-OP everywhere except a remote pipeline/smoke run:
-#   Guard 1 (CLAUDE_CODE_REMOTE): unset in the local CLI, so your terminal
-#           sessions exit immediately and do nothing.
-#   Guard 2 (branch): only claude/* (the pipeline) or a *smoke-hook* branch, so
-#           even a personal *web* session on your own branch no-ops.
-# The real marker hook will drop the *smoke-hook* clause and keep only claude/*.
+# One fresh remote run confirms, all at once:
+#   1. a committed .claude/settings.json hook fires here,
+#   2. which event(s) fire (Stop per-turn / SessionEnd at close),
+#   3. whether a custom ref and/or a tag is pushable (the escape channel choice).
 #
-# Deliberately does NOT `set -e` and always exits 0: Stop is a *blockable* event
-# (exit 2 would stop Claude from ending its turn), so this must never fail loudly.
+# BLAST RADIUS — NO-OP everywhere except a remote pipeline/smoke run:
+#   Guard 1 (CLAUDE_CODE_REMOTE): unset in the local CLI -> your terminal no-ops.
+#   Guard 2 (branch): only claude/* or a *smoke-hook* branch.
+# Deliberately no `set -e`; always exits 0 (Stop is blockable — never fail loudly).
 
 payload="$(cat 2>/dev/null || true)"   # hook JSON arrives on stdin
-
 jqget() { command -v jq >/dev/null 2>&1 && printf '%s' "$payload" | jq -r "$1" 2>/dev/null; }
 
 event="$(jqget '.hook_event_name // empty')";  [ -z "$event" ]   && event="unknown"
@@ -40,20 +40,27 @@ case "$branch" in
   *) exit 0 ;;
 esac
 
-# --- Stop fires once per assistant turn; post at most once per session so a
-#     multi-turn run doesn't spam. SessionEnd fires once at termination. ---
+# --- Breadcrumb (creds-free): proves the hook fired even if every push fails. ---
+ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo now)"
+root="$(git rev-parse --show-toplevel 2>/dev/null || echo .)"
+line="$(printf '%s event=%s branch=%s session=%s remote=%s' "$ts" "$event" "$branch" "$session" "${CLAUDE_CODE_REMOTE:-}")"
+printf '%s\n' "$line" >> "$root/.hook-alive.log"            2>/dev/null
+printf '%s\n' "$line" >> "${TMPDIR:-/tmp}/hook-alive.log"   2>/dev/null
+
+# --- Stop fires once per assistant turn; mark at most once per session. ---
 if [ "$event" = "Stop" ]; then
   sentinel="${TMPDIR:-/tmp}/hook-alive-${session}.stop"
   [ -e "$sentinel" ] && exit 0
   : > "$sentinel" 2>/dev/null
 fi
 
+# --- Report via git (the sanctioned channel). Push BOTH a custom ref and a tag;
+#     whichever lands on the remote tells us the escape channel for the real gate. ---
 sha="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
-pr="$(gh pr list --head "$branch" --state open --json number -q '.[0].number' 2>/dev/null || true)"
-[ -z "$pr" ] && exit 0   # no open PR to signal on; nothing to do
+short="${sha:0:8}"
+git push origin "HEAD:refs/session-probe/${event}-${short}" >/dev/null 2>&1 || true
+if git tag -f "session-probe-${event}-${short}" >/dev/null 2>&1; then
+  git push -f origin "refs/tags/session-probe-${event}-${short}" >/dev/null 2>&1 || true
+fi
 
-body="$(printf '✅ **hook-alive smoke test** — a committed \x60.claude/settings.json\x60 hook fired in this environment.\n\n- event: \x60%s\x60\n- head sha: \x60%s\x60\n- session: \x60%s\x60\n- CLAUDE_CODE_REMOTE: \x60%s\x60\n\n<!-- hook-alive event=%s sha=%s -->' \
-  "$event" "$sha" "$session" "${CLAUDE_CODE_REMOTE:-}" "$event" "$sha")"
-
-gh pr comment "$pr" --body "$body" >/dev/null 2>&1 || true
 exit 0
