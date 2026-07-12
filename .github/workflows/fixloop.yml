@@ -153,7 +153,7 @@ jobs:
             SUMMARY_Q="$(printf '%s\n' "${SUMMARY:-(no summary posted)}" | sed 's/^/> /')"
             MENTION=""; ASSIGN=0
             if [ -n "${MAINTAINER:-}" ]; then MENTION="@$MAINTAINER "; ASSIGN=1; fi
-            gh pr comment "$PR" --repo "$REPO" --body "$(printf '%s🛑 **Automated fix budget exhausted.** %s automated attempts did not clear review, so this PR is now yours (labeled `agent:needs-human`; auto-merge disabled).\n\nLatest reviewer summary:\n\n%s\n\n**To unblock:** push your own fixes to `%s` (CI + review re-run automatically), or admin-merge if you accept it as-is. An `agent:retry` resume path that re-runs the agent with a fresh budget is a separate follow-up (resume.yml).' \
+            gh pr comment "$PR" --repo "$REPO" --body "$(printf '%s🛑 **Automated fix budget exhausted.** %s automated attempts did not clear review, so this PR is now yours (labeled `agent:needs-human`; auto-merge disabled).\n\nLatest reviewer summary:\n\n%s\n\n**To unblock, any of:**\n- **Push your own fixes** to `%s` — CI + review re-run automatically, and once the review passes the gatekeeper clears `agent:needs-human` and merges it for you (no need to remove the label by hand).\n- **Apply `agent:retry`** to reset the automated budget and hand it back to the build agent (leave a steering comment first if you want).\n- **Admin-merge** if you accept it as-is.' \
               "$MENTION" "$MAX_FIX_ROUNDS" "$SUMMARY_Q" "$HEAD")"
             [ "$ASSIGN" -eq 1 ] && gh pr edit "$PR" --repo "$REPO" --add-assignee "$MAINTAINER" >/dev/null 2>&1 || true
             echo "Escalated PR #$PR."
