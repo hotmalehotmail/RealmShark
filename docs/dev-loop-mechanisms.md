@@ -141,7 +141,12 @@ scribe split**, audit H2/H3):
    judge's findings + the stage facts (any `high`/`critical` finding, an agent PR
    touching `.github/`, an agent PR with no issue link, or unmet acceptance criteria
    ⇒ fail), posts the review (`POST /pulls/{n}/reviews`, with a single-comment 422
-   fallback), and posts the `review-verdict` status.
+   fallback), and posts the `review-verdict` status. **Soak-fix PRs are exempt from the
+   issue-link requirement** (detected by the `soak-fix` label or an "Addresses soak #N"
+   body reference, the same signals the §9.5 gatekeeper freeze-exemption uses): they
+   close no discrete issue — the soak issue is loop-managed (superseded on re-cut, closed
+   on promotion) — so requiring a `Closes #N` would wrongly auto-fail every soak-fix. The
+   `.github/` tripwire still applies to them.
 
 **Enforces.** Two layers. (1) `claude-code-action`'s **workflow-validation guard**: the
 judge runs only if the executing `review.yml` is **byte-identical to the copy on the
