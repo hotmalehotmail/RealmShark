@@ -127,5 +127,13 @@ Never touch `bridge` directly, never publish a release, never edit
   we scope the review agent to pipeline PRs.
 - **Watchability:** the `/fire` response includes a session URL; `implement.yml`
   posts it on the issue so you can watch or steer the run.
+- **Session interlock (`SessionEnd` hook).** The gatekeeper won't auto-merge a PR until the
+  authoring session has *ended*, proven by a `session-done/<head-sha>` marker branch the
+  committed `.claude/hooks/session-done-marker.sh` hook pushes on `SessionEnd` (see
+  `docs/dev-loop-mechanisms.md §7.2`). It closes the PR #115 race where a still-running fix
+  agent's late push was stranded after auto-merge. **The hook registers at session start, so it
+  only takes effect once `.claude/settings.json` is present on the branch the Routine checks out
+  first** (the repo default) — i.e. it goes live for the Routine once the interlock change
+  reaches `bridge`, not merely `staging`.
 - **Limits:** during the research preview, routine runs draw down your subscription
   and have a daily run cap; GitHub/API triggers have hourly caps.

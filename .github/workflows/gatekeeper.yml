@@ -14,15 +14,31 @@ name: gatekeeper
 # structurally cannot drive conflict recovery — conflict-watch.yml owns the rebase
 # FIX-MODE re-fire (§6.5), on the events a conflict actually produces, with its own
 # MAX_REBASE_ROUNDS budget separate from the fix loop's review rounds.
+# INTERLOCK (docs/dev-loop-mechanisms.md §session-interlock): the gatekeeper also refuses
+# to arm until the authoring agent session has TERMINATED, proven by a `session-done/<head-sha>`
+# marker branch a SessionEnd hook pushes (.claude/hooks/session-done-marker.sh). This closes
+# the PR #115 race where auto-merge fired while the fix agent was still running and later
+# pushed a correction to the merged branch. Two extra triggers below serve it: `push` to
+# session-done/** wakes arming the moment a session ends (even after review already passed —
+# the exact #115 timing), and `pull_request: synchronize` DISARMS when the head moves to a
+# not-yet-marked commit, so native auto-merge (which, once armed, merges any future green
+# head) can never merge a head whose authoring session is still running.
 on:
   workflow_run:
     workflows: [ci, review]
     types: [completed]
+  push:
+    branches: ['session-done/**'] # a SessionEnd marker landing -> (re)evaluate arming
+  pull_request:
+    types: [synchronize] # head moved -> disarm until the new head has a marker
 
 # Serialize with the fix loop / resume on the same head branch: all three re-fire the
 # agent and read the same marker count, so they must not run concurrently on one PR.
+# Fallback across the three triggers: workflow_run -> reviewed branch; pull_request -> PR
+# head ref; push(marker) -> the marker ref name (arming is idempotent, so its exact
+# grouping doesn't matter, and it never re-fires an agent).
 concurrency:
-  group: fixloop-${{ github.event.workflow_run.head_branch }}
+  group: fixloop-${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: false
 
 permissions:
@@ -34,22 +50,73 @@ permissions:
 jobs:
   gate:
     runs-on: ubuntu-latest
-    # Only PR-triggered ci/review runs, and only same-repo agent branches.
+    # Only same-repo agent branches, across the three triggers. Fork PRs are excluded
+    # (same-repo checks); a fork's pull_request run gets a read-only token anyway.
     if: >
-      github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.head_repository.full_name == github.repository &&
-      startsWith(github.event.workflow_run.head_branch, 'claude/')
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'pull_request' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       startsWith(github.event.workflow_run.head_branch, 'claude/')) ||
+      (github.event_name == 'push' &&
+       startsWith(github.ref, 'refs/heads/session-done/')) ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       startsWith(github.event.pull_request.head.ref, 'claude/'))
     steps:
       - name: Arm auto-merge, or drive the rebase FIX MODE on a conflict
         env:
           GH_TOKEN: ${{ github.token }}
           MERGE_PAT: ${{ secrets.MERGE_PAT }}
           REPO: ${{ github.repository }}
-          HEAD: ${{ github.event.workflow_run.head_branch }}
-          SHA: ${{ github.event.workflow_run.head_sha }}
           MAINTAINER: ${{ vars.MAINTAINER_HANDLE }}
+          # Raw per-trigger fields; the script resolves HEAD/SHA from whichever fired.
+          EVT: ${{ github.event_name }}
+          WR_HEAD: ${{ github.event.workflow_run.head_branch }}
+          WR_SHA: ${{ github.event.workflow_run.head_sha }}
+          PUSH_REF: ${{ github.ref }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+
+          # ---- Resolve which PR/head this run concerns, across the three triggers. ----
+          case "$EVT" in
+            workflow_run) HEAD="$WR_HEAD"; SHA="$WR_SHA" ;;
+            pull_request) HEAD="$PR_HEAD_REF"; SHA="$PR_HEAD_SHA" ;;
+            push)
+              # refs/heads/session-done/<sha> -> the sha; act only if it is some open PR's
+              # CURRENT head (a stale marker for a since-superseded head matches nothing).
+              SHA="${PUSH_REF#refs/heads/session-done/}"
+              HEAD="$(gh pr list --repo "$REPO" --base staging --state open \
+                        --json headRefName,headRefOid \
+                        -q ".[] | select(.headRefOid==\"$SHA\") | .headRefName" 2>/dev/null | head -n1 || true)"
+              if [ -z "$HEAD" ]; then
+                echo "session-done marker $SHA is not any open claude/* -> staging PR's current head; nothing to arm (orphan marker; sweep GCs it)."
+                exit 0
+              fi ;;
+          esac
+
+          # ---- pull_request synchronize: the head just moved. Preserve the interlock
+          #      invariant "auto-merge is armed only while the current head has a marker":
+          #      if the PR is armed and the new head has no session-done marker yet (its
+          #      authoring session hasn't ended), DISARM. Re-arming happens when the marker
+          #      lands (push trigger) or ci/review completes (workflow_run). This closes the
+          #      window native auto-merge's persistent arming would otherwise leave open. ----
+          if [ "$EVT" = "pull_request" ]; then
+            SNUM="$(gh pr list --repo "$REPO" --head "$HEAD" --base staging --state open --json number -q '.[0].number' 2>/dev/null || true)"
+            if [ -z "$SNUM" ] || [ "$SNUM" = "null" ]; then
+              echo "No open claude/* -> staging PR for $HEAD; nothing to do."
+              exit 0
+            fi
+            ARMED="$(gh pr view "$SNUM" --repo "$REPO" --json autoMergeRequest -q '.autoMergeRequest // "null"' 2>/dev/null || echo null)"
+            if [ "$ARMED" != "null" ] && ! gh api "repos/$REPO/git/ref/heads/session-done/$SHA" >/dev/null 2>&1; then
+              echo "PR #$SNUM head moved to $SHA with no session-done marker — disabling auto-merge until the session ends."
+              gh pr merge "$SNUM" --repo "$REPO" --disable-auto >/dev/null 2>&1 || true
+            else
+              echo "PR #$SNUM synchronize: no disarm needed (armed=$ARMED)."
+            fi
+            exit 0
+          fi
 
           # The open agent PR for this head branch, targeting staging, plus its mergeability.
           PR="$(gh pr list --repo "$REPO" --head "$HEAD" --base staging --state open \
@@ -134,6 +201,20 @@ jobs:
               echo "PR #$NUM already has auto-merge armed; nothing to do."
               exit 0
             fi
+            # ---- Interlock gate (docs §session-interlock, PR #115). Do NOT arm until the
+            #      authoring session has TERMINATED, evidenced by a session-done marker for
+            #      the PR's CURRENT head. Native auto-merge, once armed, merges any future
+            #      green head, so arming a head whose session is still running is exactly the
+            #      race we close. No marker -> hold; the marker's own push re-triggers arming,
+            #      and a since-moved head is disarmed by the synchronize path above. (For the
+            #      push trigger the marker existence is already implied — we matched it to the
+            #      head — but re-checking the CURRENT head is correct and cheap.) ----
+            PR_HEAD_OID="$(gh pr view "$NUM" --repo "$REPO" --json headRefOid -q '.headRefOid' 2>/dev/null || true)"
+            if [ -z "$PR_HEAD_OID" ] || ! gh api "repos/$REPO/git/ref/heads/session-done/$PR_HEAD_OID" >/dev/null 2>&1; then
+              echo "PR #$NUM: no session-done marker for current head ${PR_HEAD_OID:-unknown} — authoring session not finished; holding (the marker push will re-trigger arming)."
+              exit 0
+            fi
+            echo "PR #$NUM: session-done marker present for head $PR_HEAD_OID — session finished; proceeding to arm."
             # --- MERGE_PAT preflight (LOUD). Arm with the PAT (a member identity) so the eventual
             #     merge fires pull_request:closed -> post-merge recut-alpha. A GITHUB_TOKEN merge is
             #     swallowed by the recursion guard, so a silent fallback to it would re-break the
