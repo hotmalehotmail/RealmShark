@@ -77,6 +77,36 @@ jobs:
             echo "Soak in progress, but PR #$PR_NUM is docs/CI-only — installer is unchanged, not re-cutting."
           fi
 
+  label-completed:
+    # A feature/fix PR merging into staging finishes an agent's work: flip the issue(s)
+    # it closes from agent:in-progress -> agent:completed. The issue itself does NOT
+    # auto-close here — GitHub's `Closes #N` only fires on the DEFAULT branch (bridge) —
+    # so this label is the "agent finished, now soaking" signal during that window.
+    if: >
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'staging'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Flag closed issues agent:completed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # Only transition issues that were actually agent-dispatched (carry
+          # agent:in-progress) — don't stamp agent:completed on a human-closed issue.
+          ISSUES="$(gh pr view "$PR_NUM" --repo "$REPO" --json closingIssuesReferences \
+            -q '.closingIssuesReferences[].number' 2>/dev/null || true)"
+          for N in $ISSUES; do
+            HAS="$(gh issue view "$N" --repo "$REPO" --json labels -q '.labels[].name' 2>/dev/null \
+              | grep -Fx 'agent:in-progress' || true)"
+            [ -z "$HAS" ] && { echo "#$N not agent:in-progress — skipping."; continue; }
+            gh issue edit "$N" --repo "$REPO" --add-label "agent:completed" >/dev/null 2>&1 || true
+            gh issue edit "$N" --repo "$REPO" --remove-label "agent:in-progress" >/dev/null 2>&1 || true
+            echo "#$N: agent:in-progress -> agent:completed."
+          done
+
   cut-latest:
     # The staging -> bridge promotion landing cuts the LATEST release.
     if: >

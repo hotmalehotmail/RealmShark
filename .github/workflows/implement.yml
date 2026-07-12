@@ -61,6 +61,9 @@ jobs:
           URL="$(printf '%s' "$RESP" | jq -r '.claude_code_session_url // empty' 2>/dev/null || true)"
           if [ -n "$URL" ]; then
             gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "🤖 Build agent started for this issue — [watch the session]($URL)."
+            # Mark the issue actively worked so the issue list reflects agent state. Only
+            # on a successful fire (this branch) — a failed dispatch must not read "working".
+            gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "agent:in-progress" >/dev/null 2>&1 || true
           else
             # Build the comment with printf so no YAML indentation leaks into the
             # rendered markdown (which would break the code fence).

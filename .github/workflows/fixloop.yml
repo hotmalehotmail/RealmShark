@@ -119,6 +119,13 @@ jobs:
             fi
             echo "Automated budget spent ($PRIOR_REFIRES re-fires >= $MAX_FIX_ROUNDS) — escalating."
             ensure_label "agent:needs-human" "B60205" "Agent loop stalled — needs a maintainer"
+            # Mirror the stall onto the issue(s) this PR closes: the agent has stopped, so
+            # the issue should no longer read agent:in-progress — flip it to agent:needs-human
+            # (just ensured above) so the issue list reflects that a human is now on it.
+            for ISS in $(gh pr view "$PR" --repo "$REPO" --json closingIssuesReferences -q '.closingIssuesReferences[].number' 2>/dev/null || true); do
+              gh issue edit "$ISS" --repo "$REPO" --add-label "agent:needs-human" >/dev/null 2>&1 || true
+              gh issue edit "$ISS" --repo "$REPO" --remove-label "agent:in-progress" >/dev/null 2>&1 || true
+            done
             # Clear any loop:* visibility labels from prior rounds (reuse the labels above).
             LOOP_LABELS="$(printf '%s\n' "$LABELS" | grep '^loop:' || true)"
             for L in $LOOP_LABELS; do gh pr edit "$PR" --repo "$REPO" --remove-label "$L" >/dev/null 2>&1 || true; done

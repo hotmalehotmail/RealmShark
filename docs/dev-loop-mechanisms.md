@@ -64,6 +64,21 @@ env vars, never interpolated into the shell.
 trailing newline in either silently 400s the `/fire` call with a misleading
 "could not parse request body as JSON". Set them with `printf %s`, never `echo`.
 
+**Issue label lifecycle.** The workflows keep two status labels on the issue in sync
+with agent progress (the trigger labels `agent:build`/`agent:fix` stay put):
+
+- `agent:in-progress` — added by `implement.yml` once the routine fires successfully
+  (only in the success branch — a failed dispatch must not read "working").
+- `agent:completed` — added (and `agent:in-progress` removed) by `post-merge.yml`'s
+  `label-completed` job when a PR that closes the issue merges into `staging`. This is
+  needed because GitHub's `Closes #N` auto-close only fires on the **default** branch
+  (`bridge`), so a `staging` merge leaves the issue open — the label is the "agent
+  finished, now soaking" signal for that window. Only issues that carry
+  `agent:in-progress` are transitioned, so a human-closed issue isn't stamped.
+- `agent:needs-human` — on escalation (`fixloop.yml`, fix budget spent) the same
+  label the PR gets is mirrored onto the issue, and `agent:in-progress` removed, so a
+  stalled issue stops reading as "agent working".
+
 ---
 
 ## 2 · Routine fire → cloud session
