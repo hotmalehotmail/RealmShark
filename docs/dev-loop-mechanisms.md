@@ -593,6 +593,55 @@ non-firing hook degrades to "merges ~45 min late," not "never merges."
 gate + `push`/`synchronize` triggers + synchronize-disarm; ✅ sweep marker gate + crash backstop
 + marker GC. ⏳ live validation of (a)/(b) above on a Routine run.
 
+### 7.3 · Triage gate — a passing review's medium/low findings get a decision
+
+**Why.** `review-verdict` is a *deterministic* function of the findings: it fails only on a
+**high/critical** finding (plus the `.github` tripwire and the missing-issue-link check).
+**Medium/low findings always produce `success`** — they're posted as inline `COMMENT` findings
+but, before this, nothing ever acted on them: the fix loop fired only on `failure`, so a PR
+merged with them silently unaddressed. The triage gate makes the agent **decide** each one
+first. (`review.yml` is untouched — the workflow-parity guard requires it byte-identical to the
+default branch — so triage reads its *existing* outputs.)
+
+**Detecting "passed with findings."** The reviewer posts each line-anchored finding as an inline
+review comment (`/pulls/{n}/comments`) at the reviewed head sha. Both the fix loop and the
+gatekeeper count `github-actions[bot]` inline comments whose `commit_id` == the current head.
+(Known gap: a *file-level* finding with no line anchor lives only in the review body, so it isn't
+counted and won't get a triage pass — rare, and never blocking since it's medium/low.)
+
+**The loop (`fixloop.yml`).** On `review-verdict = success` with unaddressed findings on the head
+and no `session-triaged` marker for it yet, the fix loop re-fires the agent in **TRIAGE MODE**
+(routine prompt): fix the worthwhile findings (→ push → normal re-review) or reply-to-**decline**
+the rest — **the agent's call is final** (the chosen Q2 policy). A **separate budget**
+(`MAX_TRIAGE_ROUNDS`, marker `<!-- fixloop:triage -->`) from the fix rounds, so nit-churn can't
+starve real fixes. **Budget spent → auto-accept** (the loop posts the `session-triaged` marker
+itself): medium/low are non-blocking, so they must never freeze a PR — the opposite of the fix
+loop's escalate-on-exhaustion.
+
+**The gate + signal.** Triage-complete is a **comment** marker `<!-- session-triaged: <head-sha> -->`
+— posted by the agent when it declines-only (it can post via MCP; a decline changes no code so
+the head is unchanged), or by the loop on auto-accept. Comment, not branch (unlike §7.2's hook
+marker), because the *agent/loop* posts it and both can comment; only the subprocess hook was
+constrained to a branch push. The gatekeeper gains an `issue_comment` trigger (filtered to that
+marker) so the comment itself wakes arming, and its arm path now also requires: the current head's
+review is complete (`review-verdict = success` on that exact sha, so the finding count is stable),
+and if that head has findings, a matching `session-triaged` marker exists — else it holds. No
+sweep dependence for the happy path: the marker comment is the edge trigger. But `sweep.yml`
+(the second, level-triggered merge path) **also** enforces the triage gate in its `CLEAN`
+branch — it must be exactly as restrictive as the gatekeeper, or it would merge a held PR on
+its next cycle — with an analogous idle-past-`CRASH_MIN` backstop, which doubles as the recovery
+for a triage agent that died before posting the marker (the fix loop's auto-accept can't fire
+then, since a decline-only crash produces no new review event).
+
+**Status.** 🟡 Built (this change), not yet live-validated — shares §7.2's dependency on a real
+Routine run (TRIAGE MODE is a new routine-prompt mode; the prompt lives in the routine config, so
+`docs/build-agent-routine.md` must be re-pasted there — see its ⚠️ note).
+
+**What must be built for §7.3.** ✅ fixloop TRIAGE branch (detect findings, separate budget,
+auto-accept); ✅ gatekeeper triage gate + `issue_comment` trigger; ✅ **sweep triage gate + crash
+backstop** (mirror, so the second merge path can't bypass the hold); ✅ routine-prompt TRIAGE MODE.
+⏳ re-paste the routine prompt; ⏳ live validation on a Routine run.
+
 ---
 
 ## 8 · Release — the human ship button

@@ -5,6 +5,11 @@ name: fixloop
 # SAME branch — bounded to MAX_FIX_ROUNDS automated attempts, after which it stops
 # and escalates the PR to a human instead of looping forever.
 #
+# It ALSO handles a PASSING review that left medium/low findings (which never fail the
+# verdict): it re-fires a bounded TRIAGE pass (§7.3) so the agent fixes the worthwhile ones
+# or replies-to-decline the rest before the gatekeeper merges. Separate budget; budget spent
+# auto-accepts (nits never block a merge) rather than escalating.
+#
 # Trigger: the COMPLETION of the `review` workflow (workflow_run). Why not
 # `pull_request_review`? The reviewer posts its verdict with the built-in
 # GITHUB_TOKEN, and GitHub's recursion guard suppresses workflow triggers for
@@ -82,11 +87,74 @@ jobs:
             exit 0
           fi
 
-          # 2. Read the review-verdict status on the reviewed SHA. Act ONLY on failure.
+          # 2. Read the review-verdict on the reviewed SHA and pick a MODE:
+          #    failure -> FIX MODE (below, §6). success WITH unaddressed medium/low findings ->
+          #    TRIAGE MODE (§7.3): a pass never fails on medium/low, so they were historically
+          #    never acted on. Anything else (clean pass, already-triaged, absent/pending) -> no-op.
           VERDICT="$(gh api "repos/$REPO/commits/$SHA/status" \
                        -q '.statuses[] | select(.context=="review-verdict") | .state' 2>/dev/null | head -n1 || true)"
-          if [ "$VERDICT" != "failure" ]; then
-            echo "review-verdict on $SHA is '${VERDICT:-absent}' (not failure) — nothing to do."
+          MODE=""
+          if [ "$VERDICT" = "failure" ]; then
+            MODE=fix
+          elif [ "$VERDICT" = "success" ]; then
+            # The reviewer's inline comments on THIS head = its unaddressed findings (count with
+            # the `... | .id | wc -l` idiom, not `-q length`, which miscounts under --paginate).
+            FINDINGS="$(gh api --paginate "repos/$REPO/pulls/$PR/comments" \
+                          -q ".[] | select(.user.login==\"github-actions[bot]\" and .commit_id==\"$SHA\") | .id" 2>/dev/null | wc -l | tr -d ' ')"
+            if [ "${FINDINGS:-0}" -eq 0 ]; then
+              echo "review-verdict success on $SHA with no inline findings — clean pass; the gatekeeper owns it."
+              exit 0
+            fi
+            if gh api --paginate "repos/$REPO/issues/$PR/comments" \
+                 -q ".[] | select(.body | contains(\"<!-- session-triaged: $SHA -->\")) | .id" 2>/dev/null | grep -q .; then
+              echo "review-verdict success on $SHA; its $FINDINGS finding(s) already triaged — nothing to do."
+              exit 0
+            fi
+            MODE=triage
+          else
+            echo "review-verdict on $SHA is '${VERDICT:-absent}' (not failure/success) — nothing to do."
+            exit 0
+          fi
+
+          # ---- TRIAGE PASS (§7.3): a passing review left unaddressed medium/low findings.
+          #      Re-fire the agent to FIX the worthwhile ones or reply-to-DECLINE the rest (its
+          #      call is final — Q2). Separate budget from the fix rounds so nit-churn can't
+          #      starve real fixes. Budget spent -> AUTO-ACCEPT (post the session-triaged marker)
+          #      rather than escalate: medium/low are non-blocking, so they must never freeze a PR. ----
+          if [ "$MODE" = "triage" ]; then
+            MAX_TRIAGE_ROUNDS=2
+            PRIOR_TRIAGE="$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+                             -q '.[] | select(.user.login=="github-actions[bot]" and (.body|contains("<!-- fixloop:triage -->"))) | .id' \
+                             2>/dev/null | wc -l | tr -d ' ')"
+            TATTEMPT=$((PRIOR_TRIAGE + 1))
+            if [ "$PRIOR_TRIAGE" -ge "$MAX_TRIAGE_ROUNDS" ]; then
+              echo "Triage budget spent ($PRIOR_TRIAGE >= $MAX_TRIAGE_ROUNDS) — auto-accepting the remaining findings so the PR can merge."
+              gh pr comment "$PR" --repo "$REPO" --body "🧿 Triage budget spent after ${MAX_TRIAGE_ROUNDS} pass(es); the remaining medium/low review findings are accepted as-is so the PR isn't blocked on non-blocking nits. <!-- session-triaged: $SHA -->"
+              exit 0
+            fi
+            if [ -z "${FIRE_URL:-}" ] || [ -z "${FIRE_TOKEN:-}" ]; then
+              echo "::warning::ROUTINE_FIRE_URL / ROUTINE_FIRE_TOKEN unset — cannot fire a triage pass."
+              exit 0
+            fi
+            INLINE="$(gh api --paginate "repos/$REPO/pulls/$PR/comments" \
+                        -q ".[] | select(.commit_id==\"$SHA\") | \"- \(.path):\(.line // .original_line // \"?\"): \(.body)\"" 2>/dev/null || true)"
+            # Untrusted review text goes to jq via --arg (never interpolated into the shell).
+            TTEXT="$(printf 'TRIAGE MODE. Repository %s. PR #%s, head branch `%s`, base `staging`.\nThe review PASSED (no blocking issues) but left the medium/low findings below. Check out `%s`, read the full PR conversation, and for EACH finding decide: FIX it if worthwhile (edit + commit), or DECLINE it by replying to that review comment with a brief reason (your call is final). When done: if you made NO code changes, post a PR comment whose body ends with the EXACT marker `<!-- session-triaged: %s -->` — that is what lets the merge proceed. If you DID push fixes, do NOT post that marker; the re-review re-evaluates the new head. Never open a new PR.\n\nFindings:\n%s\n' \
+              "$REPO" "$PR" "$HEAD" "$HEAD" "$SHA" "${INLINE:-(see the inline review comments on the PR)}")"
+            jq -nc --arg t "$TTEXT" '{text: $t}' > /tmp/fire.json
+            RESP="$(curl -sS -X POST "$FIRE_URL" \
+              -H "Authorization: Bearer $FIRE_TOKEN" \
+              -H "anthropic-version: 2023-06-01" \
+              -H "anthropic-beta: experimental-cc-routine-2026-04-01" \
+              -H "Content-Type: application/json" \
+              --data @/tmp/fire.json)"
+            URL="$(printf '%s' "$RESP" | jq -r '.claude_code_session_url // empty' 2>/dev/null || true)"
+            if [ -n "$URL" ]; then
+              gh pr comment "$PR" --repo "$REPO" --body "🧹 Review passed with $FINDINGS finding(s) — re-fired the agent in **TRIAGE MODE** (pass $TATTEMPT/$MAX_TRIAGE_ROUNDS) to fix or decline each. [Watch the session]($URL). <!-- fixloop:triage -->"
+            else
+              gh pr comment "$PR" --repo "$REPO" --body "$(printf '⚠️ Wanted a TRIAGE pass but the re-fire failed. Routine response:\n```\n%s\n```' "$RESP")"
+              exit 1
+            fi
             exit 0
           fi
 
