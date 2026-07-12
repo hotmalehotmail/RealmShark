@@ -1,5 +1,6 @@
 import type { ComponentType } from 'react'
 import type { PanelSize } from '../../../shared/panels'
+import { dpsPanelHeight } from '../dps/rowLayout'
 import type { SizePx } from './anchor'
 import CharacterPanel from './CharacterPanel'
 import ConsolePanel from './ConsolePanel'
@@ -34,9 +35,9 @@ export const PANEL_REGISTRY: Record<string, PanelSpec> = {
     type: 'dps',
     title: 'DPS',
     sizes: {
-      sm: { width: 180, height: 110 },
-      md: { width: 260, height: 200 },
-      lg: { width: 320, height: 320 }
+      sm: { width: 180, height: dpsPanelHeight('sm') },
+      md: { width: 260, height: dpsPanelHeight('md') },
+      lg: { width: 320, height: dpsPanelHeight('lg') }
     },
     component: DpsPanel
   },

@@ -1,12 +1,11 @@
 import type { PanelSize } from '../../shared/panels'
 import type { DpsSnapshot } from './dps/DpsTracker'
+import { DPS_ROW_SPRITE_SIZE, rowHeight as dpsRowHeight } from './dps/rowLayout'
 import type { PlayerDps } from './dps/types'
 import { CharacterSprite } from './sprites/CharacterSprite'
 import { useEntityRegistry } from './sprites/context'
 import { Sprite } from './sprites/Sprite'
 
-/** Row character-sprite pixel size per panel size. */
-const ROW_SPRITE_SIZE: Record<PanelSize, number> = { sm: 16, md: 20, lg: 24 }
 /** Row equipment-slot icon pixel size per panel size. 0 hides the gear row (sm degrades to sprite + name + dps only). */
 const ROW_SLOT_SIZE: Record<PanelSize, number> = { sm: 0, md: 12, lg: 14 }
 
@@ -75,11 +74,11 @@ function ensureLocalRow(
 
 function DpsList({ snapshot, maxRows, showHeader, size }: DpsListProps): React.JSX.Element {
   const entities = useEntityRegistry()
-  const spriteSize = ROW_SPRITE_SIZE[size]
+  const spriteSize = DPS_ROW_SPRITE_SIZE[size]
   const slotSize = ROW_SLOT_SIZE[size]
   // Fixed per-row height (real or placeholder) so the list's total rendered
   // height never changes as players enter/leave the rolling damage window.
-  const rowHeight = Math.max(spriteSize, 16)
+  const rowHeight = dpsRowHeight(size)
 
   if (snapshot.targetId === null) {
     return <div className="text-xs text-white/40">No target attacked yet</div>

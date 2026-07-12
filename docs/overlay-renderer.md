@@ -136,8 +136,16 @@ window (= the game window) resizes, with no reclamp needed.
 
 `PanelSize` is the literal union `'sm' | 'md' | 'lg'` (`panels.ts:18`). There is
 **no drag-to-resize handle anywhere**. `registry.ts` gives each panel type an
-explicit pixel width/height per preset (`registry.ts:21-72`), e.g. DPS is
-`180×110 / 260×200 / 320×320`. The size button cycles
+explicit pixel width/height per preset (`registry.ts:21-72`), e.g. Character is
+a literal `160×100 / 220×130 / 280×170`. The DPS panel's height is instead
+*derived* rather than literal: `dpsPanelHeight(size)`
+(`dps/rowLayout.ts`) computes the pixel height needed to fit
+`DPS_MAX_ROWS[size]` rows (plus the target header and pinned local-player row)
+without internal scrolling, currently `180×110 / 260×214 / 320×406`. Any
+change to `DPS_MAX_ROWS`/`DPS_ROW_SPRITE_SIZE` or the row markup in
+`DpsList.tsx` must keep `dpsPanelHeight`'s constants (row gap, header height,
+frame chrome) in sync, since registry sizes are static and can't be measured
+from the live DOM. The size button cycles
 `sm → md → lg → sm` via `SIZE_CYCLE` (`PanelFrame.tsx:6`, exported and reused by
 `PanelCanvas.tsx:111`). Panels never store pixel dimensions — only the preset
 key — so retuning a size means editing the registry, and it applies to every
