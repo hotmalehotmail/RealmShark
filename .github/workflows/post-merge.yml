@@ -77,6 +77,47 @@ jobs:
             echo "Soak in progress, but PR #$PR_NUM is docs/CI-only — installer is unchanged, not re-cutting."
           fi
 
+  label-completed:
+    # A feature/fix PR merging into staging finishes an agent's work: flip the issue(s)
+    # it closes from agent:in-progress -> agent:completed. The issue itself does NOT
+    # auto-close here — GitHub's `Closes #N` only fires on the DEFAULT branch (bridge) —
+    # so this label is the "agent finished, now soaking" signal during that window.
+    if: >
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'staging'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Flag closed issues agent:completed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # GitHub only populates closingIssuesReferences for PRs targeting the DEFAULT
+          # branch (bridge); on a staging PR it's empty (verified), so parse the closing
+          # keyword from the PR body ourselves — works regardless of target branch.
+          BODY="$(gh pr view "$PR_NUM" --repo "$REPO" --json body -q '.body' 2>/dev/null || true)"
+          # `|| true`: grep exits 1 on no match, which under `set -euo pipefail` would
+          # abort the job for a PR that closes no issue (docs/CI PRs). Empty is fine here.
+          ISSUES="$(printf '%s\n' "$BODY" \
+            | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+#[0-9]+' \
+            | grep -oE '[0-9]+' | sort -u || true)"
+          # Self-create the label (a bare --add-label silently no-ops if it's missing),
+          # matching fixloop.yml's ensure_label convention.
+          gh label create "agent:completed" --repo "$REPO" --color 0E8A16 \
+            --description "Agent's PR for this issue merged to staging (soaking)" >/dev/null 2>&1 || true
+          for N in $ISSUES; do
+            # Only transition issues actually agent-dispatched (carry agent:in-progress) —
+            # don't stamp agent:completed on a human-closed issue.
+            HAS="$(gh issue view "$N" --repo "$REPO" --json labels -q '.labels[].name' 2>/dev/null \
+              | grep -Fx 'agent:in-progress' || true)"
+            [ -z "$HAS" ] && { echo "#$N not agent:in-progress — skipping."; continue; }
+            gh issue edit "$N" --repo "$REPO" --add-label "agent:completed" >/dev/null 2>&1 || true
+            gh issue edit "$N" --repo "$REPO" --remove-label "agent:in-progress" >/dev/null 2>&1 || true
+            echo "#$N: agent:in-progress -> agent:completed."
+          done
+
   cut-latest:
     # The staging -> bridge promotion landing cuts the LATEST release.
     if: >
