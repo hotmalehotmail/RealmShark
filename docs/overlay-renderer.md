@@ -454,17 +454,35 @@ tracker reports DPS against *one* enemy (`focusTargetId`), chosen by:
    `bossDamagedByLocal`) persists across a phase transition, since that's the
    same encounter continuing.
 
-**Boss-phase damage carryover.** A boss changing form gets a brand-new
-`objectId` server-side (a new `Entity` in the bridge's `DpsEngine`, damage
-total starting at zero — see the discrepancy note in `dps-engine.md`), so
-carrying a boss's total across phases is entirely the renderer's job.
-`ingestQuestObjectId` calls `carryForwardBossDamage` on the *previous*
-`lockedBossId` before switching, which snapshots its current per-attacker
-damage (`totalDamageRows` — bridge rows if present, else the summed local
-buffer) into `bossCarry`. `snapshot()` then takes the `bossSnapshot` branch
-whenever `bossCarry` is non-empty and the focus is still the locked boss:
-each row's `damage` is `bossCarry + the current phase's live damage`, while
-`dps` is just the current phase's live rate (not a whole-encounter average).
+**Boss-phase damage carryover — only across a *live* phase change.** A boss
+changing form gets a brand-new `objectId` server-side (a new `Entity` in the
+bridge's `DpsEngine`, damage total starting at zero — see the discrepancy
+note in `dps-engine.md`), so carrying a boss's total across phases is
+entirely the renderer's job. `ingestQuestObjectId` calls
+`carryForwardBossDamage` on the *previous* `lockedBossId` before switching,
+but **only when that previous lock is still alive** (`bossAlive` true) — a
+genuine phase/form change on the same encounter. It snapshots the previous
+lock's current per-attacker damage (`totalDamageRows` — bridge rows if
+present, else the summed local buffer) into `bossCarry`. `snapshot()` then
+takes the `bossSnapshot` branch whenever `bossCarry` is non-empty and the
+focus is still the locked boss: each row's `damage` is `bossCarry + the
+current phase's live damage`, while `dps` is just the current phase's live
+rate (not a whole-encounter average).
+
+If the previous lock had already **despawned** (`bossAlive` false) by the
+time a new objective arrives, it is *not* a phase change — it's an unrelated
+new encounter (the next quest boss; the common case in the open-world Realm,
+which cycles through many independent quest bosses with no instance change
+between them, but equally possible in any instance with more than one
+distinct boss). Carrying that dead boss's damage forward here would
+misattribute it to whichever boss locks next — the bug behind "the DPS
+summary attributes a Realm quest boss's damage to the *next* quest boss
+instead of the one that was just killed." Instead, `ingestQuestObjectId`
+calls `resolveBossChain()`, which bakes the just-finished chain (its own
+`bossSnapshot`, merging any still-unflushed `bossCarry` from that chain's own
+earlier phases) into its own `resolvedBossEncounters` entry — see §5.1's
+"Boss-phase merging" — and clears `bossCarry` so the new chain starts at
+zero rather than inheriting the old one's total.
 
 **Local rolling window.** `ingestDamage` buckets hits as
 `targets[targetId][attackerId] = HitEvent[]`, redirecting a minion's `objectId`
@@ -509,22 +527,39 @@ panel.
 fight: it requires either some enemy's total damage (`totalDamage`, summed
 across `players`) to reach `HISTORY_LOG_MIN_DAMAGE` (a tunable constant, a
 proxy for "a boss-scale enemy was fought"), or a quest objective to have been
-engaged at all (`lockedBossId !== null`) even if the fight was cut short.
-Nexus/vault/realm hops/rushed-empty rooms fall under both and are silently
-skipped — no history entry, no user-visible signal.
+engaged at all (`lockedBossId !== null` **or** a chain already resolved into
+`resolvedBossEncounters`) even if the fight was cut short. Nexus/vault/realm
+hops/rushed-empty rooms fall under both and are silently skipped — no history
+entry, no user-visible signal.
 
-**Boss-phase merging.** `buildHistoryEnemies()` builds the ranked enemy list
-for a history entry from `bridgeEnemies`, but a boss whose `objectId` changed
-across phases would otherwise appear as several split entries — one per raw
-id, each showing only that phase's damage. `bossPhaseIds` (populated by
-`ingestQuestObjectId` alongside the existing `bossCarry` carry-forward — see
-above) tracks every phase id the current lock chain has ever used; those ids
-are excluded from the flat per-enemy loop and replaced with **one** merged
-entry, reusing `bossSnapshot()` (the same carry-forward merge the *live* panel
-uses for a phase-changing boss — §5's "Boss-phase damage carryover"). This is
-also why the merge is **not** the bridge's `bossPhaseDamage` field: per the
-discrepancy note in `dps-engine.md`, that field only flags three specific
-counter-damage mechanics and does not aggregate a boss's damage across
+**Boss-phase merging — one merged entry per *encounter*, not per instance.**
+`buildHistoryEnemies()` builds the ranked enemy list for a history entry
+from three sources: `resolvedBossEncounters` (finished chains — see below),
+the flat non-boss enemies in `bridgeEnemies`, and one merged entry for the
+still-open chain (`lockedBossId`, if any). Without this split, a boss whose
+`objectId` changed across phases would appear as several split entries — one
+per raw id, each showing only that phase's damage — **or**, if two *different*
+bosses were merged together, one boss's damage would be mislabeled onto the
+other (see the "Boss-phase damage carryover" discrepancy this fixes, §5).
+`bossPhaseIds` (populated by `ingestQuestObjectId` alongside `bossCarry`'s
+carry-forward and `resolveBossChain`'s bake-out — see §5) tracks every phase
+id *any* boss chain has ever used this instance, live or finished; those ids
+are excluded from the flat per-enemy loop since each is already accounted for
+in `resolvedBossEncounters` or the still-open chain's merged entry.
+
+`resolveBossChain()` is what keeps distinct encounters from bleeding into
+each other: the moment `ingestQuestObjectId` sees a new objective for a boss
+that already despawned (not a phase of the one that just ended), it bakes the
+finished chain's `bossSnapshot()` into its own `resolvedBossEncounters` entry
+*before* the new chain starts accumulating — so a Realm's next quest boss
+starts from zero rather than inheriting the damage of the one the player just
+killed. Both the finished-chain bake-out and the live merged entry for the
+still-open chain reuse `bossSnapshot()` (the same carry-forward merge the
+*live* panel uses for a phase-changing boss — §5's "Boss-phase damage
+carryover"). This is also why the merge is **not** the bridge's
+`bossPhaseDamage` field: per the discrepancy note in `dps-engine.md`, that
+field only flags three specific counter-damage mechanics and does not
+aggregate a boss's damage across
 phase/objectId changes — the renderer has always been the one place that does,
 and history reuses that same mechanism rather than duplicating it.
 
@@ -682,18 +717,19 @@ how many rows are real vs. blank.
 The local player's row (`row.objectId === entities.localPlayerId()`) gets an
 accent ring (`ring-sky-400/70`), a tinted fill, and a `#rank` badge ahead of
 its name giving its true position in the full (unsliced) ranking. Two layers
-keep that row always present and pinned: `ensureLocalRow()` synthesizes a
-0-damage row for the local player if they haven't hit the focused target at
-all yet (the bridge/local-estimate `rows` only ever contain attackers who've
-actually landed damage, so absence otherwise means "no row"), then
-`selectVisibleRows()` unconditionally pulls whichever row that is out of the
-ranked pool and reserves it a **permanent last slot**, regardless of its true
-rank — so the player can always find themselves at a fixed position, even at
-0 damage, well outside the top N, or ranked #1 (in which case they render
-below lower-ranked teammates; the `#rank` badge still shows their true
-position). This differs from ranking the local player in with everyone else:
-their row never moves as their damage/rank changes, only the `#rank` badge
-does.
+keep that row always present: `ensureLocalRow()` synthesizes a 0-damage row
+for the local player if they haven't hit the focused target at all yet (the
+bridge/local-estimate `rows` only ever contain attackers who've actually
+landed damage, so absence otherwise means "no row"), then `selectVisibleRows()`
+decides where it renders. The local player's row stays in its natural ranked
+position, in order with everyone else's, whenever that position already falls
+within the visible `maxRows` window — it is **not** pulled out of the ranked
+list unconditionally. Only when their true rank would otherwise fall *outside*
+`maxRows` does it get pinned into the list's last slot (displacing the
+lowest-ranked other row), so the player can still always find themselves even
+at 0 damage or well outside the top N. Either way the `#rank` badge shows
+their true position in the full ranking, which only differs from their
+rendered position in that pinned-out-of-range case.
 
 It reads `useEntityRegistry()` for the target sprite, the local player's id
 (`localPlayerId()`), and, per row, `objectType`/`skin`/dyes (via

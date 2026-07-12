@@ -29,24 +29,26 @@ interface DpsListProps {
  * Picks which rows to render: always exactly `maxRows` slots, so the list's
  * rendered height stays fixed regardless of how many players are currently
  * in the rolling damage window (a `null` slot renders as a blank placeholder
- * row). The local player's row is reserved a permanent last slot rather than
- * sorted in with everyone else, so it never jumps position or disappears as
- * their rank/damage changes. `rows` is already sorted descending by damage.
+ * row). The local player's row stays in its natural ranked position like
+ * everyone else's when that position is within the visible window; it's only
+ * pulled into the last slot (displacing the lowest-ranked other row) when
+ * their true rank would otherwise fall outside `maxRows`, so the player can
+ * always find themselves without their row jumping around while it's already
+ * visible. `rows` is already sorted descending by damage.
  */
 function selectVisibleRows(
   rows: PlayerDps[],
   maxRows: number,
   localPlayerId: number | null
 ): (PlayerDps | null)[] {
-  const localRow =
-    localPlayerId === null ? null : (rows.find((r) => r.objectId === localPlayerId) ?? null)
-  const others = localRow === null ? rows : rows.filter((r) => r.objectId !== localPlayerId)
-  const otherSlots = localRow === null ? maxRows : maxRows - 1
-  const visibleOthers = others.slice(0, otherSlots)
-  const placeholders: null[] = new Array(Math.max(0, otherSlots - visibleOthers.length)).fill(null)
-  return localRow === null
-    ? [...visibleOthers, ...placeholders]
-    : [...visibleOthers, ...placeholders, localRow]
+  const localIndex =
+    localPlayerId === null ? -1 : rows.findIndex((r) => r.objectId === localPlayerId)
+  const visible =
+    localIndex === -1 || localIndex < maxRows
+      ? rows.slice(0, maxRows)
+      : [...rows.slice(0, Math.max(0, maxRows - 1)), rows[localIndex]]
+  const placeholders: null[] = new Array(Math.max(0, maxRows - visible.length)).fill(null)
+  return [...visible, ...placeholders]
 }
 
 /**
@@ -110,10 +112,10 @@ function DpsList({ snapshot, maxRows, showHeader, size }: DpsListProps): React.J
             }
             const equipment = entities.equipment(row.objectId) ?? []
             const isLocal = row.objectId === localPlayerId
-            // True rank within the full (unsliced) ranking, not the position
-            // in this row's visible list - only meaningful to surface when
-            // it's the local player's row (a pinned self-row sits in a fixed
-            // last slot regardless of its numeric position in `visibleRows`).
+            // True rank within the full (unsliced) ranking - matches the
+            // row's position in `visibleRows` except when the local player's
+            // row has been pulled into the last slot (see `selectVisibleRows`),
+            // so it's only surfaced for that row.
             const rank = rows.indexOf(row) + 1
             const fillPct = topDamage > 0 ? Math.min(100, (row.damage / topDamage) * 100) : 0
             return (
