@@ -1,5 +1,49 @@
 @import 'tailwindcss';
 
+/*
+ * Semantic design tokens — the only place raw color/size values live.
+ * Component code uses the generated utilities (text-fg-muted, bg-surface,
+ * border-edge, text-2xs, …), never raw palette classes or arbitrary values.
+ * Raw Tailwind palette classes are allowed only inside src/renderer/src/ui/.
+ * See docs/overlay-ui-style.md for the full conventions.
+ */
+@theme {
+  /* Text emphasis (three levels — do not add ad-hoc white opacities) */
+  --color-fg: #ffffff; /* primary content: names, values, headings */
+  --color-fg-muted: rgb(255 255 255 / 0.75); /* secondary: labels, row text */
+  --color-fg-faint: rgb(255 255 255 / 0.45); /* hints, empty states, timestamps */
+
+  /* Structure */
+  --color-edge: rgb(255 255 255 / 0.12); /* borders: panel frames, swatches, inputs */
+  --color-surface: rgb(255 255 255 / 0.06); /* resting fill: swatches, title bars, rows */
+  --color-surface-2: rgb(255 255 255 / 0.12); /* raised fill: buttons, meter bars, inputs */
+  --color-surface-3: rgb(255 255 255 / 0.2); /* hover/focus state of surface-2 */
+  --color-panel: rgb(0 0 0 / 0.7); /* panel/toast backdrop over the game */
+  --color-scrim: rgb(0 0 0 / 0.4); /* full-screen dim behind interactive mode */
+  --color-shell: #171717; /* solid window background (ConfigWindow) */
+  --color-field: #262626; /* input background on shell */
+
+  /* Accent roles */
+  --color-accent: #38bdf8; /* local player, info, primary actions */
+  --color-success: #34d399; /* connected, pinned, update available */
+  --color-warn: #fbbf24; /* connecting, restart-needed, warnings */
+  --color-danger: #f87171; /* disconnected, errors */
+
+  /* Type scale addition — 10px badge/caption size (text-2xs). The full
+     allowed scale is 2xs / xs / sm / base; arbitrary text-[…] is banned. */
+  --text-2xs: 0.625rem;
+  --text-2xs--line-height: 1.4;
+
+  /* Pinned explicitly (today: the Tailwind defaults) so the app font is a
+     one-line decision here, not an implicit fallback. */
+  --font-sans:
+    ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
+    'Segoe UI Symbol', 'Noto Color Emoji';
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
+    monospace;
+}
+
 html,
 body,
 #root {

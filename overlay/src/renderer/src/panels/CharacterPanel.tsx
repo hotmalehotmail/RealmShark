@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import type { PanelSize } from '../../../shared/panels'
 import { CharacterSprite } from '../sprites/CharacterSprite'
 import { useEntityRegistry } from '../sprites/context'
-import { Sprite } from '../sprites/Sprite'
+import { EmptyState } from '../ui/EmptyState'
+import { GearRow } from '../ui/GearRow'
 import type { PanelContentProps } from './registry'
 
 /** Big-sprite pixel size per panel size. */
@@ -26,34 +27,23 @@ function CharacterPanel({ size }: PanelContentProps): React.JSX.Element {
 
   const localId = entities.localPlayerId()
   if (localId == null) {
-    return <div className="text-xs text-white/40">Waiting for local player…</div>
+    return <EmptyState>Waiting for local player…</EmptyState>
   }
 
-  const equipment = entities.equipment(localId) ?? []
   const name = entities.name(localId)
 
   return (
-    <div className="flex h-full w-full flex-col text-white">
+    <div className="flex h-full w-full flex-col">
       <div className="flex items-center gap-3">
         <CharacterSprite objectId={localId} size={PLAYER_SIZE[size]} />
         <div className="min-w-0">
-          <div className="truncate text-sm font-semibold">{name ?? `Player #${localId}`}</div>
-          {size !== 'sm' && <div className="text-xs text-white/40">You</div>}
+          <div className="truncate font-semibold">{name ?? `Player #${localId}`}</div>
+          {size !== 'sm' && <div className="text-xs text-fg-faint">You</div>}
         </div>
       </div>
 
-      <div className="mt-3 flex items-center gap-1.5">
-        {equipment.map((itemType, i) =>
-          itemType > 0 ? (
-            <Sprite key={i} objectType={itemType} size={SLOT_SIZE[size]} />
-          ) : (
-            <span
-              key={i}
-              className="rounded-sm border border-white/15 bg-white/5"
-              style={{ width: SLOT_SIZE[size], height: SLOT_SIZE[size], flexShrink: 0 }}
-            />
-          )
-        )}
+      <div className="mt-3">
+        <GearRow equipment={entities.equipment(localId)} slotSize={SLOT_SIZE[size]} />
       </div>
     </div>
   )

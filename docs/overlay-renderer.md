@@ -6,7 +6,9 @@ shared **sprite/entity** services, and the renderer-side **DPS tracker**. This
 is the reference for anyone modifying the HUD. For the Electron main process and
 the preload IPC surface see `overlay-main-process.md`; for the sprite-pack
 contents see `asset-pipeline.md`; for dye compositing see `dyes-and-textiles.md`;
-for the Java DPS engine that feeds this UI see `dps-engine.md`.
+for the Java DPS engine that feeds this UI see `dps-engine.md`; for **visual
+style** — the design tokens, the shared `ui/` primitives, and the typography/
+color conventions every panel must follow — see `overlay-ui-style.md`.
 
 > **Path note.** Everything here lives under `overlay/src/renderer/src/` (yes,
 > `renderer/src/`, not `renderer/`). Paths below are relative to the repo root.
@@ -26,6 +28,8 @@ for the Java DPS engine that feeds this UI see `dps-engine.md`.
 | `overlay/src/renderer/src/panels/anchor.ts` | Percentage-anchor ↔ pixel math (`panelStyle`, `anchorFromPointer`). |
 | `overlay/src/renderer/src/panels/registry.ts` | `type → { title, per-size px dims, component }` and `PanelContentProps`. |
 | `overlay/src/renderer/src/panels/{Status,Dps,Console,Character,Instance,DpsSummary}Panel.tsx` | The six panel bodies. |
+| `overlay/src/renderer/src/ui/*.tsx` | Shared UI primitives (`Button`, `EmptyState`, `Swatch`, `GearRow`, `MeterRow`, `StatRow`) — see `overlay-ui-style.md`. |
+| `overlay/src/renderer/src/assets/main.css` | Tailwind entry + the `@theme` design-token block — see `overlay-ui-style.md`. |
 | `overlay/src/renderer/src/sprites/SpriteProvider.tsx` | Loads/decodes the atlas pack; `getSprite` / `getDyedSprite`. |
 | `overlay/src/renderer/src/sprites/Sprite.tsx` / `CharacterSprite.tsx` | `<Sprite objectType>` / `<CharacterSprite objectId>` components. |
 | `overlay/src/renderer/src/sprites/EntityRegistry.tsx` | objectId → name/skin/equipment/dyes, built from the packet stream. |
@@ -199,14 +203,17 @@ prop: `{ size: PanelSize }` (`registry.ts:10-19`). Panels **do not** receive the
 packet stream or entity data as props — they reach live data through
 `window.overlay.*` subscriptions or the shared contexts (`useSprites`,
 `useEntityRegistry`, `useDpsTracker`). They use `size` only to scale their own
-content (sprite px, row counts, which optional lines to show).
+content (sprite px, row counts, which optional lines to show). Base typography
+(`text-sm text-fg`) is applied by `PanelFrame`'s content wrapper — panel bodies
+inherit it and must not re-declare it (see `overlay-ui-style.md`).
 
 ### How to add a new panel type (checklist)
 
 1. **Write the body** `panels/FooPanel.tsx` as
    `function FooPanel({ size }: PanelContentProps)`. Pull data from a context or
    a `window.overlay.on…` subscription (remember to return the unsubscribe in the
-   effect cleanup).
+   effect cleanup). Style it with the semantic tokens and `ui/` primitives per
+   **`overlay-ui-style.md`** — no raw palette classes, no arbitrary text sizes.
 2. **Register it** in `PANEL_REGISTRY` (`registry.ts:21`): add a key with
    `{ type, title, sizes: { sm, md, lg }, component: FooPanel }`. The three
    `sizes` entries are required (they're the only dimensions the panel will ever
@@ -704,20 +711,22 @@ secondary figure beside it. Numbers are formatted **compact**
 total/dps figures stay narrow enough to survive next to a sprite + 4 gear
 icons in a ~180-320px-wide panel (`DpsList.tsx`).
 
-**Damage bar + self row.** Each row renders a proportional bar as a **row
-background fill** (an absolutely-positioned `div` sized `damage / topDamage`,
-painted behind a `relative z-10` wrapper holding the sprite/gear/name/numbers)
-so it never competes with them for horizontal space, and stays meaningful even
+**Damage bar + self row.** Each row is a `<MeterRow>` (`ui/MeterRow.tsx` — see
+`overlay-ui-style.md`): a proportional bar rendered as a **row background
+fill** (an absolutely-positioned `div` sized `damage / topDamage`, painted
+behind a `relative z-10` wrapper holding the sprite/gear/name/numbers) so it
+never competes with them for horizontal space, and stays meaningful even
 at `sm` where the gear icons are hidden. The row is clipped
 (`overflow-hidden rounded-sm`) so the fill can never overflow the row or panel.
 Every row, real or placeholder, gets an explicit fixed height (`rowHeight`,
-`DpsList.tsx`) so the list's total rendered height is constant regardless of
-how many rows are real vs. blank.
+via `MeterRow`'s `height` prop) so the list's total rendered height is
+constant regardless of how many rows are real vs. blank.
 
-The local player's row (`row.objectId === entities.localPlayerId()`) gets an
-accent ring (`ring-sky-400/70`), a tinted fill, and a `#rank` badge ahead of
-its name giving its true position in the full (unsliced) ranking. Two layers
-keep that row always present: `ensureLocalRow()` synthesizes a 0-damage row
+The local player's row (`row.objectId === entities.localPlayerId()`,
+`MeterRow`'s `highlight` prop) gets an accent ring, a tinted fill, and a
+`#rank` badge ahead of its name giving its true position in the full
+(unsliced) ranking. Two layers keep that row always present:
+`ensureLocalRow()` synthesizes a 0-damage row
 for the local player if they haven't hit the focused target at all yet (the
 bridge/local-estimate `rows` only ever contain attackers who've actually
 landed damage, so absence otherwise means "no row"), then `selectVisibleRows()`

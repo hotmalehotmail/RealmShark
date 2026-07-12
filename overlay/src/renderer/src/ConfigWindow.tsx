@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { OverlaySettings } from '../../shared/settings'
+import { Button } from './ui/Button'
 
 function ConfigWindow(): React.JSX.Element {
   const [settings, setSettings] = useState<OverlaySettings | null>(null)
@@ -11,7 +12,7 @@ function ConfigWindow(): React.JSX.Element {
   }, [])
 
   if (!settings) {
-    return <div className="p-4 text-sm text-white">Loading…</div>
+    return <div className="p-4 text-sm text-fg">Loading…</div>
   }
 
   const save = async (): Promise<void> => {
@@ -25,15 +26,15 @@ function ConfigWindow(): React.JSX.Element {
   }
 
   return (
-    <div className="flex h-screen flex-col gap-4 bg-neutral-900 p-5 text-sm text-white">
+    <div className="flex h-screen flex-col gap-4 bg-shell p-5 text-sm text-fg">
       <div>
-        <label className="mb-1 block text-white/70">Game window title</label>
+        <label className="mb-1 block text-fg-muted">Game window title</label>
         <input
-          className="w-full rounded border border-white/20 bg-neutral-800 px-2 py-1.5 font-mono"
+          className="w-full rounded border border-edge bg-field px-2 py-1.5 font-mono"
           value={settings.gameWindowTitle}
           onChange={(e) => setSettings({ ...settings, gameWindowTitle: e.target.value })}
         />
-        <p className="mt-1 text-xs text-white/40">
+        <p className="mt-1 text-xs text-fg-faint">
           Must match the game window&apos;s title exactly, including case. Check with PowerShell:
           <br />
           <code>Get-Process | ? MainWindowTitle -ne &apos;&apos; | select MainWindowTitle</code>
@@ -41,17 +42,17 @@ function ConfigWindow(): React.JSX.Element {
       </div>
 
       <div>
-        <label className="mb-1 block text-white/70">Toggle hotkey</label>
+        <label className="mb-1 block text-fg-muted">Toggle hotkey</label>
         <input
-          className="w-full rounded border border-white/20 bg-neutral-800 px-2 py-1.5 font-mono"
+          className="w-full rounded border border-edge bg-field px-2 py-1.5 font-mono"
           value={settings.toggleHotkey}
           onChange={(e) => setSettings({ ...settings, toggleHotkey: e.target.value })}
         />
-        <p className="mt-1 text-xs text-white/40">Electron accelerator format, e.g. Alt+Shift+R</p>
+        <p className="mt-1 text-xs text-fg-faint">Electron accelerator format, e.g. Alt+Shift+R</p>
       </div>
 
       <div>
-        <label className="mb-1 block text-white/70">
+        <label className="mb-1 block text-fg-muted">
           Textile animation speed: <span className="font-mono">{settings.textileAnimMs}ms</span>
           /frame
         </label>
@@ -64,14 +65,14 @@ function ConfigWindow(): React.JSX.Element {
           value={settings.textileAnimMs}
           onChange={(e) => setSettings({ ...settings, textileAnimMs: Number(e.target.value) })}
         />
-        <p className="mt-1 text-xs text-white/40">
+        <p className="mt-1 text-xs text-fg-faint">
           Milliseconds per frame for animated cloth (textile) dyes. Higher = slower. Applies on
           Save.
         </p>
       </div>
 
       <div>
-        <label className="mb-1 block text-white/70">
+        <label className="mb-1 block text-fg-muted">
           Cloth scroll speed:{' '}
           <span className="font-mono">{settings.textileScrollSpeed.toFixed(1)}</span>
         </label>
@@ -84,13 +85,13 @@ function ConfigWindow(): React.JSX.Element {
           value={settings.textileScrollSpeed}
           onChange={(e) => setSettings({ ...settings, textileScrollSpeed: Number(e.target.value) })}
         />
-        <p className="mt-1 text-xs text-white/40">
+        <p className="mt-1 text-xs text-fg-faint">
           How fast scrolling cloths (horizontal/vertical) move. Higher = faster. Applies on Save.
         </p>
       </div>
 
       <div>
-        <label className="mb-1 block text-white/70">
+        <label className="mb-1 block text-fg-muted">
           Cloth rotate speed:{' '}
           <span className="font-mono">{settings.textileRotateSpeed.toFixed(2)}</span>
         </label>
@@ -103,27 +104,21 @@ function ConfigWindow(): React.JSX.Element {
           value={settings.textileRotateSpeed}
           onChange={(e) => setSettings({ ...settings, textileRotateSpeed: Number(e.target.value) })}
         />
-        <p className="mt-1 text-xs text-white/40">
+        <p className="mt-1 text-xs text-fg-faint">
           How fast rotating (vortex) cloths spin. Higher = faster. Applies on Save.
         </p>
       </div>
 
       <div className="mt-auto flex items-center gap-3">
-        <button
-          className="rounded bg-sky-600 px-3 py-1.5 font-medium hover:bg-sky-500"
-          onClick={save}
-        >
+        <Button variant="primary" size="md" onClick={save}>
           Save
-        </button>
+        </Button>
         {needsRestart && (
-          <button
-            className="rounded bg-amber-600 px-3 py-1.5 font-medium hover:bg-amber-500"
-            onClick={() => window.overlay.relaunch()}
-          >
+          <Button variant="warn" size="md" onClick={() => window.overlay.relaunch()}>
             Restart now to apply
-          </button>
+          </Button>
         )}
-        <span className="text-xs text-white/50">{status}</span>
+        <span className="text-xs text-fg-faint">{status}</span>
       </div>
     </div>
   )

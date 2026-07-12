@@ -1,5 +1,6 @@
 import { useRef } from 'react'
 import type { PanelInstance, PanelSize } from '../../../shared/panels'
+import { Button } from '../ui/Button'
 import { anchorFromPointer, panelStyle, type SizePx } from './anchor'
 import type { PanelSpec } from './registry'
 
@@ -70,7 +71,7 @@ function PanelFrame({
   return (
     <div
       ref={frameRef}
-      className={`flex flex-col overflow-hidden rounded-lg border border-white/10 bg-black/70 shadow-lg backdrop-blur-sm ${
+      className={`flex flex-col overflow-hidden rounded-lg border border-edge bg-panel shadow-lg backdrop-blur-sm ${
         interactive ? '' : 'pointer-events-none'
       }`}
       style={{
@@ -81,20 +82,19 @@ function PanelFrame({
       onMouseDown={interactive ? () => onBringToTop(panel.id) : undefined}
     >
       <div
-        className={`flex shrink-0 items-center justify-between bg-white/5 px-2 py-1 ${
+        className={`flex shrink-0 items-center justify-between bg-surface px-2 py-1 ${
           interactive ? 'cursor-move' : ''
         }`}
         onMouseDown={interactive ? startDrag : undefined}
       >
-        <span className="truncate text-xs font-medium text-white/70">{spec.title}</span>
+        <span className="truncate text-xs font-medium text-fg-muted">{spec.title}</span>
         {interactive ? (
           <div className="ml-2 flex shrink-0 items-center gap-1">
-            <button
-              className={`rounded px-1 text-[10px] uppercase ${
-                panel.pinned
-                  ? 'text-emerald-400 hover:text-emerald-300'
-                  : 'text-white/40 hover:text-white/80'
-              }`}
+            <Button
+              variant="ghost"
+              size="xs"
+              active={panel.pinned}
+              className="uppercase"
               onMouseDown={(e) => e.stopPropagation()}
               onClick={() => onTogglePin(panel.id)}
               title={
@@ -104,25 +104,29 @@ function PanelFrame({
               }
             >
               {panel.pinned ? '★ pin' : 'pin'}
-            </button>
-            <button
-              className="rounded px-1 text-[10px] uppercase text-white/40 hover:text-white/80"
+            </Button>
+            <Button
+              variant="ghost"
+              size="xs"
+              className="uppercase"
               onMouseDown={(e) => e.stopPropagation()}
               onClick={() => onCycleSize(panel.id)}
               title="Cycle panel size"
             >
               {panel.size}
-            </button>
+            </Button>
           </div>
         ) : (
           panel.pinned && (
-            <span className="ml-2 shrink-0 text-[10px] text-emerald-400/60" title="Pinned">
+            <span className="ml-2 shrink-0 text-2xs text-success/60" title="Pinned">
               ★
             </span>
           )
         )}
       </div>
-      <div className="min-h-0 flex-1 overflow-auto p-2">
+      {/* Base typography for every panel body lives here (with ConfigWindow's
+          root, the only two places it's set) — panels must not re-declare it. */}
+      <div className="min-h-0 flex-1 overflow-auto p-2 text-sm text-fg">
         <Content size={panel.size} />
       </div>
     </div>

@@ -6,9 +6,9 @@ import { EntityRegistryProvider } from './sprites/EntityRegistry'
 import { SpriteProvider } from './sprites/SpriteProvider'
 
 const STATUS_STYLES: Record<BridgeStatus, string> = {
-  connected: 'bg-emerald-500',
-  connecting: 'bg-amber-400',
-  disconnected: 'bg-red-500'
+  connected: 'bg-success',
+  connecting: 'bg-warn',
+  disconnected: 'bg-danger'
 }
 
 const ATTACH_TOAST_MS = 2500
@@ -63,7 +63,7 @@ function AppShell({ status, interactive, showAttachToast }: AppShellProps): Reac
     <div className="relative h-screen w-screen">
       {showAttachToast && !interactive && (
         <div className="absolute inset-0 flex items-center justify-center">
-          <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-black/80 px-4 py-2 text-sm text-white shadow-lg backdrop-blur-sm">
+          <div className="flex items-center gap-2 rounded-lg border border-edge bg-panel px-4 py-2 text-sm text-fg shadow-lg backdrop-blur-sm">
             <span className={`h-2 w-2 rounded-full ${STATUS_STYLES[status]}`} />
             RealmShark attached
           </div>
@@ -76,7 +76,7 @@ function AppShell({ status, interactive, showAttachToast }: AppShellProps): Reac
           visible), and rendered before the panel canvas with no positive
           z-index, so the positioned panels paint on top and stay crisp -- only
           the game behind is dimmed. */}
-      {interactive && <div className="absolute inset-0 bg-black/40" />}
+      {interactive && <div className="absolute inset-0 bg-scrim" />}
 
       {/* Always mounted (never conditionally rendered) - panels hold live
           state (packet counter, the DPS tracker's whole session) that must
