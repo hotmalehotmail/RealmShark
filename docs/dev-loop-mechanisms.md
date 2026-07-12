@@ -321,11 +321,16 @@ with `if: github.event.label.name == 'agent:retry'`, and:
 
 **(b) Take over the code yourself.** You push commits to the `claude/*` branch (or
 edit files in the GitHub UI). Your push fires `synchronize` → CI + review re-run on
-your commit. If the new review passes (`review-verdict = success`), §7 merges it. A step in
-`review.yml` removes `agent:needs-human` whenever it posts a `success` verdict, so
-the "stuck" state clears itself the moment the PR is healthy again. (Note: pushes
-by *you* re-run review because they are not made with the default `GITHUB_TOKEN`;
-see the token note under Branch protection.)
+your commit. If the new review passes (`review-verdict = success`), the **gatekeeper**
+clears the freeze: on its next ci/review-completion run it sees `agent:needs-human` on
+an otherwise-green, non-conflicting PR, **removes `agent:needs-human`** (and the
+escalation assignee, and reverses the issue mirror back to `agent:in-progress`), then
+falls through to arm auto-merge — so the "stuck" state clears itself the moment the PR
+is healthy again. The clear lives in `gatekeeper.yml`, **not** `review.yml` (the review
+agent only posts the verdict; it never touches the freeze label). A still-failing or
+still-conflicting frozen PR stays frozen, so the automated loop can't quietly escape its
+own escalation. (Note: pushes by *you* re-run review because they are not made with the
+default `GITHUB_TOKEN`; see the token note under Branch protection.)
 
 **Resolution in both paths.** The terminal state is identical to any other PR: a
 green CI + a `review-verdict = success` → gatekeeper auto-merges the PR to `staging`.

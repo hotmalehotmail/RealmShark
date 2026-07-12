@@ -65,9 +65,34 @@ jobs:
           NUM="$(printf '%s' "$PR" | jq -r '.number')"
           MERGEABLE="$(printf '%s' "$PR" | jq -r '.mergeable')" # MERGEABLE | CONFLICTING | UNKNOWN
 
+          # ---- Frozen-PR recovery (audit H4). A PR the fix loop escalated carries
+          #      `agent:needs-human`. It recovers on its own the moment it is GREEN AGAIN —
+          #      a human pushed fixes (the escalation comment tells them to) or a re-review
+          #      flipped the verdict — so clear the freeze and fall through to the normal
+          #      arming path. This is the auto-clear the mechanisms doc §6.3(b) promised; it
+          #      lives HERE, not in review.yml (which never removed the label). A still-failing
+          #      or still-conflicting frozen PR stays frozen for the human, so the automated
+          #      loop can never quietly escape its own escalation. ----
           if printf '%s' "$PR" | jq -e '.labels[]? | select(.name == "agent:needs-human")' >/dev/null; then
-            echo "PR #$NUM is frozen (agent:needs-human) — leaving it for a human."
-            exit 0
+            RVERDICT="$(gh api "repos/$REPO/commits/$SHA/status" \
+                         -q '.statuses[] | select(.context=="review-verdict") | .state' 2>/dev/null | head -n1 || true)"
+            if [ "$RVERDICT" != "success" ] || [ "$MERGEABLE" = "CONFLICTING" ] || [ "$MERGEABLE" = "UNKNOWN" ]; then
+              echo "PR #$NUM is frozen (agent:needs-human); review-verdict='${RVERDICT:-absent}', mergeable='$MERGEABLE' — leaving it for a human."
+              exit 0
+            fi
+            echo "PR #$NUM was frozen but is green again (review-verdict=success, mergeable) — clearing agent:needs-human and resuming the auto-merge gate."
+            gh pr edit "$NUM" --repo "$REPO" --remove-label "agent:needs-human" >/dev/null 2>&1 || true
+            [ -n "${MAINTAINER:-}" ] && gh pr edit "$NUM" --repo "$REPO" --remove-assignee "$MAINTAINER" >/dev/null 2>&1 || true
+            # Reverse the escalation's issue mirror (§6.2): the work is active again, not stalled.
+            RBODY="$(gh pr view "$NUM" --repo "$REPO" --json body -q '.body' 2>/dev/null || true)"
+            for ISS in $(printf '%s\n' "$RBODY" \
+                | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+#[0-9]+' \
+                | grep -oE '[0-9]+' | sort -u || true); do
+              gh issue edit "$ISS" --repo "$REPO" --remove-label "agent:needs-human" >/dev/null 2>&1 || true
+              gh issue edit "$ISS" --repo "$REPO" --add-label "agent:in-progress" >/dev/null 2>&1 || true
+            done
+            gh pr comment "$NUM" --repo "$REPO" --body "✅ Green again (review-verdict passed) — cleared \`agent:needs-human\` and resumed the auto-merge gate. <!-- gatekeeper:unfreeze -->"
+            # fall through to the soak-freeze check + arming below (no exit).
           fi
 
           # ---- Soak freeze (§9.5). While a soak is open, HOLD unrelated agent PRs (do
