@@ -504,10 +504,22 @@ instead of `Sprite`.
   `useItemInfo().enchantName`, falling back to `` `Enchant #${id}` `` when the
   bridge's `enchantNames` table has no definition for it (headless `--fake`
   mode, or any machine without `assets/xml/enchantments.xml`). A slot with no
-  owner/index (e.g. a Loot panel pickup, which has no equipping entity) simply
-  shows no enchantment section — `rawSlot` stays `null`, distinct from a
-  known-but-unenchanted slot (empty string, decodes to zero ids → "No
-  enchantments").
+  owner/index and no `enchantCode` simply shows no enchantment section —
+  `rawSlot` stays `null`, distinct from a known-but-unenchanted slot (empty
+  string, decodes to zero ids → "No enchantments").
+- **`enchantCode`** (issue #122) is an optional prop that takes priority over
+  the `ownerObjectId`/`slotIndex` live `EntityRegistry` lookup — a caller
+  holding its own resolved (possibly frozen) enchant code passes it directly
+  instead. `GearRow`'s own optional `enchantSlots` prop forwards per-slot
+  codes this way; `DpsSummaryPanel`'s `EnemyRow` passes its frozen
+  `PlayerCosmetics.enchantSlots` (§5.1) so a past instance's gear tooltip
+  still shows enchantments after `EntityRegistry` has moved on. The Loot panel
+  (§7) has no equipping entity for most pickups (the protocol never
+  broadcasts a bag-slot item's enchant data — only currently-equipped slots
+  carry `UNIQUE_DATA_STRING`), but *does* pass `ownerObjectId`/`slotIndex`
+  for an entry whose `objectType` matches one of the local player's
+  currently-equipped slots — the one case where the enchant data is actually
+  known.
 - **`Tooltip`** (`ui/Tooltip.tsx`) is the presentation primitive — see
   `overlay-ui-style.md`'s primitives table for its props. Two things about it
   are specific to this overlay, not generic tooltip behavior:
@@ -719,12 +731,19 @@ still render correctly long after the instance ended, but `EntityRegistry`
 (§4) clears itself on every `MapInfoPacket` — by the time a user opens an old
 entry, its players' `objectId`s may resolve to nothing, or worse, to a
 different instance's different player. So `DpsTracker` keeps its own
-`playerCosmetics` map (objectId → skin/equipment/equipmentRarity/clothingDye/
-accessoryDye), merged from `UpdatePacket` the same way `EntityRegistry` does
-but kept independent, and a history entry's `DpsHistoryEnemy.cosmetics` is a **snapshot
-copy** taken at retention time. `DpsSummaryPanel.tsx`'s `FrozenCharacterSprite`
-renders directly from that frozen record (`<Sprite objectType clothingDye
-accessoryDye>`), never through `CharacterSprite`/`useEntityRegistry`.
+`playerCosmetics` map (objectId → skin/equipment/equipmentRarity/enchantSlots/
+clothingDye/accessoryDye), merged from `UpdatePacket` the same way
+`EntityRegistry` does but kept independent, and a history entry's
+`DpsHistoryEnemy.cosmetics` is a **snapshot copy** taken at retention time
+(each array field, including `enchantSlots`, sliced rather than aliased, so a
+later live mutation of the still-tracked `playerCosmetics` record can't leak
+into an already-retained history entry). `DpsSummaryPanel.tsx`'s
+`FrozenCharacterSprite` renders directly from that frozen record (`<Sprite
+objectType clothingDye accessoryDye>`), never through
+`CharacterSprite`/`useEntityRegistry`; `EnemyRow`'s `GearRow` similarly passes
+the frozen `enchantSlots` (not `ownerObjectId` alone) so the gear tooltip's
+enchant section (§4.2) still resolves after the live registry has moved on
+(issue #122 — previously it silently went blank for any past instance).
 
 **Shape.** `getHistory(): DpsHistoryEntry[]` returns the retained list, newest
 first, capped at `HISTORY_MAX_INSTANCES` (oldest dropped). Each
@@ -963,6 +982,23 @@ different bag slots holding the *same* item id both log their own entry — the
 log is chronological, not a de-duplicated set, so two of the same white-bag
 item dropping in one session both appear.
 
+**Equip/unequip and bag-rearrange suppression (issue #122).** An
+empty→populated bag-slot transition isn't always a real pickup: unequipping
+an item lands it back in a bag slot (the equip slot side is
+populated→empty, already excluded, but the bag slot side is exactly the
+empty→populated shape a real drop takes), and dragging an item between two
+bag slots has the same problem on its destination end. `LootTracker` also
+ingests `InvSwapPacket` (`packets/outgoing/InvSwapPacket.java` — an outgoing
+packet, sent by the client on every inventory-slot drag, decoded and
+broadcast like any other). When both `slotFrom.objectId` and `slotTo.objectId`
+name the local player's own id (a self-swap — equip, unequip, or a bag
+rearrange, never a real pickup, which always names a distinct ground-bag
+entity on one end), `ingestInvSwap` arms a short-lived (`SWAP_SUPPRESS_MS`,
+5s) suppression per named bag slot, keyed by `statTypeNum`. `ingestStats`
+consumes that suppression on the slot's next transition instead of logging a
+pickup. The TTL exists so a swap the server silently rejects doesn't mask
+that slot's real future pickups forever.
+
 **Session-scoped, mirroring `DpsTracker`'s retained history (§5.1).**
 `entries` (the loot log itself) persists across `MapInfoPacket` (instance
 change) and is cleared only by `reset()` (overlay detach / game close) — the
@@ -993,10 +1029,15 @@ shared `EmptyState` instead. A non-empty category renders its bag-color
 sprite (`bagIcon(bagType)`, resolved through the ordinary `<Sprite
 objectType>` path — no special-casing) plus a count, then every obtained
 item through **`ItemSprite`** (§4.2) — a hover tooltip (item name/tier/class/
-description from the bridge's `itemInfo` envelope, no enchant section since a
-ground-loot pickup has no equipping entity) superseding the native `title`
-tooltip this panel used before issue #109 — **newest first** so the latest
-drop is visible without scrolling. `useLootTracker`'s own resolved name
+description from the bridge's `itemInfo` envelope; an enchant section too, if
+and only if that entry's `objectType` currently matches one of the local
+player's live equipped slots — the protocol never broadcasts enchant data for
+an item still sitting in the bag, see §4.2/issue #122) superseding the native
+`title` tooltip this panel used before issue #109 — **newest first** so the
+latest drop is visible without scrolling. `LootPanel` also subscribes to
+`useEntityRegistry()`'s `subscribe()` so it re-renders (and re-checks that
+match) the moment the local player's equipment changes, not just on the next
+loot event. `useLootTracker`'s own resolved name
 (`itemName`, a *different* source — `lootBagTypes`'s `itemNames` table, kept
 for the always-visible inline label) still renders beside the sprite at
 `size === 'lg'`. Sized/registered via the standard checklist (§2):

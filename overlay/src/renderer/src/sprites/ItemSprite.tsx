@@ -12,13 +12,23 @@ interface ItemSpriteProps {
   rarity?: number | null
   /**
    * The equipping entity's objectId, paired with `slotIndex` to resolve that
-   * player's enchant data for this slot (`EntityRegistry.enchantSlots`).
-   * Omit for an item with no owning entity (e.g. a ground-loot icon in the
-   * Loot panel) - the tooltip then shows item info only, no enchant section.
+   * player's enchant data for this slot (`EntityRegistry.enchantSlots`) when
+   * `enchantCode` isn't given directly. Omit for an item with no owning
+   * entity (e.g. a ground-loot icon in the Loot panel with no equipped-slot
+   * match) - the tooltip then shows item info only, no enchant section.
    */
   ownerObjectId?: number
   /** Equipped slot index (0=weapon, 1=ability, 2=armor, 3=ring), paired with `ownerObjectId`. */
   slotIndex?: number
+  /**
+   * A pre-resolved raw `UNIQUE_DATA_STRING` slot code, taking priority over
+   * the `ownerObjectId`/`slotIndex` live-lookup path - for a caller holding
+   * its own frozen enchant data (e.g. `DpsSummaryPanel`'s retained history,
+   * whose `ownerObjectId` may no longer resolve in the live `EntityRegistry`
+   * after an instance change). An empty string means "known, no
+   * enchantments"; omit entirely to fall back to the live lookup.
+   */
+  enchantCode?: string
 }
 
 /**
@@ -37,7 +47,8 @@ export function ItemSprite({
   className,
   rarity,
   ownerObjectId,
-  slotIndex
+  slotIndex,
+  enchantCode
 }: ItemSpriteProps): React.JSX.Element {
   const { itemName, itemTier, itemClass, itemDescription, itemDamage, enchantName } = useItemInfo()
   const entities = useEntityRegistry()
@@ -48,8 +59,9 @@ export function ItemSprite({
   const description = itemDescription(objectType)
   const damage = itemDamage(objectType)
 
-  const rawSlots = ownerObjectId != null ? entities.enchantSlots(ownerObjectId) : null
-  const rawSlot = rawSlots != null && slotIndex != null ? (rawSlots[slotIndex] ?? null) : null
+  const liveSlots = ownerObjectId != null ? entities.enchantSlots(ownerObjectId) : null
+  const liveSlot = liveSlots != null && slotIndex != null ? (liveSlots[slotIndex] ?? null) : null
+  const rawSlot = enchantCode !== undefined ? enchantCode : liveSlot
   const enchantIds = rawSlot != null ? decodeEnchantIds(rawSlot) : null
 
   const content = (

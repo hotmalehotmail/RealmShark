@@ -1,9 +1,24 @@
 import type { PacketEnvelope } from '../../../shared/ipc'
-import type { LootBagTypesData, NewTickPacketData, StatEntry, UpdatePacketData } from './types'
+import type {
+  InvSwapPacketData,
+  LootBagTypesData,
+  NewTickPacketData,
+  StatEntry,
+  UpdatePacketData
+} from './types'
 
 /** packets/data/enums/StatType.java: INVENTORY_4_STAT(12) - the first of the 8 bag/held slots (INVENTORY_4..11). */
 const INVENTORY_BAG_SLOT_START = 12
 const INVENTORY_BAG_SLOT_COUNT = 8
+/** packets/data/SlotObjectData.java's slotId -> StatType.java's statTypeNum offset (slotId 0 = INVENTORY_0_STAT = 8). */
+const SLOT_ID_TO_STAT_TYPE_NUM_OFFSET = 8
+/**
+ * How long a bag slot's suppression (armed by a self-swap InvSwapPacket)
+ * stays live, waiting for the corresponding NewTickPacket delta - generous
+ * for normal network latency, short enough that a swap the server silently
+ * rejected doesn't mask that slot's real future pickups indefinitely.
+ */
+const SWAP_SUPPRESS_MS = 5000
 
 /** BagType values the Loot panel tracks - see docs/asset-pipeline.md (6 = white bag, 8 = orange/ST bag). */
 export const TRACKED_BAG_TYPES = [6, 8] as const
@@ -43,11 +58,26 @@ export interface LootEntry {
  * from the bridge's `lootBagTypes` envelope, itself derived from extracted
  * game asset XML (see `assets.AssetExtractor`/`assets.IdToAsset`) - no
  * hand-maintained item list.
+ * <p>
+ * An empty->populated bag-slot transition isn't always a real pickup, though:
+ * equipping an item out of the bag empties that slot (already excluded, since
+ * only empty->populated counts), but *unequipping* one, or rearranging items
+ * between two bag slots, both land an item in a slot that was empty a moment
+ * ago - indistinguishable from a real drop by the stat delta alone. Those are
+ * both a self-swap: an `InvSwapPacket` (`packets/outgoing/InvSwapPacket.java`,
+ * sent by the client on every inventory-slot drag) whose `slotFrom`/`slotTo`
+ * both name the local player's own objectId. `ingestInvSwap` arms a
+ * short-lived suppression per bag slot named by such a swap, consumed by
+ * `ingestStats` on that slot's next transition so it isn't logged as loot. A
+ * swap with a ground-bag (or any other) entity on one end - a real pickup or
+ * manual drop - is left alone.
  */
 export class LootTracker {
   private localPlayerId: number | null = null
   /** statTypeNum (12..19) -> last known slot value; `<= 0` or absent = empty. */
   private slotValues = new Map<number, number>()
+  /** statTypeNum (12..19) -> Date.now() when a self-swap armed this slot's suppression - see class docstring. */
+  private pendingSwapSlots = new Map<number, number>()
   private bagTypeTable = new Map<number, TrackedBagType>()
   private lootBagIcons = new Map<TrackedBagType, number>()
   private itemNames = new Map<number, string>()
@@ -82,6 +112,8 @@ export class LootTracker {
         for (const st of nt?.status ?? []) {
           if (this.ingestStats(st.objectId, st.stats, false)) changed = true
         }
+      } else if (env.type === 'InvSwapPacket') {
+        this.ingestInvSwap(env.data as InvSwapPacketData | null)
       } else if (env.type === 'MapInfoPacket') {
         this.resetPerInstance()
       }
@@ -154,6 +186,14 @@ export class LootTracker {
       // pickup always lands in a free bag slot; this also naturally excludes
       // dropping an item (populated -> empty) and re-syncs on reconnect.
       if (prev > 0 || next <= 0) continue
+      // A self-swap (equip/unequip/bag rearrange) armed this exact slot -
+      // consume the suppression instead of logging a loot entry. See class
+      // docstring and `ingestInvSwap`.
+      const armedAt = this.pendingSwapSlots.get(slot)
+      if (armedAt != null) {
+        this.pendingSwapSlots.delete(slot)
+        if (Date.now() - armedAt <= SWAP_SUPPRESS_MS) continue
+      }
       const bagType = this.bagTypeTable.get(next)
       if (bagType == null) continue
       this.entries.push({
@@ -165,6 +205,39 @@ export class LootTracker {
       logged = true
     }
     return logged
+  }
+
+  /**
+   * A self-swap (both `slotFrom`/`slotTo` name the local player's own
+   * objectId) is an equip/unequip or a bag-to-bag rearrange, never a pickup -
+   * arms suppression for any bag slot (INVENTORY_4..11) on either end, so
+   * that slot's next empty->populated delta isn't logged as loot. A swap
+   * naming a ground bag (or any other entity) on either end - a real pickup
+   * or manual drop - is left alone; only slot ids in the bag range even get
+   * armed, so it's a no-op there anyway.
+   */
+  private ingestInvSwap(data: InvSwapPacketData | null): void {
+    const from = data?.slotFrom
+    const to = data?.slotTo
+    if (
+      from?.objectId == null ||
+      to?.objectId == null ||
+      from.objectId !== this.localPlayerId ||
+      to.objectId !== this.localPlayerId
+    ) {
+      return
+    }
+    const now = Date.now()
+    for (const slotId of [from.slotId, to.slotId]) {
+      if (slotId == null) continue
+      const statTypeNum = slotId + SLOT_ID_TO_STAT_TYPE_NUM_OFFSET
+      if (
+        statTypeNum >= INVENTORY_BAG_SLOT_START &&
+        statTypeNum < INVENTORY_BAG_SLOT_START + INVENTORY_BAG_SLOT_COUNT
+      ) {
+        this.pendingSwapSlots.set(statTypeNum, now)
+      }
+    }
   }
 
   /** The ground-bag entity's own objectType for a bag color (the panel's category-header sprite), or null if unresolved. */
@@ -186,6 +259,7 @@ export class LootTracker {
   private resetPerInstance(): void {
     this.localPlayerId = null
     this.slotValues.clear()
+    this.pendingSwapSlots.clear()
   }
 
   /** Full reset (overlay detach / game close) - also clears the session log itself. */
