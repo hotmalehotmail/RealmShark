@@ -33,7 +33,7 @@ step that *runs* (driven) but is *not gated* (unenforced), or vice-versa.
 | 3 | Build agent → branch + PR | routine session (Opus 4.8) | GitHub App push scope; `claude/*` branch convention | 🟢 |
 | 4 | CI ground-truth checks | `pull_request` → `ci.yml` | branch protection required checks | 🟢 |
 | 5 | Independent review | `pull_request` → `review.yml` | workflow-validation guard | 🟢 verdict live |
-| 6 | Fix loop (review → re-fire builder, capped) | `workflow_run` of `review` → `fixloop.yml`; `agent:retry` → `resume.yml`; conflict → `gatekeeper.yml` rebase | `review-verdict` status; `MAX_FIX_ROUNDS`; `agent:needs-human` freeze | 🟡 re-fire + escalate + resume + conflict-rebase built; live-verify pending |
+| 6 | Fix loop (review → re-fire builder, capped) | `workflow_run` of `review` → `fixloop.yml`; `agent:retry` → `resume.yml`; conflict → `conflict-watch.yml` (+ sweep backstop) rebase | `review-verdict` status; `MAX_FIX_ROUNDS` (review) + `MAX_REBASE_ROUNDS` (conflicts); `agent:needs-human` freeze | 🟡 re-fire + escalate + resume + conflict-rebase built; live-verify pending |
 | 7 | Gatekeeper auto-merge | `workflow_run` → arm auto-merge | native auto-merge + required checks | 🟢 verified (#19) |
 | 8 | Release (ship button) | `workflow_dispatch` → `release.yml` | manual-only dispatch | 🟢 (captain notes + auto-bump built) |
 | 9 | Alpha soak → promote or fix | `soak:pass`/`soak:fail` labels; auto-cut on staging merge; latest-on-promotion | maintainer-only labels; `soak:pass` = stamped `review-verdict` on the promotion PR | 🟡 built pending deploy (PRs #41 #42) — fix-forward, auto-cut, labels, PR-based promote (no token) |
@@ -214,10 +214,12 @@ linchpin for §6 and §7. How it works:
 **Status.** 🟡 Partial — the full loop (converge + escalate + resume) is built; live
 verification is not. **Built:** `.github/workflows/fixloop.yml` (`on: workflow_run` of
 `review` → read `review-verdict` → round-count → re-fire in FIX MODE or escalate, per
-§6.1/§6.2), `.github/workflows/resume.yml` (`agent:retry` label → reset budget →
-re-fire, §6.3) + the `agent:retry` repo label, and the FIX-MODE branch of the routine
-prompt ([build-agent-routine.md](build-agent-routine.md)). **Still to build:** the
-gatekeeper's rebase-FIX-MODE on conflict (§6.5), and an end-to-end live verification
+§6.1/§6.2), `.github/workflows/resume.yml` (`agent:retry` label → reset both budgets →
+re-fire, §6.3) + the `agent:retry` repo label, the FIX-MODE branch of the routine
+prompt ([build-agent-routine.md](build-agent-routine.md)), and the conflict-rebase
+path (§6.5 — `conflict-watch.yml` + the sweep backstop, sharing
+`.github/scripts/rebase-refire.sh` and its own `MAX_REBASE_ROUNDS` budget).
+**Still to build:** an end-to-end live verification
 (the loop hasn't yet run against a real change-request). Until the routine's live
 prompt is re-pasted with the FIX-MODE block, a re-fire is a no-op. **Activation:**
 `fixloop.yml` fires only from the default branch (`workflow_run`), so both workflows
@@ -377,46 +379,94 @@ strips them on merge). Nothing about the escalation leaves residue once resolved
   shares the §1 `/fire` plumbing).
 - ✅ Repo variable `MAINTAINER_HANDLE` (escalation @-mention/assignee) — already set.
 - ✅ §5 verdict (hard dependency) — done.
-- ✅ `resume.yml` (`on: pull_request` labeled `agent:retry` → delete the `fixloop:refire`
-  marker comments to reset the budget → re-fire in FIX MODE) — **built.** Uses `GITHUB_TOKEN`.
+- ✅ `resume.yml` (`on: pull_request_target` labeled `agent:retry` → delete the
+  `fixloop:refire` AND `conflictwatch:refire` marker comments to reset both budgets →
+  re-fire in FIX MODE, with a rebase note when the PR is conflicted) — **built.** Uses
+  `GITHUB_TOKEN`. `pull_request_target` (not `pull_request`) because GitHub creates no
+  `pull_request` runs for a conflicted PR — the old trigger made `agent:retry` silently
+  dead on conflict-frozen PRs; fork PRs are excluded by a job guard.
 - ✅ A repo label `agent:retry` (maintainer-applied resume trigger) — **created.**
-- ✅ **Conflict → rebase FIX MODE** — **built** in `gatekeeper.yml` (§6.5): on an
-  otherwise-green but `CONFLICTING` PR it re-fires FIX MODE with a rebase instruction,
-  sharing the `<!-- fixloop:refire -->` marker + `MAX_FIX_ROUNDS` budget, and freezes
-  (`agent:needs-human`) if the conflict outlives the budget.
+- ✅ **Conflict → rebase FIX MODE** — **built** in `conflict-watch.yml` +
+  `.github/scripts/rebase-refire.sh` (§6.5), with `sweep.yml` as the level-triggered
+  backstop: fires FIX MODE with a rebase instruction on the events a conflicted PR
+  actually emits, marks attempts with `<!-- conflictwatch:refire base=<sha> -->`
+  (its own `MAX_REBASE_ROUNDS` budget, separate from `MAX_FIX_ROUNDS`), and freezes
+  (`agent:needs-human`) if the conflict outlives the budget. (Previously a
+  `gatekeeper.yml` branch on the shared fixloop budget — structurally dead for
+  born-conflicted PRs, which emit no ci/review runs for `workflow_run` to hear.)
 - 🔲 Live end-to-end verification against a real change-request.
 - **No `GATEKEEPER_TOKEN` / PAT** — the `workflow_run` trigger (§6.1) sidesteps the
   recursion guard, and the re-fire happens through the routine (the `app/claude`
   App pushes, which already re-triggers CI/review). So the whole loop runs on the
   built-in `GITHUB_TOKEN` + the existing `ROUTINE_FIRE_TOKEN`.
 
-### 6.5 · Merge conflicts — nothing force-merges; it stalls, then rebases
+### 6.5 · Merge conflicts — nothing force-merges; conflict-watch rebases
 
 A `claude/*` PR that conflicts with `staging` is `mergeable: false` /
 `mergeStateStatus: DIRTY`. **GitHub's native auto-merge refuses a conflicted PR and
 disables itself**, so a conflict *never* produces a bad merge — the PR simply
-stalls. Handling:
+stalls. The recovery is event-driven, and the events matter, because a conflicted
+PR is nearly invisible to the rest of the loop: **GitHub creates no `pull_request`
+workflow runs while a PR has a merge conflict** (it can't build the `refs/pull/N/merge`
+ref those runs are defined on), so ci and review never start, so the
+`workflow_run`-triggered gatekeeper/fixloop never hear about the PR at all. A PR
+*born* conflicted (opened after a sibling merged first — the normal parallel-issue
+race) therefore produces **zero** events on the old design and stranded silently
+(this bit PRs #111/#112 on 2026-07-12).
 
-- When the gatekeeper (§7) evaluates an otherwise-green PR and finds it `DIRTY`, it
-  does **not** merge. Instead it re-fires the builder in **FIX MODE with a rebase
-  instruction**: *"merge `origin/staging` into `claude/<slug>`, resolve the
-  conflicts, push — do not open a new PR."* This reuses the §6.1 re-fire path.
-- The push emits `synchronize` → CI + review re-run on the resolved tree → a fresh
-  verdict, exactly like a normal fix round.
-- It counts against the **same `MAX_FIX_ROUNDS` cap** and escalates via §6.2 (the
-  `agent:needs-human` flow) if the agent can't resolve the conflict within budget —
-  so a genuinely hard conflict lands on your desk instead of looping forever.
+**`conflict-watch.yml`** owns recovery, listening on the two events a conflict does
+produce:
 
-**Status.** 🟢 Built in `gatekeeper.yml`. When the gate evaluates an
-otherwise-green PR (`review-verdict = success`) whose `mergeable = CONFLICTING`, it
-re-fires FIX MODE with the rebase instruction above, marks the attempt with the shared
-`<!-- fixloop:refire -->` marker (so review-fix and rebase rounds share the one
-`MAX_FIX_ROUNDS` budget), and — once the budget is spent on a still-conflicting PR —
-freezes it with `agent:needs-human` + a maintainer @-mention. **Known limitation:** the
-gate fires on the PR's own `ci`/`review` completion, so a PR that goes `CONFLICTING`
-only because `staging` advanced *after* it was armed isn't re-evaluated until its own
-checks next run; native auto-merge disables itself on the conflict, so it stalls
-(safely) rather than mis-merging.
+1. **`pull_request_target` (`opened`/`reopened`/`synchronize`)** — runs in the base
+   branch's context, no merge ref needed, so it fires even for a conflicted PR.
+   Catches the born-conflicted case within seconds. (Security: fork PRs are excluded
+   by the job guard, and nothing from the PR head is ever checked out — see the
+   workflow header. `review.yml` stays `on: pull_request`; that invariant is
+   untouched.)
+2. **`push` to `staging`** — the moment a sibling merge *creates* conflicts on the
+   other open agent PRs (their own events never fire; the base moved, not their
+   heads). Scans all open same-repo `claude/*` PRs.
+
+Both paths call **`.github/scripts/rebase-refire.sh`** — the single owner of the
+rebase re-fire — which re-fires the **originating builder** in FIX MODE with the
+rebase instruction: *"merge `origin/staging` into `claude/<slug>`, resolve the
+conflicts, push — do not open a new PR."* The push emits `synchronize` → CI + review
+run on the resolved tree → a fresh verdict, exactly like a normal fix round.
+
+**Separate budget (deliberate).** Rebase attempts are marked
+`<!-- conflictwatch:refire base=<staging-sha> -->` and capped by
+**`MAX_REBASE_ROUNDS` (5) per staging head** — *not* the fix loop's
+`MAX_FIX_ROUNDS`, and *not* a lifetime count. With N parallel agent PRs, every
+sibling merge legitimately re-rebases the others; on a shared or lifetime budget
+that churn could freeze an innocent PR that never failed to converge. Counting only
+markers whose `base=` is the *current* staging head makes the cap measure
+non-convergence (repeated failures against one staging state) — a successful rebase
+leaves its marker behind on a superseded base, and the budget naturally resets when
+`staging` moves. The escalation guarantee is unchanged: a conflict that outlives its
+budget on one staging head freezes the PR with `agent:needs-human` + a maintainer
+@-mention. The embedded staging SHA also dedupes:
+an `opened`/`push`/sweep event won't re-fire while an agent is already rebasing onto
+the current staging head (a same-base marker older than ~2 h is considered a dead
+agent and re-fired; a `synchronize` event — a fresh head push, i.e. the previous
+attempt concluded — never dedupes). While a **soak** is open, non-soak-fix PRs are
+deferred (their budgets aren't churned by soak-fix merges; sweep re-fires any
+still-DIRTY PR after the thaw).
+
+**Backstops.** `sweep.yml`'s DIRTY branch calls the same script on its ~30-min cron
+(dropped events self-heal; sweep shares conflict-watch's concurrency group so an
+overlapping cron can't double-fire an in-flight rebase — the marker read/post isn't
+atomic), and `resume.yml`'s `agent:retry` resets **both** budgets
+(it too runs on `pull_request_target`, so it works on the conflicted PRs it exists to
+rescue). The gatekeeper does nothing on `DIRTY` — arming is impossible there and the
+re-fire is no longer its job.
+
+**Status.** 🟢 Built (`conflict-watch.yml` + `rebase-refire.sh` + the sweep/resume
+changes above), replacing the earlier `gatekeeper.yml` branch, which shared
+`MAX_FIX_ROUNDS` and — being `workflow_run`-triggered — could never see a
+born-conflicted PR. **Activation:** the `pull_request_target`/`push` triggers read
+the workflow from the event's base branch, so conflict-watch and resume are live once
+merged to `staging`; the sweep backstop is `schedule`-triggered (default branch) and
+activates on promotion to `bridge`, like `fixloop.yml`.
 
 *Optional hardening:* branch protection's **"require branches up to date before
 merging"** (`strict`, currently off) surfaces staleness earlier by forcing a rebase
@@ -451,7 +501,7 @@ checks went green.
   merge. A **loud preflight** validates the PAT and fails the run on an expired/missing token
   rather than silently arming with `GITHUB_TOKEN`.
 - **On verdict = failure** it does nothing; §6 owns that path.
-- **On conflict (`DIRTY`)** it does not merge; it re-fires the rebase FIX MODE (§6.5).
+- **On conflict (`DIRTY`)** it does not merge and does nothing further — arming is impossible on a DIRTY PR, and `conflict-watch.yml` owns the rebase re-fire (§6.5).
 - **Prerequisites.** Enable the repo's **"Allow auto-merge"** setting (a repo toggle,
   not a token). The arming itself uses **`MERGE_PAT`** (see 9.3) so the merge fires
   `post-merge`.
@@ -470,6 +520,10 @@ with a plain `gh pr merge` (**no `--admin`**) so branch protection — crucially
 — still gates. A fork PR can't obtain `review-verdict` (no secrets on a `pull_request` from a
 fork), so the sweep can never merge one; this depends on `review.yml` staying `on: pull_request`
 (never `pull_request_target`). Same `MERGE_PAT` + loud preflight as the other merge paths.
+The sweep is also the **level-triggered backstop for §6.5**: a `DIRTY` candidate is no longer
+skipped — it's re-fired through the same `.github/scripts/rebase-refire.sh` (same separate
+rebase budget, same staging-SHA dedupe), so a dropped conflict-watch event self-heals within
+a sweep cycle.
 
 **Known narrow gap (frozen-PR recovery is edge-triggered).** The §6.3(b) auto-clear — a frozen
 (`agent:needs-human`) PR that goes green again is un-frozen and armed by the gatekeeper — fires
@@ -870,7 +924,7 @@ Each item unlocks the next; do them in this order.
    auto-merged into `staging` with zero human action (PR #25). **The happy path now
    closes.**
 6. **Fix loop** (§6) — `fixloop.yml` (re-fire + escalate), `resume.yml` (`agent:retry`
-   reset), `gatekeeper.yml` conflict-rebase (§6.5), the `agent:retry` label, and the
+   reset), `conflict-watch.yml` conflict-rebase (§6.5), the `agent:retry` label, and the
    FIX-MODE routine-prompt branch are **built and activated** (on `bridge`; live prompt
    pasted). What remains: a live end-to-end run to move §6 from 🟡 to verified.
 7. ~~**Workflow-parity guard** → prevents §5 from silently regressing.~~ **✅ Done &
