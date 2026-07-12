@@ -63,6 +63,11 @@ jobs:
           # which would print a second 0 next to grep's own).
           N="$(grep -c . "$GITHUB_WORKSPACE/commits.txt" || true)"
           echo "Collected ${N:-0} commit(s) in range $RANGE."
+          # PR list for the soak issue: the content PRs in this build. Squash-merged PRs carry
+          # "(#N)" in their subject (GitHub auto-links the number); merge-commit syncs/promotions
+          # are intentionally excluded as plumbing. Reuse commits.txt; placeholder if none.
+          grep -E '\(#[0-9]+\)' "$GITHUB_WORKSPACE/commits.txt" > "$GITHUB_WORKSPACE/pr-list.md" || true
+          [ -s "$GITHUB_WORKSPACE/pr-list.md" ] || echo "_(no pull requests in this build)_" > "$GITHUB_WORKSPACE/pr-list.md"
 
       - name: Draft release notes (Haiku)
         id: captain
@@ -70,10 +75,17 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Allow the CI dispatcher bot to run the captain. claude-code-action blocks
+          # bot-initiated runs by default; an auto-cut release (post-merge.yml) dispatches
+          # release.yml as github-actions[bot], so without this the captain fails with
+          # "Workflow initiated by non-human actor" and the release falls back to static
+          # notes. Safe: release is only dispatchable by a maintainer or the trusted
+          # post-merge auto-cut, and the captain only has Read,Write on commits.txt.
+          allowed_bots: "github-actions,github-actions[bot]"
           claude_args: "--model claude-haiku-4-5 --allowedTools Read,Write"
           prompt: |
             Draft concise, user-facing release notes in GitHub-flavored markdown for the
-            RealmShark Overlay "${{ inputs.channel }}" release, covering changes since
+            Thessal overlay "${{ inputs.channel }}" release, covering changes since
             ${{ steps.commits.outputs.last_tag }}.
 
             The raw Conventional Commits are in commits.txt (read it). Rewrite them into
@@ -89,7 +101,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-notes
-          path: release-notes.md
+          path: |
+            release-notes.md
+            pr-list.md
           if-no-files-found: warn
 
   build-and-publish:
@@ -206,8 +220,10 @@ jobs:
           set -euo pipefail
           NOTES_FILE="notes/release-notes.md"
           if [ -s "$NOTES_FILE" ]; then CHANGES="$(cat "$NOTES_FILE")"; else CHANGES="_(see the release for the change list)_"; fi
-          BODY="$(printf 'Installer to test: %s\n\n### What changed\n%s\n\n### To verify\nInstall on the Windows PC and test against the live game, then apply a verdict label:\n\n- ✅ **Works** — apply `soak:pass`. Promotes `staging` to `bridge` and cuts a **latest** release.\n- ❌ **Broken** — describe each bug below (steps / expected / actual; add a FakePacketSource repro capture for packet/DPS/decode bugs), then apply `soak:fail`. The build agent fixes forward and a fresh alpha auto-cuts for re-soak.\n\n> While this soak is open, any change merged to `staging` auto-cuts a fresh alpha and supersedes this issue.' \
-            "$REL_URL" "$CHANGES")"
+          PR_FILE="notes/pr-list.md"
+          if [ -s "$PR_FILE" ]; then PRS="$(cat "$PR_FILE")"; else PRS="_(PR list unavailable)_"; fi
+          BODY="$(printf 'Installer to test: %s\n\n### What changed\n%s\n\n### Pull requests in this build\n%s\n\n### To verify\nTest against the live game, then apply a verdict label:\n\n- ✅ **Works** — apply `soak:pass`. Promotes `staging` to `bridge` and cuts a **latest** release.\n- ❌ **Broken** — describe each bug below (steps / expected / actual; add a FakePacketSource repro capture for packet/DPS/decode bugs), then apply `soak:fail`. The build agent fixes forward and a fresh alpha auto-cuts for re-soak.\n\n> While this soak is open, any change merged to `staging` auto-cuts a fresh alpha and supersedes this issue.' \
+            "$REL_URL" "$CHANGES" "$PRS")"
           gh label create soak --repo "$GITHUB_REPOSITORY" --color 5319E7 --description "Alpha soak tracking issue" --force >/dev/null 2>&1 || true
           NEW_URL="$(gh issue create --repo "$GITHUB_REPOSITORY" --title "🧪 Alpha soak: v$VERSION" --label soak --body "$BODY")"
           NEW_NUM="${NEW_URL##*/}"
