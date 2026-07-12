@@ -15,6 +15,35 @@ import {
 
 const WINDOW_MS = 8000
 
+/**
+ * A sustained direct-attack streak on a target this long overrides the sticky
+ * boss lock (see `onLocalHit`) - the local player deliberately committing to
+ * something other than the quest objective for 2+ seconds straight, not a
+ * stray AoE tick, wins focus back from the boss.
+ */
+const SUSTAINED_ATTACK_MS = 2000
+
+/**
+ * `MapInfoPacket.displayName` is the raw localization key the real client
+ * resolves client-side through its own string table - RealmShark only sees
+ * the wire value, so a key the client would normally show as a proper name
+ * can arrive unresolved (literally e.g. `"{s.rotmg}"`, observed for the
+ * open-world Realm, which has no dungeon-style display name of its own).
+ * Known keys map to a hand-picked friendly label; anything else shaped like
+ * an unresolved key (`{...}`) falls back to a generic label rather than
+ * leaking the raw key into the UI.
+ */
+const KNOWN_UNRESOLVED_DISPLAY_NAMES: Record<string, string> = {
+  '{s.rotmg}': 'The Realm'
+}
+
+function resolveInstanceDisplayName(displayName: string): string {
+  const known = KNOWN_UNRESOLVED_DISPLAY_NAMES[displayName]
+  if (known) return known
+  if (/^\{.*\}$/.test(displayName)) return 'Unknown Realm'
+  return displayName
+}
+
 /** packets/data/enums/StatType.java: the stats a player's cosmetic loadout is carried on. */
 const SKIN_ID_STAT_TYPE_NUM = 25
 const INVENTORY_0_STAT_TYPE_NUM = 8
@@ -105,16 +134,23 @@ export const EMPTY_SNAPSHOT: DpsSnapshot = { targetId: null, targetName: '', row
 
 /**
  * Tracks damage-per-second per enemy target. When a quest objective is active
- * (QuestObjectIdPacket - the game's own boss/objective marker in a dungeon),
- * focus locks onto that entity and stays there ("sticky") even while AoEing
- * other enemies, only moving when the locked target dies/despawns or a new
- * quest objective is set - a boss phase change re-points the objective at the
- * next phase's objectId, and the prior phase's per-player damage is carried
- * forward so the total doesn't reset. Outside a quest objective (e.g. open
- * world) it falls back to focusing whichever enemy the local player last hit.
- * Reset on instance change (MapInfoPacket) and meant to also be reset
- * externally when the game closes (electron-overlay-window's "detach" event) -
- * both wipe the same state, just triggered from different places.
+ * (QuestObjectIdPacket - the game's own boss/objective marker in a dungeon)
+ * AND the local player has actually landed a hit on it, focus locks onto that
+ * entity and stays there ("sticky") even while AoEing other enemies. An
+ * objective that's active but never damaged by the local player does NOT
+ * lock - focus keeps following last-hit until the player actually reaches
+ * the boss (see `bossDamagedByLocal`). Once locked, the lock only moves when
+ * (a) the locked target dies/despawns, (b) a new quest objective is set - a
+ * boss phase change re-points the objective at the next phase's objectId,
+ * and the prior phase's per-player damage is carried forward so the total
+ * doesn't reset - or (c) the player continuously attacks a different target
+ * for `SUSTAINED_ATTACK_MS` straight, which overrides the lock (a deliberate
+ * switch away from the boss, not a stray AoE tick - see `onLocalHit`).
+ * Outside a quest objective (e.g. open world) it falls back to focusing
+ * whichever enemy the local player last hit. Reset on instance change
+ * (MapInfoPacket) and meant to also be reset externally when the game closes
+ * (electron-overlay-window's "detach" event) - both wipe the same state, just
+ * triggered from different places.
  *
  * The local player's objectId is resolved from two sources: CreateSuccessPacket
  * (authoritative but sent only once, at map load - missed if we attach
@@ -144,6 +180,19 @@ export class DpsTracker {
   private lockedBossId: number | null = null
   /** Whether `lockedBossId`'s entity is still alive - false once it dies/despawns, until a new objective re-locks. */
   private bossAlive = false
+  /**
+   * Whether the local player has actually landed damage on the *current* boss
+   * encounter (persists across a phase's objectId change, since that's still
+   * the same encounter - see `ingestQuestObjectId`). Gates the sticky lock
+   * itself: an objective can be locked-and-alive with this still false (the
+   * player hasn't reached the boss yet), in which case last-hit focus keeps
+   * following whatever the player is actually attacking instead of jumping to
+   * a boss they haven't touched.
+   */
+  private bossDamagedByLocal = false
+  /** The target of the local player's current unbroken direct-attack streak, and when it started - see SUSTAINED_ATTACK_MS. */
+  private localStreakTargetId: number | null = null
+  private localStreakStartedAt: number | null = null
   /**
    * Per-attacker damage carried forward from earlier phases of the current
    * boss lock (keyed by attacker objectId), accumulated in carryForwardBossDamage
@@ -183,7 +232,7 @@ export class DpsTracker {
           this.retainInstanceIfQualifying()
           this.reset()
           const mapInfo = envelope.data as MapInfoPacketData | null
-          this.currentInstanceName = mapInfo?.displayName ?? ''
+          this.currentInstanceName = resolveInstanceDisplayName(mapInfo?.displayName ?? '')
           break
         }
         case 'UpdatePacket':
@@ -199,7 +248,7 @@ export class DpsTracker {
           this.ingestShoot(envelope.data as ServerPlayerShootPacketData)
           break
         case 'EnemyHitPacket':
-          this.ingestEnemyHit(envelope.data as EnemyHitPacketData)
+          this.ingestEnemyHit(envelope.data as EnemyHitPacketData, envelope.time)
           break
         case 'DamagePacket':
           this.ingestDamage(envelope.data as DamagePacketData, envelope.time)
@@ -361,7 +410,7 @@ export class DpsTracker {
    * attacking, so it also gives us the focus target directly, without having
    * to wait for a DamagePacket to match our (possibly still-unknown) id.
    */
-  private ingestEnemyHit(data: EnemyHitPacketData): void {
+  private ingestEnemyHit(data: EnemyHitPacketData, time: number): void {
     // Prefer mainID (always the player, even for pet/minion hits); fall back to
     // shooterID if a client build ever sends mainID as 0/absent.
     const playerId = Number.isFinite(data.mainID) && data.mainID > 0 ? data.mainID : data.shooterID
@@ -370,7 +419,7 @@ export class DpsTracker {
       this.localPlayerId = playerId
     }
     if (Number.isFinite(data.targetId)) {
-      this.onLocalHit(data.targetId)
+      this.onLocalHit(data.targetId, time)
       // `kill` is only set on the hit that actually finishes the target off -
       // a direct, immediate despawn signal for whoever gets the killing blow.
       if (data.kill) this.onBossDespawn(data.targetId)
@@ -378,15 +427,54 @@ export class DpsTracker {
   }
 
   /**
-   * The local player's shot/damage landed on `targetId`. While a quest
-   * objective is locked and still alive, this is ignored entirely - AoEing
-   * adds must not steal focus from the boss (issue: sticky DPS focus). Once
-   * that lock ends (no objective, or the locked target died/despawned), this
-   * drives the last-hit fallback focus.
+   * The local player's shot/damage landed on `targetId`. Three cases:
+   *
+   * 1. `targetId` is the locked boss - marks it as actually engaged
+   *    (`bossDamagedByLocal`) and takes focus, always (a hit on the boss
+   *    reclaims focus even mid sustained-attack-override, since the player is
+   *    no longer sustaining the other target - see case 3).
+   * 2. A quest objective is locked, alive, and already damaged by the local
+   *    player, and `targetId` is anything else - normally a no-op (AoEing
+   *    adds must not steal focus from an engaged boss - issue: sticky DPS
+   *    focus), UNLESS the player has been continuously attacking `targetId`
+   *    for `SUSTAINED_ATTACK_MS` straight (a deliberate switch away from the
+   *    boss, not a stray tick), which overrides the lock.
+   * 3. No boss lock in effect (none active, or not yet damaged) - drives the
+   *    last-hit fallback focus as before.
    */
-  private onLocalHit(targetId: number): void {
-    if (this.lockedBossId !== null && this.bossAlive) return
+  private onLocalHit(targetId: number, nowMs: number): void {
+    this.updateLocalStreak(targetId, nowMs)
+
+    if (this.lockedBossId !== null && targetId === this.lockedBossId) {
+      if (!this.bossDamagedByLocal) {
+        dlog('boss damaged by local player -> locking DPS focus', targetId)
+      }
+      this.bossDamagedByLocal = true
+      this.focusTargetId = targetId
+      return
+    }
+
+    if (this.lockedBossId !== null && this.bossAlive && this.bossDamagedByLocal) {
+      if (this.localStreakDurationMs(nowMs) >= SUSTAINED_ATTACK_MS) {
+        dlog('sustained attack ->', targetId, '- overriding sticky boss lock')
+        this.focusTargetId = targetId
+      }
+      return
+    }
+
     this.maybeSwitchFallbackFocus(targetId)
+  }
+
+  /** Tracks the local player's unbroken direct-attack streak on one target, for the sustained-attack boss-lock override. */
+  private updateLocalStreak(targetId: number, nowMs: number): void {
+    if (this.localStreakTargetId !== targetId) {
+      this.localStreakTargetId = targetId
+      this.localStreakStartedAt = nowMs
+    }
+  }
+
+  private localStreakDurationMs(nowMs: number): number {
+    return this.localStreakStartedAt === null ? 0 : nowMs - this.localStreakStartedAt
   }
 
   /**
@@ -412,10 +500,22 @@ export class DpsTracker {
 
   /**
    * The current quest objective changed (QuestObjectIdPacket.objectId) - the
-   * game's own boss/objective marker, e.g. a dungeon's main boss. Locks DPS
-   * focus onto it (sticky - see onLocalHit) and, if a boss was already locked,
-   * carries its accumulated per-player damage forward so a phase/form change
-   * (a new objectId) doesn't reset the fight's total.
+   * game's own boss/objective marker, e.g. a dungeon's main boss. Arms the
+   * sticky lock (see onLocalHit) and, if a boss was already locked, carries
+   * its accumulated per-player damage forward so a phase/form change (a new
+   * objectId) doesn't reset the fight's total.
+   *
+   * Does NOT force `focusTargetId` onto a boss the local player hasn't
+   * damaged yet (`bossDamagedByLocal` false) - the panel keeps following
+   * whatever the player is actually attacking (last-hit) until they land a
+   * hit on the objective, at which point `onLocalHit` takes over. A phase
+   * transition on an already-engaged encounter (`bossDamagedByLocal` true,
+   * carried over below) does still snap focus straight to the new phase,
+   * since that's a continuation of a fight already in progress - but only
+   * if the previous lock is still alive; if it already died (`bossAlive`
+   * false), this is a genuinely new objective rather than a phase
+   * transition, so `bossDamagedByLocal` resets the same as a fresh
+   * encounter (see the `lockedBossId === null` branch below).
    */
   private ingestQuestObjectId(data: QuestObjectIdPacketData): void {
     const newId = data.objectId
@@ -423,12 +523,17 @@ export class DpsTracker {
     if (this.lockedBossId !== null) {
       this.carryForwardBossDamage(this.lockedBossId)
       this.bossPhaseIds.add(this.lockedBossId)
+      if (!this.bossAlive) this.bossDamagedByLocal = false
+    } else {
+      this.bossDamagedByLocal = false
     }
-    dlog('quest objective ->', newId, `(${this.nameOf(newId)}) - locking DPS focus`)
+    dlog('quest objective ->', newId, `(${this.nameOf(newId)}) - arming sticky DPS lock`)
     this.lockedBossId = newId
     this.bossAlive = true
-    this.focusTargetId = newId
     this.bossPhaseIds.add(newId)
+    if (this.bossDamagedByLocal) {
+      this.focusTargetId = newId
+    }
   }
 
   /**
@@ -505,7 +610,7 @@ export class DpsTracker {
     }
 
     if (this.localPlayerId !== null && attackerId === this.localPlayerId) {
-      this.onLocalHit(data.targetId)
+      this.onLocalHit(data.targetId, time)
     }
   }
 
@@ -521,6 +626,9 @@ export class DpsTracker {
     this.enemyMaxHp.clear()
     this.lockedBossId = null
     this.bossAlive = false
+    this.bossDamagedByLocal = false
+    this.localStreakTargetId = null
+    this.localStreakStartedAt = null
     this.bossCarry.clear()
     this.objectTypes.clear()
     this.playerCosmetics.clear()
