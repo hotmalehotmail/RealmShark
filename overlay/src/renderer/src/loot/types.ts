@@ -26,24 +26,19 @@ export interface NewTickPacketData {
   status?: ObjectStatusData[]
 }
 
-/** packets/data/SlotObjectData.java field names verbatim - see packets/outgoing/InvSwapPacket.java. */
-export interface SlotObjectEntry {
-  objectId?: number
-  slotId?: number
-}
-
-/** packets/outgoing/InvSwapPacket.java - sent by the client on any inventory-slot swap (equip, unequip, bag rearrange, or a ground-loot pickup drag). */
-export interface InvSwapPacketData {
-  slotFrom?: SlotObjectEntry
-  slotTo?: SlotObjectEntry
-}
-
 /** bridge/LootBagTypes.java's synthetic {type:"lootBagTypes"} envelope payload. */
 export interface LootBagTypesData {
   /** item objectType -> BagType (only 6/white or 8/orange entries are sent). */
   bagTypeTable?: Record<string, number>
-  /** BagType -> the ground-bag entity's own objectType (its category-header sprite). */
+  /** BagType -> a representative ground-bag entity objectType (the panel's category-header sprite). */
   lootBagIcons?: Record<string, number>
+  /**
+   * loot-bag ENTITY objectType -> BagType (6/8), for *every* tracked bag entity
+   * (regular + boosted variants). This is the set of world objectTypes the drop
+   * tracker watches for in UpdatePacket.newObjects to read a dropped bag's
+   * contents - distinct from lootBagIcons (one representative per color).
+   */
+  lootBagObjectTypes?: Record<string, number>
   /** item objectType -> display name, for the tracked BagType items only. */
   itemNames?: Record<string, string>
 }

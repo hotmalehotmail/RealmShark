@@ -381,10 +381,12 @@ exposed via:
 
 **`bridge/LootBagTypes.java`** is the only consumer: it builds `bagTypeTable`
 (item id → BagType, filtered to 6/8 and excluding `Class=Bag` entries so a bag
-entity can't be mistaken for a pickupable item), `lootBagIcons` (BagType →
-bag entity id, via `findBagIconObjectType`), and `itemNames` (item id →
-`IdToAsset.objectName`) for the tracked items, and ships them as the
-synthetic `lootBagTypes` envelope - see
+entity can't be mistaken for a pickupable item), `lootBagObjectTypes` (the
+complement — every `Class=Bag` **entity** id for the tracked colors, incl.
+boosted variants, that the overlay's drop tracker watches for), `lootBagIcons`
+(BagType → one representative bag entity id, via `findBagIconObjectType`), and
+`itemNames` (item id → `IdToAsset.objectName`) for the tracked items, and ships
+them as the synthetic `lootBagTypes` envelope - see
 [bridge-server.md](bridge-server.md#6-lootbagtypes--synthetic-loot-categorization)
 for the bridge-side broadcast mechanics and
 [architecture.md](architecture.md) for the exact wire shape. Deliberately

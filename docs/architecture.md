@@ -16,7 +16,7 @@ the wire.
 | `src/main/java/bridge/PacketSerializer.java` | Packet → `{type,direction,time,data}` JSON envelope (Gson). |
 | `src/main/java/bridge/ObjectNames.java` | Synthetic `objectNames` envelope (enemy id → display name). |
 | `src/main/java/bridge/DpsBroadcaster.java` | Synthetic `dps` snapshot envelope (bridge-computed damage). |
-| `src/main/java/bridge/LootBagTypes.java` | Synthetic `lootBagTypes` envelope (item id → BagType, bag-color icon ids). |
+| `src/main/java/bridge/LootBagTypes.java` | Synthetic `lootBagTypes` envelope (item id → BagType, bag-entity ids incl. boosted, bag-color icon ids). |
 | `src/main/java/bridge/ItemInfo.java` | Synthetic `itemInfo` envelope (item id → name/tier/class/description/damage, for the item tooltip - issue #109). |
 | `src/main/java/bridge/EnchantNames.java` | Synthetic `enchantNames` envelope (enchant id → name, for the item tooltip). |
 | `src/main/java/bridge/sprites/SpritePackService.java` | `spritePack` request/response + one-shot broadcast. |
@@ -317,6 +317,7 @@ Loot panel's session log (issue #105) — from the same extracted asset data
   "data": {
     "bagTypeTable": { "<itemObjectType>": 6 },
     "lootBagIcons": { "6": <bagObjectType>, "8": <bagObjectType> },
+    "lootBagObjectTypes": { "<bagObjectType>": 6, "<bagObjectType>": 8 },
     "itemNames": { "<itemObjectType>": "<display name>" }
   }
 }
@@ -325,14 +326,16 @@ Loot panel's session log (issue #105) — from the same extracted asset data
 `bagTypeTable` maps a **string** item objectType to its BagType (only 6/8
 entries — untracked BagTypes are omitted, and the ground-bag entities
 themselves, `Class=Bag`, are excluded so they can't be mistaken for
-pickupable items). `lootBagIcons` maps each tracked BagType to the objectType
-of the `Class=Bag` entity that self-identifies as that color — the sprite the
-Loot panel renders as a category header, resolved through the same
-`objectType → atlas rect` path as any other sprite (`sprites/Sprite.tsx`, no
-special-casing). `itemNames` is `IdToAsset.objectName` for the same tracked
-items, since the item pickup itself has no `UpdatePacket`/`objectId` of its
-own to hang an `objectNames` entry off. Built by `LootBagTypes.envelopeJson()`
-(`bridge/LootBagTypes.java`).
+pickupable items). `lootBagObjectTypes` is the complement: every `Class=Bag`
+**entity** objectType for the tracked colors (regular *and* boosted variants),
+mapped to its BagType — the set the Loot panel's drop tracker watches for in
+`UpdatePacket.newObjects` to read a dropped bag's contents (its
+`INVENTORY_0..7` items + `UNIQUE_DATA_STRING` enchants). `lootBagIcons` is a
+single representative bag entity per color — the sprite the Loot panel renders
+as a category header, resolved through the same `objectType → atlas rect` path
+as any other sprite (`sprites/Sprite.tsx`, no special-casing). `itemNames` is
+`IdToAsset.objectName` for the tracked items (the always-visible inline label).
+Built by `LootBagTypes.envelopeJson()` (`bridge/LootBagTypes.java`).
 
 **Unlike the sprite pack (one-shot broadcast), this is re-sent on every 2 s
 readiness poll** once `IdToAsset.loadedObjectCount() > 1`

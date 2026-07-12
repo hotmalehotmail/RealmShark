@@ -443,13 +443,15 @@ plumbing.
   (bypassing real extraction, which needs a game install), which is enough to
   satisfy `ready()` and demonstrate the Loot panel with no game or atlas at
   all - see §7 below.
-- **`envelopeJson()`** — walks `IdToAsset.objectIds()` once, filters to ids
-  whose `getBagType(id)` is 6 or 8 and whose `getClazz(id)` is **not**
-  `"Bag"` (excluding the ground-bag entities themselves from the item table),
-  and builds `bagTypeTable` (item id → BagType) + `itemNames` (item id →
-  `IdToAsset.objectName`). Separately, `IdToAsset.findBagIconObjectType(bagType)`
-  resolves each tracked BagType's own `Class=Bag` entity id into
-  `lootBagIcons`. Cached and only rebuilt when `IdToAsset.loadedObjectCount()`
+- **`envelopeJson()`** — walks `IdToAsset.objectIds()` once, keeping ids whose
+  `getBagType(id)` is 6 or 8. A `Class=Bag` **entity** among them goes into
+  `lootBagObjectTypes` (bag entity id → BagType — the set the overlay's drop
+  tracker watches for, covering regular *and* boosted variants per color);
+  every other such id is an item, added to `bagTypeTable` (item id → BagType) +
+  `itemNames` (item id → `IdToAsset.objectName`). Separately,
+  `IdToAsset.findBagIconObjectType(bagType)` resolves each tracked BagType's one
+  representative `Class=Bag` entity id into `lootBagIcons` (the panel's category
+  header sprite). Cached and only rebuilt when `IdToAsset.loadedObjectCount()`
   changes (a reload), so repeated polling is cheap.
 - **Envelope shape** mirrors `ObjectNames`'s (`type:"lootBagTypes"`,
   `direction:"internal"`) - see the full JSON shape in
