@@ -42,14 +42,22 @@ public class LootBagTypes {
 
         Map<String, Integer> bagTypeTable = new LinkedHashMap<>();
         Map<String, String> itemNames = new LinkedHashMap<>();
+        Map<String, Integer> lootBagObjectTypes = new LinkedHashMap<>();
         for (int id : IdToAsset.objectIds()) {
             if (id <= 0) continue;
             int bt = IdToAsset.getBagType(id);
             if (bt != 6 && bt != 8) continue;
-            // The ground-bag entities themselves also carry a self-identifying
-            // BagType (see findBagIconObjectType) - exclude them here, they're
-            // not items a player can hold.
-            if ("Bag".equals(IdToAsset.getClazz(id))) continue;
+            // The ground-bag entities themselves carry a self-identifying
+            // BagType (Class=Bag). These are the *world objectTypes* the overlay
+            // watches for in UpdatePacket.newObjects to read a dropped bag's
+            // contents - the whole set per tracked color (regular + any boosted
+            // variant sharing the BagType), unlike lootBagIcons, which is just
+            // one representative icon per color. Not items a player can hold, so
+            // they're kept out of bagTypeTable below.
+            if ("Bag".equals(IdToAsset.getClazz(id))) {
+                lootBagObjectTypes.put(String.valueOf(id), bt);
+                continue;
+            }
             bagTypeTable.put(String.valueOf(id), bt);
             String name = IdToAsset.objectName(id);
             if (name != null && !name.isEmpty()) itemNames.put(String.valueOf(id), name);
@@ -66,6 +74,7 @@ public class LootBagTypes {
         env.data = new Data();
         env.data.bagTypeTable = bagTypeTable;
         env.data.lootBagIcons = lootBagIcons;
+        env.data.lootBagObjectTypes = lootBagObjectTypes;
         env.data.itemNames = itemNames;
 
         cachedJson = gson.toJson(env);
@@ -76,6 +85,7 @@ public class LootBagTypes {
     private static final class Data {
         Map<String, Integer> bagTypeTable;
         Map<String, Integer> lootBagIcons;
+        Map<String, Integer> lootBagObjectTypes;
         Map<String, String> itemNames;
     }
 

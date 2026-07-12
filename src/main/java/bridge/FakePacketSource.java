@@ -73,11 +73,13 @@ import java.util.Random;
  * despawning with no new objective (proving focus falls back to last-hit
  * afterward).
  * <p>
- * Also registers a handful of synthetic {@link IdToAsset} entries (BagType 6/
- * white and 8/orange item ids plus their ground-bag icon entities - see
- * {@code LOOT_ITEM_TYPES}) and periodically assigns them into the local
- * player's bag inventory slots (INVENTORY_4..11) via {@link #lootPickupStatus},
- * so the Loot panel's asset-derived BagType categorization is demonstrable and
+ * Also registers synthetic {@link IdToAsset} entries (BagType 6/white and
+ * 8/orange item ids, their ground-bag entities including a boosted white-bag
+ * variant, and an off-tier filler item) and periodically drops loot-bag
+ * entities into view via {@link #lootBagDrop} - an {@link UpdatePacket} whose
+ * newObject is a bag carrying items in INVENTORY_0..7 plus per-slot enchant
+ * codes in UNIQUE_DATA_STRING - so the Loot panel's drop detection, BagType
+ * categorization, and per-item enchant/rarity display are demonstrable and
  * regression-testable with no game installed (issue #105).
  * <p>
  * Every roster member's UNIQUE_DATA_STRING stat also carries synthetic
@@ -91,10 +93,8 @@ import java.util.Random;
  * slot ({@link #localSelfSwap} + {@link #localPlayerSlotDeltas}, an
  * {@link InvSwapPacket} naming the local player on both ends immediately
  * followed by the correlated {@link NewTickPacket} slot deltas - the same
- * shape a real client sends) - unequipping lands the item back in a bag slot,
- * an empty->populated transition that must NOT be logged as a Loot panel
- * pickup (issue #122: the LootTracker previously couldn't tell an unequip
- * apart from a real ground drop).
+ * shape a real client sends), exercising the Character/Instance panels
+ * re-rendering a live equip/unequip.
  */
 public class FakePacketSource {
 
@@ -172,27 +172,32 @@ public class FakePacketSource {
     private static final int[] TRANSIENT_EQUIPMENT = {4005, 4105, 4205, 4305};
     private static final int[] TRANSIENT_ENCHANTS = {2, 0, 4, 1};
 
-    // Loot panel demo (issue #105): the ground-bag entities the two tracked
-    // BagTypes (6 = white, 8 = orange/ST - see docs/asset-pipeline.md) resolve
-    // to, plus a handful of item objectTypes with a known BagType. Registered
-    // directly with IdToAsset (bypassing real extraction, which needs a game
-    // install) via IdToAsset.registerFake() below, so the loot categorization
-    // pipeline is demonstrable/regression-testable headless - the same
-    // "arbitrary plausible objectTypes" convention as WEAPON_ID/LOCAL_SKIN_ID
-    // above, extended with the BagType metadata the Loot panel actually reads.
+    // Loot panel demo (issue #105): the ground-bag ENTITIES the drop tracker
+    // watches for - one per tracked color (6 = white, 8 = orange/ST - see
+    // docs/asset-pipeline.md), plus a boosted white-bag variant proving the
+    // bridge's lootBagObjectTypes covers more than one entity per color and the
+    // tracker detects them all. Registered directly with IdToAsset (bypassing
+    // real extraction, which needs a game install) via IdToAsset.registerFake()
+    // below - the same "arbitrary plausible objectTypes" convention as
+    // WEAPON_ID/LOCAL_SKIN_ID above, extended with the Class=Bag + BagType
+    // metadata the loot pipeline reads.
     private static final int WHITE_BAG_ICON_TYPE = 9000;
     private static final int ORANGE_BAG_ICON_TYPE = 9001;
-    // One item id (9100) repeats, so the demo also exercises "duplicate
-    // pickups of the same item type are both shown" (the log isn't a
-    // de-duplicated set); 9300 is BagType 3 - not tracked - and must never
-    // appear in the Loot panel.
-    private static final int[] LOOT_ITEM_TYPES = {9100, 9100, 9200, 9300};
-    private static final int[] LOOT_ITEM_BAG_TYPES = {6, 6, 8, 3};
+    private static final int BOOSTED_WHITE_BAG_ICON_TYPE = 9002;
+    // Item objectTypes seeded with a BagType: 9100 white + 9200 orange (both
+    // tracked), and 9300 BagType 3 (NOT tracked - a filler item sharing a bag,
+    // which must never appear in the Loot panel, proving per-item filtering).
+    private static final int WHITE_ITEM_TYPE = 9100;
+    private static final int ORANGE_ITEM_TYPE = 9200;
+    private static final int FILLER_ITEM_TYPE = 9300;
+    // Fresh objectId per simulated bag drop, safely above every fixed entity id
+    // (roster/pet <= 50, enemies/boss in the 100_000s).
+    private static final int LOOT_BAG_ID_BASE = 200_000;
 
     // Equip/unequip demo (issue #122): the local player's ability slot
     // (INVENTORY_1_STAT) round-trips into bag slot 6 (INVENTORY_6_STAT) and
     // back - see the class doc comment. Ticks chosen out of phase with the
-    // 40-tick map-reset/24-tick transient/16-tick loot-pickup schedules above,
+    // 40-tick map-reset/24-tick transient/16-tick loot-drop schedules above,
     // purely so the three demos don't visually overlap.
     private static final int EQUIP_SWAP_ABILITY_ITEM = ROSTER_EQUIPMENT[0][1];
     private static final int EQUIP_SWAP_BAG_SLOT_ID = 6;
@@ -202,13 +207,10 @@ public class FakePacketSource {
     // IdToAsset.registerFake's item-info fields (tier/display name/description),
     // so the hover tooltip mechanism is exercisable end-to-end even with no
     // game installed - one equipped item (WEAPON_ID, hovered via GearRow) and
-    // one loot item (LOOT_ITEM_TYPES[0], hovered via the Loot panel). Every
-    // other fake objectType deliberately stays unregistered, exercising the
-    // tooltip's "no resolvable data" fallback (shows just the objectType).
-    // The 8 bag/held inventory slots (INVENTORY_4..11); slot 0..3 are the
-    // equipped gear ROSTER_EQUIPMENT already covers.
-    private static final int LOOT_SLOT_COUNT = 8;
-    // Ticks between simulated pickups - long enough that each is a distinct,
+    // one loot item (WHITE_ITEM_TYPE, hovered via the Loot panel). Every other
+    // fake objectType deliberately stays unregistered, exercising the tooltip's
+    // "no resolvable data" fallback (shows just the objectType).
+    // Ticks between simulated bag drops - long enough that each is a distinct,
     // legible event rather than a flicker.
     private static final int LOOT_CYCLE_TICKS = 16;
 
@@ -230,15 +232,15 @@ public class FakePacketSource {
         // thread ordering.
         IdToAsset.registerFake(WHITE_BAG_ICON_TYPE, "Bag", 6);
         IdToAsset.registerFake(ORANGE_BAG_ICON_TYPE, "Bag", 8);
-        for (int i = 0; i < LOOT_ITEM_TYPES.length; i++) {
-            IdToAsset.registerFake(LOOT_ITEM_TYPES[i], "Equipment", LOOT_ITEM_BAG_TYPES[i]);
-        }
+        IdToAsset.registerFake(BOOSTED_WHITE_BAG_ICON_TYPE, "Bag", 6);
+        IdToAsset.registerFake(ORANGE_ITEM_TYPE, "Equipment", 8);
+        IdToAsset.registerFake(FILLER_ITEM_TYPE, "Equipment", 3);
         IdToAsset.registerFake(
             WEAPON_ID, "Equipment", -1, "UT",
             "Fake Sword of Testing", "A synthetic weapon seeded by --fake mode for the item tooltip demo."
         );
         IdToAsset.registerFake(
-            LOOT_ITEM_TYPES[0], "Equipment", LOOT_ITEM_BAG_TYPES[0], "8",
+            WHITE_ITEM_TYPE, "Equipment", 6, "8",
             "Fake Potion of Testing", "A synthetic loot item seeded by --fake mode for the item tooltip demo."
         );
 
@@ -327,14 +329,18 @@ public class FakePacketSource {
             } else if (bossOffset >= 21 && bossOffset < 38) {
                 Register.INSTANCE.emitPacketLogs(bossDamage(BOSS_PHASE_IDS[1]));
             }
+            // Every LOOT_CYCLE_TICKS a fresh loot bag drops into view (a real
+            // UpdatePacket.newObjects bag entity with items + enchants), so the
+            // Loot panel logs it as a DROP - no pickup required. See lootBagDrop().
+            if (tick > 0 && tick % LOOT_CYCLE_TICKS == 0) {
+                Register.INSTANCE.emitPacketLogs(lootBagDrop(tick / LOOT_CYCLE_TICKS));
+            }
             // A NewTickPacket every tick, like a real client. It carries the
             // server clock the DPS engine uses as its time base - without it the
             // engine can't measure fight duration, so every computed DPS is 0.
             // Every ~10 ticks it also carries a non-local player's weapon swap, so
             // the Instance panel shows OTHER players' equipment updating live (the
-            // merge/render path is identical for every objectId). Every
-            // LOOT_CYCLE_TICKS it also carries a local-player bag-slot update, to
-            // exercise the Loot panel (see lootPickupStatus()), and at the two
+            // merge/render path is identical for every objectId), and at the two
             // equip-swap offsets above it carries that swap's correlated 2-slot
             // delta (see equipSwapStatus()).
             NewTickPacket nt = newTick(tick);
@@ -342,8 +348,6 @@ public class FakePacketSource {
             if (tick > 0 && tick % 10 == 0) {
                 status.add(weaponSwapStatus(tick));
             }
-            ObjectStatusData loot = lootPickupStatus(tick);
-            if (loot != null) status.add(loot);
             ObjectStatusData equipSwap = equipSwapStatus(equipOffset);
             if (equipSwap != null) status.add(equipSwap);
             if (!status.isEmpty()) {
@@ -524,43 +528,71 @@ public class FakePacketSource {
     }
 
     /**
-     * Simulates the local player's bag-slot inventory (INVENTORY_4..11) for
-     * the Loot panel: every {@code LOOT_CYCLE_TICKS} ticks it either clears a
-     * slot (a couple ticks before its next reuse) or populates a now-empty
-     * slot with the next item in {@link #LOOT_ITEM_TYPES} - an explicit
-     * empty-then-filled pair, since the Loot panel only treats an
-     * empty-to-populated slot transition as "obtained" (matching how a real
-     * pickup lands in a free bag slot). Cycles through all 8 bag slots and all
-     * 4 demo items (two BagType 6, one BagType 8, one untracked), so over time
-     * it exercises every tracked category plus the untracked-item exclusion.
-     * Returns null on a tick with nothing to report.
+     * A loot bag dropping into view: an {@link UpdatePacket} whose single
+     * newObject is a loot-bag entity (a Class=Bag objectType) carrying its
+     * items in INVENTORY_0..7 plus a UNIQUE_DATA_STRING of per-slot enchant
+     * codes - exactly the shape a real client renders enchant pips from on
+     * hover, and what the overlay's LootTracker reads. Cycles white /
+     * orange / boosted-white, each with a fresh objectId, so the Loot panel
+     * accumulates distinct DROP entries (no pickup required): the white bag
+     * pairs an enchanted white item with an off-tier filler that must NOT be
+     * listed (proving per-item filtering), the orange bag carries a
+     * more-enchanted orange item, and the boosted bag proves both the boosted
+     * entity's detection and a zero-enchant item. The previous bag is despawned
+     * ({@link UpdatePacket}.drops) so bags don't pile up in view.
      */
-    private ObjectStatusData lootPickupStatus(int tick) {
-        int cycle = tick / LOOT_CYCLE_TICKS;
-        int offset = tick % LOOT_CYCLE_TICKS;
-        int slotStat = StatType.INVENTORY_4_STAT.get() + (cycle % LOOT_SLOT_COUNT);
-        if (offset == LOOT_CYCLE_TICKS / 2 - 2) {
-            return lootSlotStat(slotStat, -1);
+    private UpdatePacket lootBagDrop(int cycle) {
+        int bagObjectType;
+        int[] items;
+        int[] enchantCounts;
+        int variant = cycle % 3;
+        if (variant == 1) {
+            bagObjectType = ORANGE_BAG_ICON_TYPE;
+            items = new int[]{ORANGE_ITEM_TYPE};
+            enchantCounts = new int[]{3};
+        } else if (variant == 2) {
+            bagObjectType = BOOSTED_WHITE_BAG_ICON_TYPE;
+            items = new int[]{WHITE_ITEM_TYPE};
+            enchantCounts = new int[]{0};
+        } else {
+            bagObjectType = WHITE_BAG_ICON_TYPE;
+            items = new int[]{WHITE_ITEM_TYPE, FILLER_ITEM_TYPE};
+            enchantCounts = new int[]{2, 0};
         }
-        if (offset == LOOT_CYCLE_TICKS / 2) {
-            int itemType = LOOT_ITEM_TYPES[cycle % LOOT_ITEM_TYPES.length];
-            return lootSlotStat(slotStat, itemType);
+
+        ObjectStatusData bag = new ObjectStatusData();
+        bag.objectId = LOOT_BAG_ID_BASE + cycle;
+        bag.pos = new WorldPosData();
+        java.util.List<StatData> stats = new java.util.ArrayList<>();
+        for (int i = 0; i < items.length; i++) {
+            stats.add(invStat(i, items[i]));
         }
-        return null;
+        stats.add(stringStat(StatType.UNIQUE_DATA_STRING, enchantUniqueDataString(enchantCounts)));
+        bag.stats = stats.toArray(new StatData[0]);
+
+        ObjectData obj = new ObjectData();
+        obj.objectType = bagObjectType;
+        obj.status = bag;
+
+        UpdatePacket p = new UpdatePacket();
+        p.levelType = 0;
+        p.pos = new WorldPosData();
+        p.tiles = new GroundTileData[0];
+        p.newObjects = new ObjectData[]{obj};
+        // Despawn the previous bag (the first drop, cycle 1, has no predecessor).
+        p.drops = cycle > 1 ? new int[]{LOOT_BAG_ID_BASE + cycle - 1} : new int[0];
+        return p;
     }
 
-    /** One local-player bag-slot stat update - see {@link #lootPickupStatus}. */
-    private ObjectStatusData lootSlotStat(int statTypeNum, int value) {
-        ObjectStatusData st = new ObjectStatusData();
-        st.objectId = LOCAL_PLAYER_ID;
-        st.pos = new WorldPosData();
+    /** One loot-bag content slot (slotIndex 0-7 -> INVENTORY_0..7, statTypeNum 8-15). */
+    private static StatData invStat(int slotIndex, int value) {
+        int num = StatType.INVENTORY_0_STAT.get() + slotIndex;
         StatData s = new StatData();
-        s.statTypeNum = statTypeNum;
-        s.statType = StatType.byOrdinal(statTypeNum);
+        s.statTypeNum = num;
+        s.statType = StatType.byOrdinal(num);
         s.statValue = value;
         s.statValueTwo = -1;
-        st.stats = new StatData[]{s};
-        return st;
+        return s;
     }
 
     /** An UpdatePacket adding the transient player to the instance (a player joining). */

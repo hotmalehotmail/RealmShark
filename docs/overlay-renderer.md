@@ -45,7 +45,7 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/dps/useDpsTracker.ts` | React hook wrapping `DpsTracker` (event-driven on bridge `dps` packets + 1 s fallback recompute). |
 | `overlay/src/renderer/src/dps/useDpsHistory.ts` | React hook owning a dedicated `DpsTracker` instance for the DPS summary panel; exposes `DpsHistoryEntry[]`. |
 | `overlay/src/renderer/src/dps/types.ts` | Packet-field shapes the tracker reads. |
-| `overlay/src/renderer/src/loot/LootTracker.ts` | Framework-agnostic class ingesting packets → the local player's session-scoped white/orange bag drop log (§7). |
+| `overlay/src/renderer/src/loot/LootTracker.ts` | Framework-agnostic class ingesting packets → a session-scoped log of white/orange bags that dropped near the player, incl. per-item enchants (§7). |
 | `overlay/src/renderer/src/loot/useLootTracker.ts` | React hook wrapping `LootTracker` (event-driven on `onPacketBatch`, re-renders only when `ingest` reports a change). |
 | `overlay/src/renderer/src/loot/types.ts` | Packet-field shapes the loot tracker reads, incl. the synthetic `lootBagTypes` envelope. |
 
@@ -268,7 +268,7 @@ item tooltip (§4.2) with no per-panel wiring.
 | `CharacterPanel` | "Character" | `EntityRegistry` (local player) | Big dyed sprite + 4 equip icons + username. |
 | `InstancePanel` | "Instance" | `EntityRegistry.characters()` | Every named player in the instance, dyed sprites + gear. |
 | `DpsSummaryPanel` | "DPS Summary" | `useDpsHistory()` | Post-fight master/detail: a master list of retained past instances (icon + name + a "You: Xdmg (#rank)" headline), each opening a detail view of that instance's enemies ranked by total damage, expandable to a frozen per-player breakdown. See §5.1. |
-| `LootPanel` | "Loot" | `useLootTracker()` | Session log of the local player's white/orange bag drops (BagType 6/8), grouped under each color's own bag sprite as a category header, chronological (not de-duplicated) within each. See §7. |
+| `LootPanel` | "Loot" | `useLootTracker()` | Session log of white/orange bags (BagType 6/8) that dropped near the player, grouped under each color's own bag sprite, with per-item rarity border + enchant tooltip, chronological (not de-duplicated). See §7. |
 
 **StatusPanel** (`panels/StatusPanel.tsx`) is the only panel wired straight to
 the IPC surface rather than a shared service. It subscribes to `onBridgeStatus`,
@@ -934,112 +934,85 @@ with `<mark>` highlighting, level colours, auto-scroll-when-at-bottom, and clear
 
 ---
 
-## 7. Loot panel — session-scoped BagType log
+## 7. Loot panel — session-scoped bag-drop log
 
-The Loot panel (issue #105) tracks every item the local player picks up whose
-game-data `BagType` is 6 (white bag) or 8 (orange/ST bag) — the two colors
-players actually screenshot — grouped under each color's own bag sprite.
-Categorization is entirely asset-derived (no hand-maintained item list): see
-[asset-pipeline.md](asset-pipeline.md)'s "BagType — loot categorization"
-section for how `<BagType>` is extracted and shipped as the bridge's synthetic
-`lootBagTypes` envelope, and [bridge-server.md](bridge-server.md) §6 for the
-bridge-side broadcast mechanics.
+The Loot panel (issue #105) logs every item that *drops* in a white bag
+(`BagType` 6) or orange/ST bag (`BagType` 8) near the local player — the two
+colors players actually screenshot — grouped under each color's own bag
+sprite. It reads the loot-**bag entities** that appear in the world, so an
+item is logged when the bag drops, whether or not the player picks it up. (An
+earlier version watched the local player's own inventory slots, and so only
+ever saw pickups; it also needed to special-case equip/unequip self-swaps to
+avoid false positives — that whole class of problem disappears when the source
+is the bag itself.) Categorization is entirely asset-derived (no
+hand-maintained item list): see [asset-pipeline.md](asset-pipeline.md)'s
+"BagType — loot categorization" section for how `<BagType>` is extracted and
+shipped as the bridge's synthetic `lootBagTypes` envelope, and
+[bridge-server.md](bridge-server.md) §6 for the broadcast mechanics.
 
 ### `LootTracker` (`loot/LootTracker.ts`)
 
-A framework-agnostic class (no React, same shape as `DpsTracker`) that ingests
-`PacketEnvelope[]` independently of every other tracker/registry — its own
-local-player resolution (`CreateSuccessPacket` + `EnemyHitPacket.mainID`,
-identical to `EntityRegistry`/`DpsTracker`'s approach) and its own
-`Map<statTypeNum, lastValue>` of the local player's 8 bag inventory slots
-(`INVENTORY_4..11`, wire `statTypeNum` 12-19 — the 4 *equipped* slots
-`EntityRegistry` already reads are 8-11, a distinct range).
+A framework-agnostic class (no React, same shape as `DpsTracker`) ingesting
+`PacketEnvelope[]` independently of every other tracker. It mirrors the
+upstream `tomato` overlay's `DungeonStatData.updateItems`, which reads a loot
+bag container's 8 item slots the same way.
 
-**"Obtained" detection.** A bag slot transitioning from empty (`<= 0`) to a
-populated item id is logged as a pickup — the same shape a real pickup takes
-(landing in a free bag slot), and the one transition that can't also mean
-"dropped" (populated → empty) or "reconnected mid-session" (an already-known
-value re-arriving). Critically, a slot's *first* sighting in a full
-`UpdatePacket.newObjects` snapshot since the last `resetPerInstance()` never
-logs, regardless of its value — it only seeds `slotValues`' baseline. Without
-that check (issue soak #113), whatever was already sitting in the bag at
-login, or on entering a fresh instance right after `resetPerInstance()` clears
-the map, reads as an unseen slot jumping straight to a populated value —
-indistinguishable from a real empty→populated pickup — and got logged as one
-every time. That baseline pass applies *only* to `UpdatePacket.newObjects`
-(the complete current state of a newly-visible/created object) — a slot's
-first sighting via `NewTickPacket.status` (delta-only: reports just what
-changed since the last tick) gets no such pass and is evaluated as an
-ordinary transition, since a delta channel by construction never reports a
-slot's prior empty state. Conflating the two (soak #115) silently dropped the
-first real pickup into any bag slot after every instance change, since bag
-slots — in `FakePacketSource` and potentially a real client — only ever
-arrive via `NewTickPacket` deltas; `UpdatePacket.newObjects`'s full-snapshot
-stat block for the local player never includes `INVENTORY_4..11` at all. The
-new item's `objectType` is looked up in `bagTypeTable` (from the
-`lootBagTypes` envelope); if it isn't BagType 6 or 8, nothing is logged. Two
-different bag slots holding the *same* item id both log their own entry — the
-log is chronological, not a de-duplicated set, so two of the same white-bag
-item dropping in one session both appear.
+**Detecting a bag.** The `lootBagTypes` envelope carries `lootBagObjectTypes` —
+every loot-bag *entity* objectType for the tracked colors (regular *and*
+boosted variants), each mapped to its `BagType`. An `UpdatePacket.newObjects`
+entry whose `objectType` is in that set is a loot bag; the tracker records its
+objectId in an in-view map. A loot bag's 8 slots are `INVENTORY_0..7` (wire
+`statTypeNum` **8-15**) — the container's own slots, a different range from the
+`INVENTORY_4..11` (12-19) *held* slots a player carries, so a player entity is
+never mistaken for a bag.
 
-**Equip/unequip and bag-rearrange suppression (issue #122).** An
-empty→populated bag-slot transition isn't always a real pickup: unequipping
-an item lands it back in a bag slot (the equip slot side is
-populated→empty, already excluded, but the bag slot side is exactly the
-empty→populated shape a real drop takes), and dragging an item between two
-bag slots has the same problem on its destination end. `LootTracker` also
-ingests `InvSwapPacket` (`packets/outgoing/InvSwapPacket.java` — an outgoing
-packet, sent by the client on every inventory-slot drag, decoded and
-broadcast like any other). When both `slotFrom.objectId` and `slotTo.objectId`
-name the local player's own id (a self-swap — equip, unequip, or a bag
-rearrange, never a real pickup, which always names a distinct ground-bag
-entity on one end), `ingestInvSwap` arms a short-lived (`SWAP_SUPPRESS_MS`,
-5s) suppression per named bag slot, keyed by `statTypeNum`. `ingestStats`
-consumes that suppression on the slot's next transition instead of logging a
-pickup. The TTL exists so a swap the server silently rejects doesn't mask
-that slot's real future pickups forever.
+**Reading contents + enchants.** For each bag slot holding an item id, the item
+is categorized by *its own* `BagType` (from `bagTypeTable`), so a lower-tier
+filler item sharing a bag isn't listed. Each item's enchantments come straight
+from the bag entity's own `UNIQUE_DATA_STRING` stat — a comma-separated
+per-slot encoded enchant code, the *same* stat and wire shape `EntityRegistry`
+reads for a player's equipped slots (§4.2), just on the bag for slots 0-7. The
+raw per-slot code is stored on the `LootEntry` (`enchantCode`) and its rarity
+tier (`slotRarityTier`, = filled enchant count) precomputed; `LootPanel` feeds
+both to `ItemSprite` for the rarity border and the tooltip's enchant list.
+(This corrects an earlier assumption that the wire never carries a dropped
+item's enchants — it does, on the bag, which is exactly what the game client
+renders enchant pips from when you hover a bag.)
 
-**Session-scoped, mirroring `DpsTracker`'s retained history (§5.1).**
-`entries` (the loot log itself) persists across `MapInfoPacket` (instance
-change) and is cleared only by `reset()` (overlay detach / game close) — the
-same split `DpsTracker` uses between its per-instance live state and its
-retained cross-instance history. `MapInfoPacket` only calls
-`resetPerInstance()` (forgets the local player id + last-known slot values, so
-a fresh full-inventory resend after a map change doesn't misfire against
-stale slot state), never touching `entries`. `bagTypeTable`/`lootBagIcons`/
-`itemNames` (the asset-derived categorization data itself) are deliberately
-never cleared by either reset — like the sprite pack, they're app-lifetime
-data, not session state.
+**Dedup.** A bag re-entering view — or a `NewTickPacket` delta updating it (a
+delta carries no objectType, so a bag is only recognized there once
+`newObjects` has introduced its id) — re-sends the same contents; each
+`(bagObjectId, slot)` is logged once. The log is chronological, not a
+de-duplicated set, so two identical drops in one session both appear. A
+`UpdatePacket.drops` id removes that bag's in-view bookkeeping.
+
+**Session-scoped, mirroring `DpsTracker`'s retained history (§5.1).** `entries`
+(the log itself) persists across `MapInfoPacket` and is cleared only by
+`reset()` (overlay detach / game close). `MapInfoPacket` calls
+`resetPerInstance()` (forgets the in-view bags + their logged slots — bags are
+per-instance), never touching `entries`. `bagTypeTable`/`lootBagIcons`/
+`bagEntityTypes`/`itemNames` (asset-derived categorization) are never cleared
+by either reset — like the sprite pack, they're app-lifetime data.
 
 ### `useLootTracker` (`loot/useLootTracker.ts`)
 
 One dedicated `LootTracker` instance per hook call (same pattern as
-`useDpsHistory`), piping `onPacketBatch` into `tracker.ingest`. Unlike
-`useDpsTracker`'s always-re-snapshot-on-relevant-envelope approach,
-`ingest()` itself returns whether anything display-relevant changed (new
-entry logged, or the `lootBagTypes` meta updated), so the hook only
-re-renders on an actual change — loot events are rare compared to DPS
-churn, so there's no fallback poll timer here.
+`useDpsHistory`), piping `onPacketBatch` into `tracker.ingest`. `ingest()`
+returns whether anything display-relevant changed (a new entry, or the
+`lootBagTypes` meta updated), so the hook only re-renders on an actual change.
 
 ### `LootPanel` (`panels/LootPanel.tsx`)
 
-For each tracked BagType (6, 8), if it has zero entries the whole category is
-hidden; if the panel has zero entries across *both* colors it shows the
-shared `EmptyState` instead. A non-empty category renders its bag-color
-sprite (`bagIcon(bagType)`, resolved through the ordinary `<Sprite
-objectType>` path — no special-casing) plus a count, then every obtained
-item through **`ItemSprite`** (§4.2) — a hover tooltip (item name/tier/class/
-description from the bridge's `itemInfo` envelope; an enchant section too, if
-and only if that entry's `objectType` currently matches one of the local
-player's live equipped slots — the protocol never broadcasts enchant data for
-an item still sitting in the bag, see §4.2/issue #122) superseding the native
-`title` tooltip this panel used before issue #109 — **newest first** so the
-latest drop is visible without scrolling. `LootPanel` also subscribes to
-`useEntityRegistry()`'s `subscribe()` so it re-renders (and re-checks that
-match) the moment the local player's equipment changes, not just on the next
-loot event. `useLootTracker`'s own resolved name
-(`itemName`, a *different* source — `lootBagTypes`'s `itemNames` table, kept
-for the always-visible inline label) still renders beside the sprite at
+For each tracked BagType (6, 8), an empty category is hidden; if both are empty
+the panel shows the shared `EmptyState`. A non-empty category renders its
+bag-color sprite (`bagIcon(bagType)`, the ordinary `<Sprite objectType>` path)
+plus a count, then every dropped item through **`ItemSprite`** (§4.2) — the
+rarity border from `entry.rarity` and the hover tooltip (item name/tier/class/
+description from `itemInfo`, plus the enchant list decoded from
+`entry.enchantCode` via `ItemSprite`'s `enchantCode` prop, the same path
+`DpsSummaryPanel` uses for frozen history) — **newest first** so the latest
+drop is visible without scrolling. The resolved item name (`itemName`, from
+`lootBagTypes`'s `itemNames` table) renders beside the sprite at
 `size === 'lg'`. Sized/registered via the standard checklist (§2):
 `registry.ts`'s `loot` entry, a default-layout instance in `PanelCanvas.tsx`.
 
