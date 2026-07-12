@@ -447,6 +447,18 @@ with a plain `gh pr merge` (**no `--admin`**) so branch protection — crucially
 fork), so the sweep can never merge one; this depends on `review.yml` staying `on: pull_request`
 (never `pull_request_target`). Same `MERGE_PAT` + loud preflight as the other merge paths.
 
+**Known narrow gap (frozen-PR recovery is edge-triggered).** The §6.3(b) auto-clear — a frozen
+(`agent:needs-human`) PR that goes green again is un-frozen and armed by the gatekeeper — fires
+only on that PR's own ci/review *completion*. If GitHub still reports `mergeable = UNKNOWN` at
+**both** the ci- and review-completion events, the clear is skipped and the PR stays frozen, and
+the sweep **deliberately skips `agent:needs-human` PRs** (it must not auto-merge something a human
+owns), so there is no level-triggered retry for that specific case. In practice this is very
+narrow: mergeability is recomputed within seconds, long before the (minutes-long) review finishes,
+so by the review-completion event `UNKNOWN` has essentially always resolved — and a human is
+already looking at a frozen PR, so a stuck one is visible, not silent. If it ever bites, the fix is
+to let the sweep re-evaluate frozen-but-otherwise-green PRs (clearing the freeze exactly as the
+gatekeeper does), rather than merging them blindly.
+
 ---
 
 ## 8 · Release — the human ship button

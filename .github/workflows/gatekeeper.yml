@@ -91,8 +91,10 @@ jobs:
               gh issue edit "$ISS" --repo "$REPO" --remove-label "agent:needs-human" >/dev/null 2>&1 || true
               gh issue edit "$ISS" --repo "$REPO" --add-label "agent:in-progress" >/dev/null 2>&1 || true
             done
-            gh pr comment "$NUM" --repo "$REPO" --body "✅ Green again (review-verdict passed) — cleared \`agent:needs-human\` and resumed the auto-merge gate. <!-- gatekeeper:unfreeze -->"
-            # fall through to the soak-freeze check + arming below (no exit).
+            gh pr comment "$NUM" --repo "$REPO" --body "✅ Green again (review-verdict passed) — cleared \`agent:needs-human\` and re-entered the auto-merge gate. <!-- gatekeeper:unfreeze -->"
+            # fall through to the soak-freeze check + arming below (no exit). NOTE the freeze
+            # is genuinely cleared here; the arming itself still defers if a soak is open and
+            # this isn't a soak-fix — hence "re-entered the gate", not "armed".
           fi
 
           # ---- Soak freeze (§9.5). While a soak is open, HOLD unrelated agent PRs (do
