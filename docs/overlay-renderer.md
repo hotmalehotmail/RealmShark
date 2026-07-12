@@ -188,13 +188,20 @@ later shrinks; otherwise the preset px size is used verbatim.
 
 ### Drag / reposition
 
-Dragging is manual (no library). `PanelFrame.startDrag` (`PanelFrame.tsx:34-62`)
+Dragging is manual (no library). `PanelFrame.startDrag` (`PanelFrame.tsx:35`)
 records the grab offset within the panel (so the panel doesn't snap its corner
 to the cursor), then attaches window `mousemove`/`mouseup` listeners. Each move
-calls `anchorFromPointer` (`anchor.ts:35-43`) to convert
-`(clientX - grabOffset)` into a **clamped 0-100 % anchor**, and reports it up via
-`onDrag`, which does `updatePanel(id, { anchor:{ pos:'tl', x, y } })`
-(`PanelCanvas.tsx:108`). Only the drag handle (the title bar) starts a drag, and
+calls `anchorFromPointer` (`anchor.ts:35-43`) to convert `(clientX - grabOffset)`
+into a **clamped 0-100 % anchor** and writes the resulting `panelStyle`
+**directly to the frame's DOM** (`left`/`top`/`width`/`height`) — *not* through
+React state. Routing every pointer event through `setPanels` instead would
+re-render `PanelCanvas` and every panel's (sprite-rendering) content 60-125×/sec,
+which is what made dragging lag. The final anchor is committed to state once, on
+`mouseup`, via `onDrag` → `updatePanel(id, { anchor:{ pos:'tl', x, y } })`
+(`PanelCanvas.tsx:108`) — that persists the move and triggers the debounced save
+below. `PanelCanvas` never re-renders during the move phase, so the direct DOM
+writes can't be clobbered by a reconcile, and the commit reasserts the identical
+position (no drop jump). Only the drag handle (the title bar) starts a drag, and
 only when `interactive`. The pin/size buttons `stopPropagation` on `mousedown` so
 clicking them never begins a drag (`PanelFrame.tsx:98,110`). Clicking anywhere on
 a panel raises it via `onBringToTop`, which bumps `zIndex` to `max+1`

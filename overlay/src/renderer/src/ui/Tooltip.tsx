@@ -2,7 +2,10 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useInteractive } from './interactiveContext'
 
-const SHOW_DELAY_MS = 300
+// Short hover-intent delay: long enough that sweeping the cursor across a row
+// of item sprites doesn't flash a tooltip on each one, short enough to feel
+// immediate. 300ms (the old value) read as sluggish.
+const SHOW_DELAY_MS = 120
 const VIEWPORT_MARGIN = 8
 const TRIGGER_GAP = 4
 

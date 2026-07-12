@@ -43,19 +43,38 @@ function PanelFrame({
     const grabOffsetX = e.clientX - rect.left
     const grabOffsetY = e.clientY - rect.top
 
+    // Drag imperatively: write the moved panel's position straight to the DOM on
+    // each mousemove rather than round-tripping through React state. A state
+    // update per pointer event would re-render PanelCanvas and every panel's
+    // (sprite-rendering) content ~60-125x/sec, which is what made dragging lag.
+    // The position is committed to state once, on drop (handleUp) - that
+    // persists the move and triggers PanelCanvas's debounced layout save. During
+    // the move phase PanelCanvas never re-renders, so these direct writes are
+    // safe from being clobbered by a reconcile.
+    let last = { x: panel.anchor.x, y: panel.anchor.y }
     const handleMove = (moveEvent: MouseEvent): void => {
-      if (!draggingRef.current) return
-      const { x, y } = anchorFromPointer(
+      const el = frameRef.current
+      if (!draggingRef.current || !el) return
+      last = anchorFromPointer(
         moveEvent.clientX - grabOffsetX,
         moveEvent.clientY - grabOffsetY,
         canvasSize
       )
-      onDrag(panel.id, x, y)
+      const s = panelStyle(
+        { ...panel.anchor, x: last.x, y: last.y },
+        spec.sizes[panel.size],
+        canvasSize
+      )
+      el.style.left = String(s.left)
+      el.style.top = String(s.top)
+      el.style.width = typeof s.width === 'number' ? `${s.width}px` : String(s.width ?? '')
+      el.style.height = typeof s.height === 'number' ? `${s.height}px` : String(s.height ?? '')
     }
     const handleUp = (): void => {
       draggingRef.current = false
       window.removeEventListener('mousemove', handleMove)
       window.removeEventListener('mouseup', handleUp)
+      onDrag(panel.id, last.x, last.y)
     }
 
     window.addEventListener('mousemove', handleMove)
