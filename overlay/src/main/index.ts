@@ -299,7 +299,7 @@ app.whenReady().then(() => {
     shell.showItemInFolder(file)
     const version = encodeURIComponent(app.getVersion())
     await shell.openExternal(
-      `https://github.com/hotmalehotmail/RealmShark/issues/new?template=bug_report.yml&version=${version}`
+      `https://github.com/white-bag/thessal/issues/new?template=bug_report.yml&version=${version}`
     )
     return { file }
   })

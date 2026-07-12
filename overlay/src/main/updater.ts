@@ -15,7 +15,7 @@ import type { UpdateInfo } from '../shared/ipc'
  * (no cryptographic verification of the download - HTTPS + size check only).
  */
 
-const REPO = 'hotmalehotmail/RealmShark'
+const REPO = 'white-bag/thessal'
 const POLL_INTERVAL_MS = 6 * 60 * 60 * 1000 // 6h - well under GitHub's unauth rate limit
 const INITIAL_DELAY_MS = 10_000 // don't block startup
 
