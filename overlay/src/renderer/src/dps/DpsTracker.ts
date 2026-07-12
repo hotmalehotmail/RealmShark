@@ -581,17 +581,30 @@ export class DpsTracker {
    */
   private resolveBossChain(): void {
     if (this.lockedBossId === null) return
-    const merged = this.bossSnapshot(Date.now(), WINDOW_MS)
-    if (merged.rows.length > 0) {
-      this.resolvedBossEncounters.push({
-        id: this.lockedBossId,
-        name: merged.targetName,
-        objectType: this.objectTypes.get(this.lockedBossId) ?? null,
-        players: merged.rows,
-        cosmetics: this.cosmeticsFor(merged.rows)
-      })
-    }
+    const entry = this.bossChainEntry()
+    if (entry) this.resolvedBossEncounters.push(entry)
     this.bossCarry.clear()
+  }
+
+  /**
+   * Runs `bossSnapshot` for the currently locked boss chain and returns its
+   * merged rows as a `DpsHistoryEnemy`, or `null` if there's no locked chain
+   * or it has no damage yet. Shared by `resolveBossChain` (baking a finished
+   * chain into `resolvedBossEncounters`) and `buildHistoryEnemies` (the
+   * still-open chain's live entry) so the two boss-chain code paths can't
+   * drift apart.
+   */
+  private bossChainEntry(): DpsHistoryEnemy | null {
+    if (this.lockedBossId === null) return null
+    const merged = this.bossSnapshot(Date.now(), WINDOW_MS)
+    if (merged.rows.length === 0) return null
+    return {
+      id: this.lockedBossId,
+      name: merged.targetName,
+      objectType: this.objectTypes.get(this.lockedBossId) ?? null,
+      players: merged.rows,
+      cosmetics: this.cosmeticsFor(merged.rows)
+    }
   }
 
   /**
@@ -912,18 +925,8 @@ export class DpsTracker {
       })
     }
 
-    if (this.lockedBossId !== null) {
-      const merged = this.bossSnapshot(Date.now(), WINDOW_MS)
-      if (merged.rows.length > 0) {
-        enemies.push({
-          id: this.lockedBossId,
-          name: merged.targetName,
-          objectType: this.objectTypes.get(this.lockedBossId) ?? null,
-          players: merged.rows,
-          cosmetics: this.cosmeticsFor(merged.rows)
-        })
-      }
-    }
+    const chainEntry = this.bossChainEntry()
+    if (chainEntry) enemies.push(chainEntry)
 
     enemies.sort((a, b) => totalDamage(b.players) - totalDamage(a.players))
     return enemies
