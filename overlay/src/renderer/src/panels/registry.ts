@@ -36,9 +36,9 @@ export const PANEL_REGISTRY: Record<string, PanelSpec> = {
     type: 'dps',
     title: 'DPS',
     sizes: {
-      sm: { width: 180, height: dpsPanelHeight('sm') },
-      md: { width: 260, height: dpsPanelHeight('md') },
-      lg: { width: 320, height: dpsPanelHeight('lg') }
+      sm: { width: 200, height: dpsPanelHeight('sm') },
+      md: { width: 300, height: dpsPanelHeight('md') },
+      lg: { width: 380, height: dpsPanelHeight('lg') }
     },
     component: DpsPanel
   },

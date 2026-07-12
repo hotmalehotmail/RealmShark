@@ -54,6 +54,20 @@ not the token count.
 Opacity modifiers on accent tokens are fine where the old design used softened
 shades (`text-accent/70`, `ring-accent/70`, `bg-accent/25`).
 
+### Damage-share meter (`--color-meter-hot` / `--color-meter-cool`)
+
+| Token | Meaning | Examples |
+| --- | --- | --- |
+| `--color-meter-hot` | top-of-scale end of a damage-share bar | `MeterRow`'s fill at `fillPct` near 100 (the top damager) |
+| `--color-meter-cool` | bottom-of-scale end of a damage-share bar | `MeterRow`'s fill at `fillPct` near 0 (a trailing attacker) |
+
+`MeterRow`'s fill is `color-mix(in oklab, var(--color-meter-hot) <pct>%, var(--color-meter-cool))`,
+where `<pct>` is the same `fillPct` (0-100) that already drives the fill's
+*width* — so a row's bar communicates its share (typically
+`damage / topDamage`) by both length and color, monotonically, with no extra
+per-caller wiring. Deliberately distinct from `--color-accent`: the local
+player's identity ring/badge stay independent of a row's damage-share color.
+
 ### Rarity roles
 
 | Token | Meaning | Examples |
@@ -110,7 +124,7 @@ apart; new code must use them instead of re-rolling the markup.
 | `EmptyState` | the muted "nothing to show yet" line every panel needs | `children` |
 | `Swatch` | bordered placeholder box for an unknown sprite / empty slot | `size` (px), `className?` |
 | `GearRow` | a player's 4 equipment-slot icons (placeholder swatches for empty slots) | `equipment` (nullable), `rarity` (nullable, parallel enchant-tier array - see "Rarity roles" above), `slotSize` (px; `<= 0` renders nothing) |
-| `MeterRow` | list row with a proportional damage-bar fill behind its content | `fillPct` (0–100, clamped), `highlight?` (local player: accent ring + tinted fill), `onClick?` (renders a `<button>`), `className?` |
+| `MeterRow` | list row with a damage-share bar (width **and** color) behind its content | `fillPct` (0–100, clamped — drives both fill width and its hot/cool color), `highlight?` (local player: accent ring only, independent of fill color), `textSize?` (`'2xs'\|'xs'\|'sm'`, default `'xs'`), `height?` (px, fixed-height lists), `onClick?` (renders a `<button>`), `className?` |
 | `Button` | every button | `variant`: `subtle` (default) \| `ghost` \| `primary` \| `success` \| `warn`; `size`: `xs` \| `sm` (default) \| `md`; `active?` (ghost toggles, e.g. the pin); plus native button props |
 | `StatRow` | label-left / mono-tabular-value-right line | `label`, `children`, `className?` |
 

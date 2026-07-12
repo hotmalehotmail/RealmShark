@@ -151,7 +151,7 @@ a literal `160×100 / 220×130 / 280×170`. The DPS panel's height is instead
 *derived* rather than literal: `dpsPanelHeight(size)`
 (`dps/rowLayout.ts`) computes the pixel height needed to fit
 `DPS_MAX_ROWS[size]` rows (plus the target header and pinned local-player row)
-without internal scrolling, currently `180×110 / 260×214 / 320×406`. Any
+without internal scrolling, currently `200×106 / 300×178 / 380×334`. Any
 change to `DPS_MAX_ROWS`/`DPS_ROW_SPRITE_SIZE` or the row markup in
 `DpsList.tsx` must keep `dpsPanelHeight`'s constants (row gap, header height,
 frame chrome) in sync, since registry sizes are static and can't be measured
@@ -241,7 +241,7 @@ per-panel scale tables at the top of each file.
 | Panel | Title | Data source | Notes |
 | --- | --- | --- | --- |
 | `StatusPanel` | "RealmShark" | `window.overlay.*` directly | Connection dot, hotkey hint, packet count, JS heap MB, app version + **auto-update** UI. |
-| `DpsPanel` | "DPS" | `useDpsTracker()` → `<DpsList>` | Rows per attacker vs. the focused enemy, ranked by cumulative damage (§5). `MAX_ROWS = {sm:3, md:6, lg:12}`. Each row also renders that attacker's dyed `CharacterSprite` + equip-slot icons (gear hidden at `sm`), resolved from `EntityRegistry` by `row.objectId`, plus a proportional damage bar and a highlight/rank badge on the local player's row (§6). |
+| `DpsPanel` | "DPS" | `useDpsTracker()` → `<DpsList>` | Rows per attacker vs. the focused enemy, ranked by cumulative damage (§5). `MAX_ROWS = {sm:2, md:3, lg:6}` — deliberately few, large rows (24-40px sprites) so the panel reads at a glance mid-fight, rather than the previous 3/6/12 dense layout. Each row also renders that attacker's dyed `CharacterSprite` + equip-slot icons (gear hidden at `sm`), resolved from `EntityRegistry` by `row.objectId`, plus a damage-share bar (length **and** color both encode `damage/topDamage`) and a rank badge/ring on the local player's row (§6). |
 | `ConsolePanel` | "Console" | `consoleLog.ts` buffer | Live log with search (Ctrl/Cmd+F), level colours, clear. |
 | `CharacterPanel` | "Character" | `EntityRegistry` (local player) | Big dyed sprite + 4 equip icons + username. |
 | `InstancePanel` | "Instance" | `EntityRegistry.characters()` | Every named player in the instance, dyed sprites + gear. |
@@ -765,16 +765,25 @@ icons in a ~180-320px-wide panel (`DpsList.tsx`).
 fill** (an absolutely-positioned `div` sized `damage / topDamage`, painted
 behind a `relative z-10` wrapper holding the sprite/gear/name/numbers) so it
 never competes with them for horizontal space, and stays meaningful even
-at `sm` where the gear icons are hidden. The row is clipped
+at `sm` where the gear icons are hidden. The fill's *color*, not just its
+width, also encodes `damage / topDamage` — `color-mix`'d between the
+`--color-meter-hot`/`--color-meter-cool` tokens — so the top damager's row
+reads clearly "hot" and low-share rows read "cool" even when two bars are
+similar lengths (`overlay-ui-style.md`). The row is clipped
 (`overflow-hidden rounded-sm`) so the fill can never overflow the row or panel.
 Every row, real or placeholder, gets an explicit fixed height (`rowHeight`,
 via `MeterRow`'s `height` prop) so the list's total rendered height is
-constant regardless of how many rows are real vs. blank.
+constant regardless of how many rows are real vs. blank. Row text size also
+scales with panel size (`MeterRow`'s `textSize` prop, driven by
+`DPS_ROW_TEXT_SIZE`) — `xs` at `sm`, `sm` at `md`/`lg` — independent of the
+`2xs` badges/secondary figures, which stay fixed.
 
 The local player's row (`row.objectId === entities.localPlayerId()`,
-`MeterRow`'s `highlight` prop) gets an accent ring, a tinted fill, and a
-`#rank` badge ahead of its name giving its true position in the full
-(unsliced) ranking. Two layers keep that row always present:
+`MeterRow`'s `highlight` prop) gets an accent ring and a `#rank` badge ahead
+of its name giving its true position in the full (unsliced) ranking — no
+fill tint, so the fill color stays a pure function of damage share and the
+local player is identifiable by ring + badge alone, independent of how
+"hot"/"cool" their own bar happens to read. Two layers keep that row always present:
 `ensureLocalRow()` synthesizes a 0-damage row
 for the local player if they haven't hit the focused target at all yet (the
 bridge/local-estimate `rows` only ever contain attackers who've actually
