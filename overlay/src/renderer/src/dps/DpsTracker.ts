@@ -195,10 +195,14 @@ export class DpsTracker {
   private localStreakStartedAt: number | null = null
   /**
    * Per-attacker damage carried forward from earlier phases of the current
-   * boss lock (keyed by attacker objectId), accumulated in carryForwardBossDamage
-   * whenever the quest objective moves to a new objectId while one was already
-   * locked. snapshot() adds this on top of the current phase's live rows so a
-   * boss's total doesn't reset across a phase/form change.
+   * (still-open) boss chain, keyed by attacker objectId - accumulated in
+   * carryForwardBossDamage whenever the quest objective moves to a new
+   * objectId while the previous one is still alive (a genuine phase/form
+   * change). snapshot() adds this on top of the current phase's live rows so
+   * a boss's total doesn't reset across a phase/form change. Cleared by
+   * resolveBossChain whenever the previous objective had already despawned -
+   * a new, unrelated encounter starts this back at zero rather than
+   * inheriting a dead boss's damage.
    */
   private bossCarry = new Map<number, { name: string; damage: number }>()
   /** Debug: how many of each packet type we've ingested (all types, not just relevant ones). */
@@ -212,8 +216,25 @@ export class DpsTracker {
   private playerCosmetics = new Map<number, PlayerCosmetics>()
   /** The current instance's display name (MapInfoPacket.displayName), captured for the *next* instance-end snapshot. */
   private currentInstanceName = ''
-  /** Every quest-objective objectId seen locked this instance (all phases, including the current one) - lets the history snapshot collapse them into one merged boss entry instead of listing each phase separately. */
+  /**
+   * Every quest-objective objectId ever locked this instance, across every
+   * boss encounter (not just the current one) - excludes them all from
+   * `buildHistoryEnemies`'s flat per-enemy loop, since each is already
+   * accounted for either in `resolvedBossEncounters` (a finished chain) or
+   * via the live `bossSnapshot` merge for whichever chain is still open.
+   */
   private bossPhaseIds = new Set<number>()
+  /**
+   * Finished boss encounters from *this* instance, baked in by
+   * `resolveBossChain` the moment a new quest objective arrives for a boss
+   * that already despawned - i.e. a genuinely new encounter, not a phase of
+   * the one that just ended. Kept separate from the still-open chain
+   * (`lockedBossId`/`bossCarry`) so a Realm's next quest boss can't have an
+   * already-dead prior boss's damage folded into it - see `ingestQuestObjectId`.
+   * Per-instance state: cleared in `reset()`, read into the retained history
+   * entry by `buildHistoryEnemies` just before that.
+   */
+  private resolvedBossEncounters: DpsHistoryEnemy[] = []
   /** Retained past-instance summaries, newest first. Session-scoped: survives `reset()`, only cleared by a fresh page load. */
   private history: DpsHistoryEntry[] = []
   private historySeq = 0
@@ -501,9 +522,20 @@ export class DpsTracker {
   /**
    * The current quest objective changed (QuestObjectIdPacket.objectId) - the
    * game's own boss/objective marker, e.g. a dungeon's main boss. Arms the
-   * sticky lock (see onLocalHit) and, if a boss was already locked, carries
-   * its accumulated per-player damage forward so a phase/form change (a new
-   * objectId) doesn't reset the fight's total.
+   * sticky lock (see onLocalHit) and, if a boss was already locked, either:
+   *
+   * - **still alive** (`bossAlive` true) - a genuine phase/form change on the
+   *   same encounter, so its accumulated per-player damage is carried
+   *   forward (`carryForwardBossDamage`) so the fight's total doesn't reset;
+   * - **already dead** (`bossAlive` false) - a wholly new, unrelated
+   *   encounter (the next quest boss - the common case in the open-world
+   *   Realm, which cycles through many independent quest bosses with no
+   *   instance change between them, but equally applies to any instance with
+   *   more than one distinct boss). Carrying its damage forward here would
+   *   misattribute the boss that was just killed to whichever boss locks
+   *   next, so instead the just-finished chain is baked into its own
+   *   `resolvedBossEncounters` entry (`resolveBossChain`) and the new chain
+   *   starts from zero.
    *
    * Does NOT force `focusTargetId` onto a boss the local player hasn't
    * damaged yet (`bossDamagedByLocal` false) - the panel keeps following
@@ -512,18 +544,22 @@ export class DpsTracker {
    * transition on an already-engaged encounter (`bossDamagedByLocal` true,
    * carried over below) does still snap focus straight to the new phase,
    * since that's a continuation of a fight already in progress - but only
-   * if the previous lock is still alive; if it already died (`bossAlive`
-   * false), this is a genuinely new objective rather than a phase
-   * transition, so `bossDamagedByLocal` resets the same as a fresh
-   * encounter (see the `lockedBossId === null` branch below).
+   * if the previous lock is still alive; if it already died, this is a
+   * genuinely new objective rather than a phase transition, so
+   * `bossDamagedByLocal` resets the same as a fresh encounter (see the
+   * `lockedBossId === null` branch below).
    */
   private ingestQuestObjectId(data: QuestObjectIdPacketData): void {
     const newId = data.objectId
     if (!Number.isFinite(newId) || newId <= 0 || newId === this.lockedBossId) return
     if (this.lockedBossId !== null) {
-      this.carryForwardBossDamage(this.lockedBossId)
+      if (this.bossAlive) {
+        this.carryForwardBossDamage(this.lockedBossId)
+      } else {
+        this.resolveBossChain()
+        this.bossDamagedByLocal = false
+      }
       this.bossPhaseIds.add(this.lockedBossId)
-      if (!this.bossAlive) this.bossDamagedByLocal = false
     } else {
       this.bossDamagedByLocal = false
     }
@@ -533,6 +569,41 @@ export class DpsTracker {
     this.bossPhaseIds.add(newId)
     if (this.bossDamagedByLocal) {
       this.focusTargetId = newId
+    }
+  }
+
+  /**
+   * Bakes the just-finished boss chain (`lockedBossId`, plus any earlier
+   * phases already folded into `bossCarry`) into its own retained
+   * `resolvedBossEncounters` entry, then clears `bossCarry` so the next
+   * chain starts from zero instead of inheriting a dead boss's damage - see
+   * the encounter-vs-phase distinction in `ingestQuestObjectId`.
+   */
+  private resolveBossChain(): void {
+    if (this.lockedBossId === null) return
+    const entry = this.bossChainEntry()
+    if (entry) this.resolvedBossEncounters.push(entry)
+    this.bossCarry.clear()
+  }
+
+  /**
+   * Runs `bossSnapshot` for the currently locked boss chain and returns its
+   * merged rows as a `DpsHistoryEnemy`, or `null` if there's no locked chain
+   * or it has no damage yet. Shared by `resolveBossChain` (baking a finished
+   * chain into `resolvedBossEncounters`) and `buildHistoryEnemies` (the
+   * still-open chain's live entry) so the two boss-chain code paths can't
+   * drift apart.
+   */
+  private bossChainEntry(): DpsHistoryEnemy | null {
+    if (this.lockedBossId === null) return null
+    const merged = this.bossSnapshot(Date.now(), WINDOW_MS)
+    if (merged.rows.length === 0) return null
+    return {
+      id: this.lockedBossId,
+      name: merged.targetName,
+      objectType: this.objectTypes.get(this.lockedBossId) ?? null,
+      players: merged.rows,
+      cosmetics: this.cosmeticsFor(merged.rows)
     }
   }
 
@@ -633,6 +704,7 @@ export class DpsTracker {
     this.objectTypes.clear()
     this.playerCosmetics.clear()
     this.bossPhaseIds.clear()
+    this.resolvedBossEncounters = []
     // Deliberately keep typeCounts/dumpedKeys across resets so the running
     // totals (and one-time key dumps) survive instance changes - they describe
     // the whole session's traffic, not a single instance. Likewise `history`/
@@ -794,13 +866,18 @@ export class DpsTracker {
    * rushed-empty rooms fall under the threshold and are silently skipped.
    */
   private retainInstanceIfQualifying(): void {
-    if (this.bridgeEnemies.size === 0 && this.lockedBossId === null) return
+    if (
+      this.bridgeEnemies.size === 0 &&
+      this.lockedBossId === null &&
+      this.resolvedBossEncounters.length === 0
+    )
+      return
 
     const enemies = this.buildHistoryEnemies()
     if (enemies.length === 0) return
 
     const maxDamage = Math.max(...enemies.map((e) => totalDamage(e.players)))
-    const bossEngaged = this.lockedBossId !== null
+    const bossEngaged = this.lockedBossId !== null || this.resolvedBossEncounters.length > 0
     if (maxDamage < HISTORY_LOG_MIN_DAMAGE && !bossEngaged) return
 
     this.historySeq += 1
@@ -817,17 +894,22 @@ export class DpsTracker {
   }
 
   /**
-   * Builds the ranked, boss-phase-merged enemy list for a history snapshot.
-   * `bridgeEnemies` holds one entry per raw objectId the bridge has ever seen
-   * the local user hit this instance, including every phase of a boss whose
-   * objectId changed form - those phase ids (`bossPhaseIds`) are excluded from
-   * the flat per-enemy loop below and replaced with a single merged entry
-   * (reusing `bossSnapshot`'s carry-forward merge, the same one the live panel
-   * uses for a phase-changing boss - see docs/dps-engine.md's bossPhaseDamage
-   * note for why that bridge-side field is NOT what does this merging).
+   * Builds the ranked, boss-phase-merged enemy list for a history snapshot:
+   * every boss chain finished earlier this instance (`resolvedBossEncounters`
+   * - each already its own merged entry, baked in by `resolveBossChain` the
+   * moment it was superseded by an unrelated new encounter), plus the
+   * flat non-boss enemies, plus the still-open chain (if any). `bridgeEnemies`
+   * holds one entry per raw objectId the bridge has ever seen the local user
+   * hit this instance, including every phase id any boss chain has ever used
+   * (`bossPhaseIds`) - those are excluded from the flat per-enemy loop below
+   * since they're already represented in `resolvedBossEncounters` or the
+   * still-open chain's merged entry (reusing `bossSnapshot`'s carry-forward
+   * merge, the same one the live panel uses for a phase-changing boss - see
+   * docs/dps-engine.md's bossPhaseDamage note for why that bridge-side field
+   * is NOT what does this merging).
    */
   private buildHistoryEnemies(): DpsHistoryEnemy[] {
-    const enemies: DpsHistoryEnemy[] = []
+    const enemies: DpsHistoryEnemy[] = [...this.resolvedBossEncounters]
     const mergedIds = new Set(this.bossPhaseIds)
     if (this.lockedBossId !== null) mergedIds.add(this.lockedBossId)
 
@@ -843,18 +925,8 @@ export class DpsTracker {
       })
     }
 
-    if (this.lockedBossId !== null) {
-      const merged = this.bossSnapshot(Date.now(), WINDOW_MS)
-      if (merged.rows.length > 0) {
-        enemies.push({
-          id: this.lockedBossId,
-          name: merged.targetName,
-          objectType: this.objectTypes.get(this.lockedBossId) ?? null,
-          players: merged.rows,
-          cosmetics: this.cosmeticsFor(merged.rows)
-        })
-      }
-    }
+    const chainEntry = this.bossChainEntry()
+    if (chainEntry) enemies.push(chainEntry)
 
     enemies.sort((a, b) => totalDamage(b.players) - totalDamage(a.players))
     return enemies
