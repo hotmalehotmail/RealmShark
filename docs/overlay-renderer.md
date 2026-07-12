@@ -309,7 +309,7 @@ Two independent shared services, both mounted once in `App`:
 
 On mount it calls `getSpritePack()` and subscribes to `onSpritePack` (pushed
 updates), routing both through `applyPack` (`SpriteProvider.tsx:75-81`).
-`applyPack` clears the crop cache, then **decodes each atlas PNG once**
+`applyPack` clears the crop + bake caches, then **decodes each atlas PNG once**
 asynchronously with
 `createImageBitmap(blob, { colorSpaceConversion:'none', premultiplyAlpha:'none' })`
 (`SpriteProvider.tsx:53-59`) — raw decode so sampled pixels match the game's exact
@@ -339,6 +339,20 @@ vary for animated textiles — see `dyes-and-textiles.md`).
 
 Both functions (plus `isAnimated`/`frameMs`) are exposed via `SpriteContext` (`context.ts:6-37`); panels call
 them through `useSprites()` or the `<Sprite>` component.
+
+**Cache bounding (`sprites/lruCache.ts`).** Both memo caches — the crop/dye
+data-URL cache and the animated-textile bake cache — are `LruCache`s, not plain
+`Map`s (`SpriteProvider.tsx` `CROP_CACHE_MAX=2048` / `BAKE_CACHE_MAX=256`). Their
+keys are combinatorial (`objectType × size × dye × enchant × frame`), so an
+unbounded `Map` grew monotonically with every distinct player loadout seen — the
+renderer heap's dominant leak over a long session (measured ~9→88 MB over hours).
+LRU eviction bounds them: an actively animating sprite keeps re-touching its own
+frame keys, so eviction targets loadouts that have left view, not the working
+set. They're additionally **cleared on `onOverlayDetach`** (game closed) so a
+session's accumulated sprites don't stay resident until the next atlas reload —
+already-rendered data-URLs are self-contained strings, so clearing only forces
+re-derivation on the next render (the overlay hides on detach anyway); the
+decoded `atlasesRef` bitmaps are asset data, kept for the next attach.
 
 ### `Sprite` and `CharacterSprite`
 
