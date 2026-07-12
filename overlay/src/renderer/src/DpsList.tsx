@@ -1,6 +1,6 @@
 import type { PanelSize } from '../../shared/panels'
 import type { DpsSnapshot } from './dps/DpsTracker'
-import { DPS_ROW_SPRITE_SIZE, rowHeight as dpsRowHeight } from './dps/rowLayout'
+import { DPS_ROW_SPRITE_SIZE, DPS_ROW_TEXT_SIZE, rowHeight as dpsRowHeight } from './dps/rowLayout'
 import type { PlayerDps } from './dps/types'
 import { CharacterSprite } from './sprites/CharacterSprite'
 import { useEntityRegistry } from './sprites/context'
@@ -10,7 +10,7 @@ import { GearRow } from './ui/GearRow'
 import { MeterRow } from './ui/MeterRow'
 
 /** Row equipment-slot icon pixel size per panel size. 0 hides the gear row (sm degrades to sprite + name + dps only). */
-const ROW_SLOT_SIZE: Record<PanelSize, number> = { sm: 0, md: 12, lg: 14 }
+const ROW_SLOT_SIZE: Record<PanelSize, number> = { sm: 0, md: 16, lg: 20 }
 
 /** Compact number formatting (12.3k / 1.2m) so a dyed sprite + 4 gear icons + name still leave room for the dps figures in a narrow row. */
 function formatCompact(n: number): string {
@@ -121,7 +121,13 @@ function DpsList({ snapshot, maxRows, showHeader, size }: DpsListProps): React.J
             const rank = rows.indexOf(row) + 1
             const fillPct = topDamage > 0 ? (row.damage / topDamage) * 100 : 0
             return (
-              <MeterRow key={row.objectId} fillPct={fillPct} highlight={isLocal} height={rowHeight}>
+              <MeterRow
+                key={row.objectId}
+                fillPct={fillPct}
+                highlight={isLocal}
+                height={rowHeight}
+                textSize={DPS_ROW_TEXT_SIZE[size]}
+              >
                 <CharacterSprite objectId={row.objectId} size={spriteSize} className="shrink-0" />
                 <GearRow equipment={entities.equipment(row.objectId)} slotSize={slotSize} />
                 <span className="min-w-0 flex-1 truncate text-fg-muted">
