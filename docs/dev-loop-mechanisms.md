@@ -489,10 +489,12 @@ armed auto-merge on #19, and native auto-merge merged it once all four required
 checks went green.
 
 **How it works.**
-- **Trigger.** `on: workflow_run` completion of `ci` + `review`. Guard: same-repo,
+- **Trigger.** `on: workflow_run` completion of `ci` + `review` — plus `push` to
+  `session-done/**` and `pull_request: synchronize` for the interlock (§7.2). Guard: same-repo,
   PR head `claude/*` (base `staging`).
 - **Gate.** Merge only if **all** hold: both `ci` job contexts = `success`, the
-  `review-verdict` context = `success`, and no `agent:needs-human` label present.
+  `review-verdict` context = `success`, no `agent:needs-human` label present, **and** a
+  `session-done` marker exists for the PR's current head (§7.2).
 - **Action.** `gh pr merge {n} --squash --auto` using **`MERGE_PAT`** (the maintainer's
   fine-grained PAT), *not* `GITHUB_TOKEN`. `--auto` hands off to *native* auto-merge, so
   branch protection does the final "wait for green" — the job just arms it. The PAT is
@@ -536,6 +538,60 @@ so by the review-completion event `UNKNOWN` has essentially always resolved — 
 already looking at a frozen PR, so a stuck one is visible, not silent. If it ever bites, the fix is
 to let the sweep re-evaluate frozen-but-otherwise-green PRs (clearing the freeze exactly as the
 gatekeeper does), rather than merging them blindly.
+
+### 7.2 · Session interlock — no merge until the authoring session ends
+
+**Why.** The gatekeeper arms auto-merge the instant `ci` + `review-verdict` go green — which
+is decoupled from whether the **authoring agent session has actually finished**. In **PR #115**
+the fix agent was still running when review passed; auto-merge fired and squash-merged the
+head, and **54 s later** the same session pushed a real correction (`2b6acae`) to the
+now-merged branch, where it stranded (rescued later as a separate PR). The model declaring
+itself "done" mid-run is not a reliable signal — it literally reversed its own conclusion
+after saying so. The interlock adds the missing gate input: **the authoring session has
+terminated.**
+
+**The marker.** A Claude Code **`SessionEnd` hook** (`.claude/hooks/session-done-marker.sh`,
+registered via committed `.claude/settings.json`) fires when the cloud session *actually*
+ends — a harness signal, not the model's judgment — and pushes a marker branch
+**`refs/heads/session-done/<head-sha>`** at the session's head commit. Why a branch and not a
+tag/status: in the cloud env `gh` is absent and GitHub goes through a scoped MCP server
+(agent-only — a hook subprocess can't use it) or a local git proxy that accepts **only
+`refs/heads/*` pushes** (custom refs and tags → HTTP 403). The hook no-ops outside a remote
+pipeline run (guards: `CLAUDE_CODE_REMOTE=true` + a `claude/*` branch), so a maintainer's local
+sessions never touch it. Marker existence is checked with `gh api .../git/ref/heads/session-done/<sha>`.
+
+**The gate (gatekeeper).** Before arming, the gatekeeper now also requires a `session-done`
+marker for the PR's **current** head. Two extra triggers make this prompt rather than reliant
+on the sweep:
+- **`push` to `session-done/**`** — the marker landing *is* the wake-up. This is what closes
+  the #115 timing exactly: if the session is still running when review completes, the
+  `workflow_run` arm attempt finds no marker and holds; when the session ends, the marker push
+  re-triggers arming. The push path only arms for a marker that is some open PR's **current**
+  head (a stale marker matches nothing).
+- **`pull_request: synchronize`** — because native auto-merge, once armed, merges *any* future
+  green head, a new commit landing after arming would otherwise slip through un-marked. On a
+  head move, if the PR is armed and the new head has no marker yet, the gatekeeper **disarms**;
+  it re-arms when that head's marker lands. Invariant: *auto-merge is armed only while the
+  current head has a marker.*
+
+**Sweep's role (backstop only).** `sweep.yml` honors the **same** marker gate — it must not
+merge a still-running session's head. The **one** bypass is the **crash backstop**: `SessionEnd`
+does not fire on a hard `SIGKILL`, so a green, marker-less PR whose head has been idle past
+`CRASH_MIN` (45 min) is merged anyway, loudly noted, rather than stranded forever. The sweep is
+no longer the *normal* arming path for the interlock (the marker push is) — only the rare
+crash net. It also **GCs** orphan `session-done/*` markers (any whose sha isn't an open PR's
+current head), bounding branch clutter.
+
+**Status.** 🟡 Built (this change), **not yet live-validated.** Two routine-specific facts can
+only be confirmed once the hook is on the routine's startup-checkout branch (it registers at
+session start) and a real routine run has exercised it: **(a)** `SessionEnd` fires in the
+API-fired Routine (confirmed only for `Stop` in an interactive web session so far), and **(b)**
+the Routine's `HEAD` at `SessionEnd` equals the PR head. Until then, the crash backstop means a
+non-firing hook degrades to "merges ~45 min late," not "never merges."
+
+**What must be built for §7.2.** ✅ the hook + `.claude/settings.json`; ✅ gatekeeper marker
+gate + `push`/`synchronize` triggers + synchronize-disarm; ✅ sweep marker gate + crash backstop
++ marker GC. ⏳ live validation of (a)/(b) above on a Routine run.
 
 ---
 
