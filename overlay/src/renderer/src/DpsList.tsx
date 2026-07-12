@@ -27,22 +27,27 @@ interface DpsListProps {
 }
 
 /**
- * Picks which rows to render: the top `maxRows` by cumulative damage, but
- * with the local player's row always present (pinned in the last slot,
- * displacing the lowest-ranked visible row) even when their true rank falls
- * below the cut. `rows` is already sorted descending by damage.
+ * Picks which rows to render: always exactly `maxRows` slots, so the list's
+ * rendered height stays fixed regardless of how many players are currently
+ * in the rolling damage window (a `null` slot renders as a blank placeholder
+ * row). The local player's row is reserved a permanent last slot rather than
+ * sorted in with everyone else, so it never jumps position or disappears as
+ * their rank/damage changes. `rows` is already sorted descending by damage.
  */
 function selectVisibleRows(
   rows: PlayerDps[],
   maxRows: number,
   localPlayerId: number | null
-): PlayerDps[] {
-  const localIndex =
-    localPlayerId === null ? -1 : rows.findIndex((r) => r.objectId === localPlayerId)
-  if (localIndex === -1 || localIndex < maxRows) {
-    return rows.slice(0, maxRows)
-  }
-  return [...rows.slice(0, Math.max(0, maxRows - 1)), rows[localIndex]]
+): (PlayerDps | null)[] {
+  const localRow =
+    localPlayerId === null ? null : (rows.find((r) => r.objectId === localPlayerId) ?? null)
+  const others = localRow === null ? rows : rows.filter((r) => r.objectId !== localPlayerId)
+  const otherSlots = localRow === null ? maxRows : maxRows - 1
+  const visibleOthers = others.slice(0, otherSlots)
+  const placeholders: null[] = new Array(Math.max(0, otherSlots - visibleOthers.length)).fill(null)
+  return localRow === null
+    ? [...visibleOthers, ...placeholders]
+    : [...visibleOthers, ...placeholders, localRow]
 }
 
 /**
@@ -72,6 +77,9 @@ function DpsList({ snapshot, maxRows, showHeader, size }: DpsListProps): React.J
   const entities = useEntityRegistry()
   const spriteSize = ROW_SPRITE_SIZE[size]
   const slotSize = ROW_SLOT_SIZE[size]
+  // Fixed per-row height (real or placeholder) so the list's total rendered
+  // height never changes as players enter/leave the rolling damage window.
+  const rowHeight = Math.max(spriteSize, 16)
 
   if (snapshot.targetId === null) {
     return <div className="text-xs text-white/40">No target attacked yet</div>
@@ -94,18 +102,25 @@ function DpsList({ snapshot, maxRows, showHeader, size }: DpsListProps): React.J
         <div className="text-xs text-white/40">No recent damage</div>
       ) : (
         <div className="space-y-1">
-          {visibleRows.map((row) => {
+          {visibleRows.map((row, i) => {
+            // Empty slot: keeps the list at a fixed `maxRows` height instead
+            // of collapsing when fewer players are in the rolling damage
+            // window (see `selectVisibleRows`).
+            if (row === null) {
+              return <div key={`empty-${i}`} style={{ height: rowHeight }} />
+            }
             const equipment = entities.equipment(row.objectId) ?? []
             const isLocal = row.objectId === localPlayerId
             // True rank within the full (unsliced) ranking, not the position
             // in this row's visible list - only meaningful to surface when
-            // it's the local player's row (a pinned self-row may sit well
-            // past its numeric position in `visibleRows`).
+            // it's the local player's row (a pinned self-row sits in a fixed
+            // last slot regardless of its numeric position in `visibleRows`).
             const rank = rows.indexOf(row) + 1
             const fillPct = topDamage > 0 ? Math.min(100, (row.damage / topDamage) * 100) : 0
             return (
               <div
                 key={row.objectId}
+                style={{ height: rowHeight }}
                 className={`relative flex items-center gap-1.5 overflow-hidden rounded-sm text-xs ${
                   isLocal ? 'ring-1 ring-inset ring-sky-400/70' : ''
                 }`}
