@@ -142,10 +142,13 @@ The pack ships two frame sources:
 
 The renderer computes the current frame from a clock: `frame = floor(now /
 frameMs) % frameCount`, per base sprite and per textile dye independently, all
-folded into the memo key so each tick re-composites the next frame. Rather than a
-global clock, **each `<Sprite>` ticks itself** (a `setInterval` at `frameMs`)
-*only when* `isAnimated()` says it has something to animate — so static sprites
-never re-render and the event-driven panels stay idle.
+folded into the memo key so each tick re-composites the next frame. **Each
+`<Sprite>` ticks itself** (a `setInterval` at `frameMs`) *only when*
+`isAnimated()` says it has something to animate — so static sprites never
+re-render and the event-driven panels stay idle. This coarse per-sprite tick
+only selects *which discrete frame* to show; it's unrelated to the continuous
+rAF clock a dye with `<AnimatedDye>` motion uses instead (see "Animated cloth
+motion (scroll/rotate)" below).
 
 The frame rate is **`textileAnimMs`** in Settings (default **200 ms/frame**),
 pushed live via the `settingsChanged` IPC — RotMG's own rate isn't in the assets,
@@ -177,10 +180,13 @@ pixels exact, which matters both for the dye colour and the base sprite.
 | `overlay/src/shared/ipc.ts` | `SpritePack` type incl. `dyeTable` / `maskTable` / `animTable` / `animDyeTable`. |
 | `overlay/src/main/spritePack.ts` | Caches the pack; persists `dyeTable`/`maskTable`/`animTable`/`animDyeTable`; forces a refetch when a cache predates them. |
 | `overlay/src/renderer/src/sprites/EntityRegistry.tsx` | Tracks `clothingDye`(32)/`accessoryDye`(33) per objectId from the packet stream. |
-| `overlay/src/renderer/src/sprites/SpriteProvider.tsx` | `getDyedSprite`/`getSprite` — the compositor and per-frame lookup (`TEXTILE_SUB` lives here). |
-| `overlay/src/renderer/src/sprites/Sprite.tsx` | `<Sprite>` — ticks its own animation clock (`isAnimated`) only when the sprite actually animates. |
+| `overlay/src/renderer/src/sprites/SpriteProvider.tsx` | `getDyedSprite`/`getSprite` — the static per-pixel compositor and per-frame lookup; `bakeAnimatedDye` — bakes a `DyeBake` for a dyeAnimated sprite. |
+| `overlay/src/renderer/src/sprites/dyeBake.ts` | `bakeDyedSprite`/`renderDyeFrame` — the continuous scroll/rotate compositor: bake once (`TEXTILE_SUB` lives here), redraw every frame via `CanvasPattern`/compositing ops, no per-frame readback or encode. |
+| `overlay/src/renderer/src/sprites/animClock.ts` | `subscribeAnimClock` — the single shared `requestAnimationFrame` loop every animated-dye canvas subscribes to. |
+| `overlay/src/renderer/src/sprites/AnimatedDyeCanvas.tsx` | `<AnimatedDyeCanvas>` — subscribes a `<canvas>` to the shared clock and calls `renderDyeFrame` every tick. |
+| `overlay/src/renderer/src/sprites/Sprite.tsx` | `<Sprite>` — ticks its own *discrete*-frame clock (`isAnimated`) only when the sprite has idle/textile frames to cycle; routes a `dyeAnimated` dye to `<AnimatedDyeCanvas>` instead of `getDyedSprite`. |
 | `overlay/src/renderer/src/sprites/CharacterSprite.tsx` | `<CharacterSprite objectId>` — resolves skin/class + dyes and renders via `<Sprite>`. |
-| `overlay/src/shared/settings.ts` | `textileAnimMs` — textile animation frame duration. |
+| `overlay/src/shared/settings.ts` | `textileAnimMs` — textile animation frame duration; `textileScrollSpeed`/`textileRotateSpeed` — continuous-motion rate. |
 
 ## Wire-format note
 
@@ -205,22 +211,64 @@ never parsed before.
   of `speed` its direction: `1` = horizontal scroll, `2` = vertical scroll,
   `3` = rotate (`pivotX`/`pivotY` offset the rotation center from the tile
   center).
-- **Renderer:** `SpriteProvider.tsx`'s `getDyedSprite` looks up
-  `pack.animDyeTable[dyeId]` for a textile dye (`dyeTable[id][0] === 10`) and,
-  when present, offsets the tiled pattern's sample coordinates by
-  `time × speed` (scroll) or rotates them about the pivot (rotate, quantized to
-  `ROT_STEPS` frames so the composite cache stays bounded) before tiling —
-  continuous, not a discrete frame cycle. `dyeAnimated`/`isAnimated` gate a
-  `<Sprite>`'s clock to tick at the smooth `DYE_ANIM_MS` (50 ms) instead of the
-  coarser `frameMs` when a dye has this. `textileScrollSpeed` (default `1.5`)
-  and `textileRotateSpeed` (default `0.15`) in `overlay/src/shared/settings.ts`
-  scale the dye's raw `speed` into output pattern-pixels/sec and radians/sec
-  respectively, live-tunable with no rebuild.
+- **Renderer — continuous, not rasterized:** a dye with `animDyeTable[dyeId]`
+  (textile, `dyeTable[id][0] === 10`) never goes through `getDyedSprite`'s
+  per-pixel compositor at all. `<Sprite>` checks `dyeAnimated()` and instead
+  renders `<AnimatedDyeCanvas>`, which is driven by the **bake once, redraw
+  every frame** split in `overlay/src/renderer/src/sprites/dyeBake.ts`:
+  - `bakeAnimatedDye` (`SpriteProvider.tsx`) resolves the base sprite, mask,
+    and dyes once per `(baseType, size, clothingDye, accessoryDye, discrete
+    frame)` combination — **not** on the animation phase — into a `DyeBake`:
+    the base silhouette with any *static* dye (solid colour, or a still
+    textile) already composited in, plus, for each dye that has continuous
+    motion, a pattern `tile` canvas (cropped once, no scaling), a boolean
+    `regionSelector` mask (which output pixels belong to this dye's
+    clothing/accessory region) and a `regionShade` mask (grey = the mask
+    channel's shade value at each pixel) — all baked via the same
+    `getImageData`/per-pixel approach `getDyedSprite` uses for statics, just
+    once instead of every frame.
+  - `renderDyeFrame` runs every animation frame: draws the baked `base`, then
+    for each moving layer fills a repeating `CanvasPattern` from its `tile`
+    with a **fractional** `DOMMatrix` transform (`CanvasPattern.setTransform`)
+    — a translate for scroll, a rotate about the pivot for rotate — and
+    composites it through `regionSelector`/`regionShade` with
+    `globalCompositeOperation` (`multiply` for the shade, `destination-in` for
+    the region and to restore the pattern's own alpha after the multiply pass
+    flattens it). No `getImageData`/`toDataURL` and no per-pixel JS loop on
+    this path — only `drawImage`/`fillRect` calls, entirely on the GPU
+    compositor.
+  - `overlay/src/renderer/src/sprites/animClock.ts` is a single shared
+    `requestAnimationFrame` loop; every `<AnimatedDyeCanvas>` subscribes to it
+    (starts on first subscriber, stops on last) instead of running its own
+    timer, so every animated sprite on screen (e.g. several DPS-list rows)
+    renders the same phase and stays in sync — vsync-aligned motion with no
+    per-sprite `setInterval` and no `ROT_STEPS`/scroll-offset quantization.
+  - `textileScrollSpeed` (default `1.5`) and `textileRotateSpeed` (default
+    `0.15`) in `overlay/src/shared/settings.ts` scale the dye's raw `speed`
+    into output pattern-pixels/sec and radians/sec respectively; they're read
+    live by `renderDyeFrame` every frame, so they still tune the rate with no
+    rebuild and no rebake.
+  - The old per-sprite `DYE_ANIM_MS` tick is gone: `<Sprite>`'s `setInterval`
+    now only selects the *discrete* frame (base idle frames, a non-animated
+    multi-frame textile) at the coarser `frameMs`; it's irrelevant to — and no
+    longer needed by — the continuous motion.
 - **Gotcha already hit once:** `overlay/src/main/spritePack.ts` caches the pack
   pushed from the bridge into a `SpritePack` it hand-builds field by field —
   any new top-level pack field (like `animDyeTable`) must be added there *and*
   to the `requestSpritePack` staleness check, or it's silently dropped even
   though the bridge emits it and the renderer is wired to consume it.
+- **Rotation pivot is a single global transform, not per-tile:** the pattern
+  fill rotates as one rigid tiling about `(pw/2 + pivotX, ph/2 + pivotY)` in
+  the pattern's own local space (`CanvasPattern.setTransform`), matching this
+  issue's suggested "rotation on the pattern/context transform" technique.
+  This is a deliberate simplification versus the old per-pixel formula, which
+  rotated the *sample* coordinate mod the tile size — equivalent to each
+  repeated tile spinning independently about its own center. The two only
+  produce identical output for rotation angles that are lattice symmetries of
+  the tile; visually both read as smooth, seamless spin. If a specific
+  animated cloth ever needs the old per-tile windmill look, that would require
+  re-rasterizing the tile itself (rotated, with toroidal wraparound) instead
+  of transforming the pattern fill.
 
 ## Gotchas / history
 

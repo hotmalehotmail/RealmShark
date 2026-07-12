@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
+import { AnimatedDyeCanvas } from './AnimatedDyeCanvas'
 import { useSprites } from './context'
-import { DYE_ANIM_MS } from './SpriteProvider'
 
 interface SpriteProps {
   /** The RotMG objectType to render. Null/undefined renders nothing. */
@@ -33,26 +33,54 @@ export function Sprite({
   accessoryDye,
   className
 }: SpriteProps): React.JSX.Element | null {
-  const { getSprite, getDyedSprite, isAnimated, dyeAnimated, frameMs } = useSprites()
+  const {
+    getSprite,
+    getDyedSprite,
+    isAnimated,
+    dyeAnimated,
+    bakeAnimatedDye,
+    frameMs,
+    scrollSpeed,
+    rotateSpeed
+  } = useSprites()
 
-  // If this sprite animates (idle character frames or an animated textile dye),
-  // tick locally so it advances; static sprites never tick. A continuously
-  // scrolling/rotating cloth ticks at the smooth DYE_ANIM_MS; frame-cycling
-  // sprites tick at the (coarser) configured frame rate.
+  // If this sprite animates, tick locally so it advances; static sprites never
+  // tick. This drives discrete frame-cycling (idle character frames, a
+  // multi-frame textile) at the configured frame rate - including for a
+  // dyeAnimated sprite whose base also happens to have idle frames. The
+  // continuous scroll/rotate motion itself doesn't depend on this tick at
+  // all: AnimatedDyeCanvas below subscribes to the shared rAF clock instead,
+  // so multiple animated sprites stay vsync-aligned and in phase with each
+  // other regardless of this (much coarser) frame-select re-render.
   const [, setTick] = useState(0)
   const animated = isAnimated(objectType, clothingDye, accessoryDye)
   const smooth = dyeAnimated(clothingDye, accessoryDye)
   useEffect(() => {
     if (!animated) return
-    const interval = smooth ? DYE_ANIM_MS : Math.max(50, frameMs)
-    const id = setInterval(() => setTick((t) => t + 1), interval)
+    const id = setInterval(() => setTick((t) => t + 1), Math.max(50, frameMs))
     return () => clearInterval(id)
-  }, [animated, smooth, frameMs])
+  }, [animated, frameMs])
 
   if (objectType == null) return null
 
   const dyed =
     (clothingDye != null && clothingDye > 0) || (accessoryDye != null && accessoryDye > 0)
+
+  if (dyed && smooth) {
+    const bake = bakeAnimatedDye(objectType, size, clothingDye, accessoryDye)
+    if (bake) {
+      return (
+        <AnimatedDyeCanvas
+          bake={bake}
+          size={size}
+          scrollSpeed={scrollSpeed}
+          rotateSpeed={rotateSpeed}
+          className={className}
+        />
+      )
+    }
+  }
+
   const url = dyed
     ? getDyedSprite(objectType, size, clothingDye, accessoryDye)
     : getSprite(objectType, size)
