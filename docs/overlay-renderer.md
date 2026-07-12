@@ -27,7 +27,7 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/panels/PanelFrame.tsx` | One panel's chrome: title bar, drag, size/pin buttons, visibility. |
 | `overlay/src/renderer/src/panels/anchor.ts` | Percentage-anchor ↔ pixel math (`panelStyle`, `anchorFromPointer`). |
 | `overlay/src/renderer/src/panels/registry.ts` | `type → { title, per-size px dims, component }` and `PanelContentProps`. |
-| `overlay/src/renderer/src/panels/{Status,Dps,Console,Character,Instance,DpsSummary}Panel.tsx` | The six panel bodies. |
+| `overlay/src/renderer/src/panels/{Status,Dps,Console,Character,Instance,DpsSummary,Loot}Panel.tsx` | The seven panel bodies. |
 | `overlay/src/renderer/src/ui/*.tsx` | Shared UI primitives (`Button`, `EmptyState`, `Swatch`, `GearRow`, `MeterRow`, `StatRow`) — see `overlay-ui-style.md`. |
 | `overlay/src/renderer/src/assets/main.css` | Tailwind entry + the `@theme` design-token block — see `overlay-ui-style.md`. |
 | `overlay/src/renderer/src/sprites/SpriteProvider.tsx` | Loads/decodes the atlas pack; `getSprite` / `getDyedSprite`. |
@@ -38,6 +38,9 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/dps/useDpsTracker.ts` | React hook wrapping `DpsTracker` (event-driven on bridge `dps` packets + 1 s fallback recompute). |
 | `overlay/src/renderer/src/dps/useDpsHistory.ts` | React hook owning a dedicated `DpsTracker` instance for the DPS summary panel; exposes `DpsHistoryEntry[]`. |
 | `overlay/src/renderer/src/dps/types.ts` | Packet-field shapes the tracker reads. |
+| `overlay/src/renderer/src/loot/LootTracker.ts` | Framework-agnostic class ingesting packets → the local player's session-scoped white/orange bag drop log (§7). |
+| `overlay/src/renderer/src/loot/useLootTracker.ts` | React hook wrapping `LootTracker` (event-driven on `onPacketBatch`, re-renders only when `ingest` reports a change). |
+| `overlay/src/renderer/src/loot/types.ts` | Packet-field shapes the loot tracker reads, incl. the synthetic `lootBagTypes` envelope. |
 
 ---
 
@@ -71,16 +74,18 @@ window onto the outside world is `window.overlay`, the object
 > **Non-obvious fact — the packet stream is a fan-out, not a store.** There is no
 > central packet store in the renderer. Each consumer independently calls
 > `window.overlay.onPacketBatch(...)`: `StatusPanel` (counter), `EntityRegistry`,
-> and `useDpsTracker` each register their own listener and process the same
-> `PacketEnvelope[]` batches. Ordering across consumers is not coordinated.
+> `useDpsTracker`, and `useLootTracker` each register their own listener and
+> process the same `PacketEnvelope[]` batches. Ordering across consumers is not
+> coordinated.
 
 A `PacketEnvelope` is `{ type, direction, time, data }` (`overlay/src/shared/ipc.ts:61-66`),
 with `data: unknown` — each consumer casts `data` to its own field shape. The
 stream carries both **real game packets** (`UpdatePacket`, `DamagePacket`, …) and
 **synthetic envelopes** the Java bridge injects: `type:"dps"` (the computed DPS
-snapshot) and `type:"objectNames"` (enemy names). Those originate in
-`src/main/java/bridge/DpsBroadcaster.java` and `ObjectNames.java`; see
-`bridge-server.md` / `dps-engine.md`.
+snapshot), `type:"objectNames"` (enemy names), and `type:"lootBagTypes"`
+(BagType 6/8 item categorization for the Loot panel, §7). Those originate in
+`src/main/java/bridge/DpsBroadcaster.java`, `ObjectNames.java`, and
+`LootBagTypes.java`; see `bridge-server.md` / `dps-engine.md`.
 
 ### App shell & window modes (`App.tsx`)
 
@@ -240,6 +245,7 @@ per-panel scale tables at the top of each file.
 | `CharacterPanel` | "Character" | `EntityRegistry` (local player) | Big dyed sprite + 4 equip icons + username. |
 | `InstancePanel` | "Instance" | `EntityRegistry.characters()` | Every named player in the instance, dyed sprites + gear. |
 | `DpsSummaryPanel` | "DPS Summary" | `useDpsHistory()` | Post-fight master/detail: a master list of retained past instances (icon + name + a "You: Xdmg (#rank)" headline), each opening a detail view of that instance's enemies ranked by total damage, expandable to a frozen per-player breakdown. See §5.1. |
+| `LootPanel` | "Loot" | `useLootTracker()` | Session log of the local player's white/orange bag drops (BagType 6/8), grouped under each color's own bag sprite as a category header, chronological (not de-duplicated) within each. See §7. |
 
 **StatusPanel** (`panels/StatusPanel.tsx`) is the only panel wired straight to
 the IPC surface rather than a shared service. It subscribes to `onBridgeStatus`,
@@ -756,6 +762,76 @@ both attribute to the owner before the row is ever built — see
 log lines into the same buffer prefixed `[main]` (`consoleLog.ts:44-46`).
 `ConsolePanel` subscribes via `subscribeLogEntries` and offers substring search
 with `<mark>` highlighting, level colours, auto-scroll-when-at-bottom, and clear.
+
+---
+
+## 7. Loot panel — session-scoped BagType log
+
+The Loot panel (issue #105) tracks every item the local player picks up whose
+game-data `BagType` is 6 (white bag) or 8 (orange/ST bag) — the two colors
+players actually screenshot — grouped under each color's own bag sprite.
+Categorization is entirely asset-derived (no hand-maintained item list): see
+[asset-pipeline.md](asset-pipeline.md)'s "BagType — loot categorization"
+section for how `<BagType>` is extracted and shipped as the bridge's synthetic
+`lootBagTypes` envelope, and [bridge-server.md](bridge-server.md) §6 for the
+bridge-side broadcast mechanics.
+
+### `LootTracker` (`loot/LootTracker.ts`)
+
+A framework-agnostic class (no React, same shape as `DpsTracker`) that ingests
+`PacketEnvelope[]` independently of every other tracker/registry — its own
+local-player resolution (`CreateSuccessPacket` + `EnemyHitPacket.mainID`,
+identical to `EntityRegistry`/`DpsTracker`'s approach) and its own
+`Map<statTypeNum, lastValue>` of the local player's 8 bag inventory slots
+(`INVENTORY_4..11`, wire `statTypeNum` 12-19 — the 4 *equipped* slots
+`EntityRegistry` already reads are 8-11, a distinct range).
+
+**"Obtained" detection.** A bag slot transitioning from empty (`<= 0`, or never
+seen) to a populated item id is logged as a pickup — the same shape a real
+pickup takes (landing in a free bag slot), and the one transition that can't
+also mean "dropped" (populated → empty) or "reconnected mid-session" (an
+already-known value re-arriving). The new item's `objectType` is looked up in
+`bagTypeTable` (from the `lootBagTypes` envelope); if it isn't BagType 6 or 8,
+nothing is logged. Two different bag slots holding the *same* item id both log
+their own entry — the log is chronological, not a de-duplicated set, so two
+of the same white-bag item dropping in one session both appear.
+
+**Session-scoped, mirroring `DpsTracker`'s retained history (§5.1).**
+`entries` (the loot log itself) persists across `MapInfoPacket` (instance
+change) and is cleared only by `reset()` (overlay detach / game close) — the
+same split `DpsTracker` uses between its per-instance live state and its
+retained cross-instance history. `MapInfoPacket` only calls
+`resetPerInstance()` (forgets the local player id + last-known slot values, so
+a fresh full-inventory resend after a map change doesn't misfire against
+stale slot state), never touching `entries`. `bagTypeTable`/`lootBagIcons`/
+`itemNames` (the asset-derived categorization data itself) are deliberately
+never cleared by either reset — like the sprite pack, they're app-lifetime
+data, not session state.
+
+### `useLootTracker` (`loot/useLootTracker.ts`)
+
+One dedicated `LootTracker` instance per hook call (same pattern as
+`useDpsHistory`), piping `onPacketBatch` into `tracker.ingest`. Unlike
+`useDpsTracker`'s always-re-snapshot-on-relevant-envelope approach,
+`ingest()` itself returns whether anything display-relevant changed (new
+entry logged, or the `lootBagTypes` meta updated), so the hook only
+re-renders on an actual change — loot events are rare compared to DPS
+churn, so there's no fallback poll timer here.
+
+### `LootPanel` (`panels/LootPanel.tsx`)
+
+For each tracked BagType (6, 8), if it has zero entries the whole category is
+hidden; if the panel has zero entries across *both* colors it shows the
+shared `EmptyState` instead. A non-empty category renders its bag-color
+sprite (`bagIcon(bagType)`, resolved through the ordinary `<Sprite
+objectType>` path — no special-casing) plus a count, then every obtained
+item as its own sprite, **newest first** so the latest drop is visible
+without scrolling. Each item sprite carries its resolved name (`itemName`,
+falling back to `#<objectType>` if unresolved) as a native `title` tooltip at
+every size, and additionally inline beside the sprite at `size === 'lg'` — the
+"at least a name on hover, or beside the sprite at larger sizes" acceptance
+bar. Sized/registered via the standard checklist (§2): `registry.ts`'s `loot`
+entry, a default-layout instance in `PanelCanvas.tsx`.
 
 ---
 

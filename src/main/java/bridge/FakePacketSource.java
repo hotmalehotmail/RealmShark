@@ -1,5 +1,6 @@
 package bridge;
 
+import assets.IdToAsset;
 import packets.data.GroundTileData;
 import packets.data.ObjectData;
 import packets.data.ObjectStatusData;
@@ -68,6 +69,13 @@ import java.util.Random;
  * encounter was already damaged), and the fight ends with the final phase
  * despawning with no new objective (proving focus falls back to last-hit
  * afterward).
+ * <p>
+ * Also registers a handful of synthetic {@link IdToAsset} entries (BagType 6/
+ * white and 8/orange item ids plus their ground-bag icon entities - see
+ * {@code LOOT_ITEM_TYPES}) and periodically assigns them into the local
+ * player's bag inventory slots (INVENTORY_4..11) via {@link #lootPickupStatus},
+ * so the Loot panel's asset-derived BagType categorization is demonstrable and
+ * regression-testable with no game installed (issue #105).
  */
 public class FakePacketSource {
 
@@ -129,6 +137,29 @@ public class FakePacketSource {
     private static final String TRANSIENT_NAME = "Eve,7f2c";
     private static final int[] TRANSIENT_EQUIPMENT = {4005, 4105, 4205, 4305};
 
+    // Loot panel demo (issue #105): the ground-bag entities the two tracked
+    // BagTypes (6 = white, 8 = orange/ST - see docs/asset-pipeline.md) resolve
+    // to, plus a handful of item objectTypes with a known BagType. Registered
+    // directly with IdToAsset (bypassing real extraction, which needs a game
+    // install) via IdToAsset.registerFake() below, so the loot categorization
+    // pipeline is demonstrable/regression-testable headless - the same
+    // "arbitrary plausible objectTypes" convention as WEAPON_ID/LOCAL_SKIN_ID
+    // above, extended with the BagType metadata the Loot panel actually reads.
+    private static final int WHITE_BAG_ICON_TYPE = 9000;
+    private static final int ORANGE_BAG_ICON_TYPE = 9001;
+    // One item id (9100) repeats, so the demo also exercises "duplicate
+    // pickups of the same item type are both shown" (the log isn't a
+    // de-duplicated set); 9300 is BagType 3 - not tracked - and must never
+    // appear in the Loot panel.
+    private static final int[] LOOT_ITEM_TYPES = {9100, 9100, 9200, 9300};
+    private static final int[] LOOT_ITEM_BAG_TYPES = {6, 6, 8, 3};
+    // The 8 bag/held inventory slots (INVENTORY_4..11); slot 0..3 are the
+    // equipped gear ROSTER_EQUIPMENT already covers.
+    private static final int LOOT_SLOT_COUNT = 8;
+    // Ticks between simulated pickups - long enough that each is a distinct,
+    // legible event rather than a flicker.
+    private static final int LOOT_CYCLE_TICKS = 16;
+
     // Set FAKE_NO_CREATE_SUCCESS to simulate a mid-session attach: the engine
     // never sees CreateSuccessPacket and must fall back to EnemyHitPacket.mainID
     // to identify the local player (exercises DpsEngine.resolveLocalPlayer).
@@ -140,6 +171,17 @@ public class FakePacketSource {
 
     /** Start emitting fake packets on a background daemon thread. */
     public void start() {
+        // Registered synchronously (not on the loop thread) so they're present
+        // as early as possible; IdToAsset.reloadAssets() re-applies these after
+        // any (real-mode-only, here always a no-op) background reload, so this
+        // can't race away regardless of ObjectNames.init's own asset-loader
+        // thread ordering.
+        IdToAsset.registerFake(WHITE_BAG_ICON_TYPE, "Bag", 6);
+        IdToAsset.registerFake(ORANGE_BAG_ICON_TYPE, "Bag", 8);
+        for (int i = 0; i < LOOT_ITEM_TYPES.length; i++) {
+            IdToAsset.registerFake(LOOT_ITEM_TYPES[i], "Equipment", LOOT_ITEM_BAG_TYPES[i]);
+        }
+
         Thread t = new Thread(this::loop, "fake-packet-source");
         t.setDaemon(true);
         t.start();
@@ -214,10 +256,18 @@ public class FakePacketSource {
             // engine can't measure fight duration, so every computed DPS is 0.
             // Every ~10 ticks it also carries a non-local player's weapon swap, so
             // the Instance panel shows OTHER players' equipment updating live (the
-            // merge/render path is identical for every objectId).
+            // merge/render path is identical for every objectId). Every
+            // LOOT_CYCLE_TICKS it also carries a local-player bag-slot update, to
+            // exercise the Loot panel (see lootPickupStatus()).
             NewTickPacket nt = newTick(tick);
+            java.util.List<ObjectStatusData> status = new java.util.ArrayList<>();
             if (tick > 0 && tick % 10 == 0) {
-                nt.status = new ObjectStatusData[]{weaponSwapStatus(tick)};
+                status.add(weaponSwapStatus(tick));
+            }
+            ObjectStatusData loot = lootPickupStatus(tick);
+            if (loot != null) status.add(loot);
+            if (!status.isEmpty()) {
+                nt.status = status.toArray(new ObjectStatusData[0]);
             }
             Register.INSTANCE.emitPacketLogs(nt);
             // The local player firing then landing a hit, every tick like a real
@@ -390,6 +440,46 @@ public class FakePacketSource {
         st.stats = new StatData[]{
             stat(StatType.INVENTORY_0_STAT, SWAP_WEAPONS[(tick / 10) % SWAP_WEAPONS.length])
         };
+        return st;
+    }
+
+    /**
+     * Simulates the local player's bag-slot inventory (INVENTORY_4..11) for
+     * the Loot panel: every {@code LOOT_CYCLE_TICKS} ticks it either clears a
+     * slot (a couple ticks before its next reuse) or populates a now-empty
+     * slot with the next item in {@link #LOOT_ITEM_TYPES} - an explicit
+     * empty-then-filled pair, since the Loot panel only treats an
+     * empty-to-populated slot transition as "obtained" (matching how a real
+     * pickup lands in a free bag slot). Cycles through all 8 bag slots and all
+     * 4 demo items (two BagType 6, one BagType 8, one untracked), so over time
+     * it exercises every tracked category plus the untracked-item exclusion.
+     * Returns null on a tick with nothing to report.
+     */
+    private ObjectStatusData lootPickupStatus(int tick) {
+        int cycle = tick / LOOT_CYCLE_TICKS;
+        int offset = tick % LOOT_CYCLE_TICKS;
+        int slotStat = StatType.INVENTORY_4_STAT.get() + (cycle % LOOT_SLOT_COUNT);
+        if (offset == LOOT_CYCLE_TICKS / 2 - 2) {
+            return lootSlotStat(slotStat, -1);
+        }
+        if (offset == LOOT_CYCLE_TICKS / 2) {
+            int itemType = LOOT_ITEM_TYPES[cycle % LOOT_ITEM_TYPES.length];
+            return lootSlotStat(slotStat, itemType);
+        }
+        return null;
+    }
+
+    /** One local-player bag-slot stat update - see {@link #lootPickupStatus}. */
+    private ObjectStatusData lootSlotStat(int statTypeNum, int value) {
+        ObjectStatusData st = new ObjectStatusData();
+        st.objectId = LOCAL_PLAYER_ID;
+        st.pos = new WorldPosData();
+        StatData s = new StatData();
+        s.statTypeNum = statTypeNum;
+        s.statType = StatType.byOrdinal(statTypeNum);
+        s.statValue = value;
+        s.statValueTwo = -1;
+        st.stats = new StatData[]{s};
         return st;
     }
 

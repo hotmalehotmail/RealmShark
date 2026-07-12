@@ -7,6 +7,7 @@ import ConsolePanel from './ConsolePanel'
 import DpsPanel from './DpsPanel'
 import DpsSummaryPanel from './DpsSummaryPanel'
 import InstancePanel from './InstancePanel'
+import LootPanel from './LootPanel'
 import StatusPanel from './StatusPanel'
 
 export interface PanelContentProps {
@@ -80,5 +81,15 @@ export const PANEL_REGISTRY: Record<string, PanelSpec> = {
       lg: { width: 400, height: 420 }
     },
     component: DpsSummaryPanel
+  },
+  loot: {
+    type: 'loot',
+    title: 'Loot',
+    sizes: {
+      sm: { width: 200, height: 140 },
+      md: { width: 260, height: 220 },
+      lg: { width: 340, height: 300 }
+    },
+    component: LootPanel
   }
 }

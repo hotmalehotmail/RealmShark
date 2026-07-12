@@ -35,6 +35,13 @@ function defaultLayout(): PanelInstance[] {
       anchor: { pos: 'tl', x: 65, y: 40 },
       size: 'md',
       zIndex: 6
+    },
+    {
+      id: 'loot',
+      type: 'loot',
+      anchor: { pos: 'tl', x: 35, y: 75 },
+      size: 'md',
+      zIndex: 7
     }
   ]
 }
