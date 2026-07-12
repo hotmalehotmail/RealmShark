@@ -28,12 +28,18 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/panels/anchor.ts` | Percentage-anchor ↔ pixel math (`panelStyle`, `anchorFromPointer`). |
 | `overlay/src/renderer/src/panels/registry.ts` | `type → { title, per-size px dims, component }` and `PanelContentProps`. |
 | `overlay/src/renderer/src/panels/{Status,Dps,Console,Character,Instance,DpsSummary,Loot}Panel.tsx` | The seven panel bodies. |
-| `overlay/src/renderer/src/ui/*.tsx` | Shared UI primitives (`Button`, `EmptyState`, `Swatch`, `GearRow`, `MeterRow`, `StatRow`) — see `overlay-ui-style.md`. |
+| `overlay/src/renderer/src/ui/*.tsx` | Shared UI primitives (`Button`, `EmptyState`, `Swatch`, `GearRow`, `MeterRow`, `StatRow`, `Tooltip`) — see `overlay-ui-style.md`. |
+| `overlay/src/renderer/src/ui/interactiveContext.ts` | `InteractiveContext` / `useInteractive()` - the click-through-mode flag, for `Tooltip` (§4.1). |
 | `overlay/src/renderer/src/assets/main.css` | Tailwind entry + the `@theme` design-token block — see `overlay-ui-style.md`. |
 | `overlay/src/renderer/src/sprites/SpriteProvider.tsx` | Loads/decodes the atlas pack; `getSprite` / `getDyedSprite`. |
 | `overlay/src/renderer/src/sprites/Sprite.tsx` / `CharacterSprite.tsx` | `<Sprite objectType>` / `<CharacterSprite objectId>` components. |
-| `overlay/src/renderer/src/sprites/EntityRegistry.tsx` | objectId → name/skin/equipment/dyes, built from the packet stream. |
+| `overlay/src/renderer/src/sprites/ItemSprite.tsx` | `<ItemSprite objectType>` - the shared item-rendering path (§4.1): wraps `Sprite` with the hover item/enchant tooltip. |
+| `overlay/src/renderer/src/sprites/EntityRegistry.tsx` | objectId → name/skin/equipment/dyes/enchantSlots, built from the packet stream. |
 | `overlay/src/renderer/src/sprites/context.ts` | The two React contexts + `useSprites` / `useEntityRegistry` hooks. |
+| `overlay/src/renderer/src/items/ItemInfoProvider.tsx` | Ingests the `itemInfo`/`enchantNames` envelopes; provides item metadata + enchant-name lookups (§4.1). |
+| `overlay/src/renderer/src/items/context.ts` | `ItemInfoContext` + `useItemInfo()` hook. |
+| `overlay/src/renderer/src/items/enchantDecode.ts` | Client-side six-bit/base64url decode of an equipped slot's raw `UNIQUE_DATA_STRING` into enchant ids. |
+| `overlay/src/renderer/src/items/types.ts` | Wire shapes of the `itemInfo`/`enchantNames` envelopes. |
 | `overlay/src/renderer/src/dps/DpsTracker.ts` | Framework-agnostic class ingesting packets → `DpsSnapshot`; also retains a session-scoped per-instance damage history (§5.1). |
 | `overlay/src/renderer/src/dps/useDpsTracker.ts` | React hook wrapping `DpsTracker` (event-driven on bridge `dps` packets + 1 s fallback recompute). |
 | `overlay/src/renderer/src/dps/useDpsHistory.ts` | React hook owning a dedicated `DpsTracker` instance for the DPS summary panel; exposes `DpsHistoryEntry[]`. |
@@ -82,15 +88,18 @@ A `PacketEnvelope` is `{ type, direction, time, data }` (`overlay/src/shared/ipc
 with `data: unknown` — each consumer casts `data` to its own field shape. The
 stream carries both **real game packets** (`UpdatePacket`, `DamagePacket`, …) and
 **synthetic envelopes** the Java bridge injects: `type:"dps"` (the computed DPS
-snapshot), `type:"objectNames"` (enemy names), and `type:"lootBagTypes"`
-(BagType 6/8 item categorization for the Loot panel, §7). Those originate in
-`src/main/java/bridge/DpsBroadcaster.java`, `ObjectNames.java`, and
-`LootBagTypes.java`; see `bridge-server.md` / `dps-engine.md`.
+snapshot), `type:"objectNames"` (enemy names), `type:"lootBagTypes"` (BagType
+6/8 item categorization for the Loot panel, §7), `type:"itemInfo"` (item
+name/tier/class/description/damage), and `type:"enchantNames"` (enchant
+id→name) — the latter two feed the item tooltip, §4.1. Those originate in
+`src/main/java/bridge/DpsBroadcaster.java`, `ObjectNames.java`,
+`LootBagTypes.java`, `ItemInfo.java`, and `EnchantNames.java`; see
+`bridge-server.md` / `dps-engine.md`.
 
 ### App shell & window modes (`App.tsx`)
 
 `App` holds three pieces of state and subscribes once in a mount effect
-(`App.tsx:22-44`):
+(`App.tsx:24-46`):
 
 | State | Source | Effect |
 | --- | --- | --- |
@@ -103,17 +112,21 @@ lines logged before this window existed, then `onMainLogEntry` streams new ones 
 both funnelled through `ingestMainEntry` into the same console buffer (§7).
 
 **Interactive mode** is the central UX toggle (driven from the main process by
-the global hotkey). When `interactive` (`App.tsx:61-89`):
+the global hotkey). When `interactive` (`App.tsx:67-93`):
 
-- a `bg-black/40` backdrop dims the game (rendered only in interactive mode);
+- a `bg-scrim` backdrop dims the game (rendered only in interactive mode);
 - every panel is shown and draggable.
 
 When **not** interactive, only *pinned* panels remain, rendered display-only
 (`pointer-events-none`). Crucially, `<PanelCanvas/>` is **always mounted**
 (never conditionally rendered) so panels keep their live state — the packet
-counter, the whole DPS session — across interactive toggles (`App.tsx:81-87`).
-`<SpriteProvider>` and `<EntityRegistryProvider>` wrap the shell so every panel
-shares one sprite cache and one entity registry.
+counter, the whole DPS session — across interactive toggles (`App.tsx:87-93`).
+`<SpriteProvider>`, `<EntityRegistryProvider>`, and `<ItemInfoProvider>` wrap
+the shell so every panel shares one sprite cache, one entity registry, and one
+item-info/enchant-name table (§4.1); innermost, an `<InteractiveContext.Provider
+value={interactive}>` re-exposes the same `interactive` boolean already
+threaded down as an explicit prop, as a context, so a component that isn't a
+panel-tree prop-drilling participant (`Tooltip`, §4.1) can still read it.
 
 ---
 
@@ -234,8 +247,10 @@ inherit it and must not re-declare it (see `overlay-ui-style.md`).
 
 ## 3. The panels
 
-All six bodies are thin; the data lives in the shared services. `size` maps to
-per-panel scale tables at the top of each file.
+All seven bodies are thin; the data lives in the shared services. `size` maps
+to per-panel scale tables at the top of each file. Every gear/loot icon below
+renders through `ItemSprite`, not `Sprite` directly, so it's hoverable for the
+item tooltip (§4.1) with no per-panel wiring.
 
 | Panel | Title | Data source | Notes |
 | --- | --- | --- | --- |
@@ -351,8 +366,8 @@ nothing, so callers never get a blank gap.
 A ref-backed store built from the packet stream. On mount it subscribes to
 `onPacketBatch` and `onOverlayDetach` (`EntityRegistry.tsx:129-164`). Per
 `objectId` it merges an `EntityRecord` of `objectType`, `skin`, `equipment[4]`,
-`clothingDye`, `accessoryDye`, `name`. The stat ids it reads
-(`EntityRegistry.tsx:6-10`):
+`clothingDye`, `accessoryDye`, `enchantSlots[4]`, `name`. The stat ids it reads
+(`EntityRegistry.tsx:6-11`):
 
 | Const | StatType # | Meaning |
 | --- | --- | --- |
@@ -361,9 +376,10 @@ A ref-backed store built from the packet stream. On mount it subscribes to
 | `NAME_STAT` | 31 | username string — comma-separated on the wire (`"PlayerName,a0ca,…"`); only the part before the first comma is kept, dropping the trailing title/label cosmetic codes (matches the bridge's `Entity.name()`) |
 | `CLOTHING_DYE_STAT` | 32 | Tex1 clothing dye objectType |
 | `ACCESSORY_DYE_STAT` | 33 | Tex2 accessory dye objectType |
+| `UNIQUE_DATA_STRING_STAT` | 80 | comma-joined weapon/ability/armor/ring encoded enchant strings — see §4.1 |
 
 > **Non-obvious fact — stats are deltas, so records are merged, never replaced.**
-> `mergeStats` (`EntityRegistry.tsx:89-127`) reads stats from **both**
+> `mergeStats` (`EntityRegistry.tsx:108-159`) reads stats from **both**
 > `UpdatePacket.newObjects` (which carries the `objectType`) and
 > `NewTickPacket.status` (ongoing deltas, no objectType). A `NewTick` for an
 > object never seen in an `UpdatePacket` is skipped, because `objectType` is
@@ -391,9 +407,69 @@ sets a local `changed` flag and calls `scheduleNotify()`
 `InstancePanel` callout in §3.
 
 Accessors (`objectType`, `skin`, `equipment`, `name`, `clothingDye`,
-`accessoryDye`, `characters`, `localPlayerId`) are `useCallback`-stable and read
-the ref synchronously (`EntityRegistry.tsx:171-211`). `characters()` returns every
-objectId with a non-empty `name` — i.e. the instance's players.
+`accessoryDye`, `enchantSlots`, `characters`, `localPlayerId`) are
+`useCallback`-stable and read the ref synchronously
+(`EntityRegistry.tsx:171-251`). `characters()` returns every objectId with a
+non-empty `name` — i.e. the instance's players. `enchantSlots(objectId)`
+returns the raw 4-element array (or `null` if this entity has never sent the
+stat) — see §4.1 for decoding it.
+
+### 4.1 The item tooltip — `ItemSprite`, `ItemInfoProvider`, `Tooltip` (issue #109)
+
+Every item sprite in the overlay — `GearRow`'s 4 equipped slots and the Loot
+panel's pickup icons (§7) — renders through **`ItemSprite`**
+(`sprites/ItemSprite.tsx`), not `Sprite` directly: it wraps `<Sprite
+objectType size>` with a hover tooltip, so any current or future
+item-rendering panel gets the tooltip for free by using `ItemSprite`/`GearRow`
+instead of `Sprite`.
+
+- **Item info** (name/tier/class/description/damage) comes from
+  `useItemInfo()` (`items/context.ts`), backed by **`ItemInfoProvider`**
+  (`items/ItemInfoProvider.tsx`) — a third app-level service mounted once in
+  `App` alongside `SpriteProvider`/`EntityRegistryProvider`. It ingests the
+  bridge's `itemInfo`/`enchantNames` envelopes (`onPacketBatch`, same pattern
+  as `EntityRegistry`) into refs and re-renders consumers once per received
+  table — unlike `EntityRegistry`'s per-change `subscribe`, these tables are
+  asset-derived and essentially static for a session, so there's no granular
+  change API, just "read the latest snapshot."
+- **Enchantments** for an equipped slot: `ItemSprite` takes optional
+  `ownerObjectId`/`slotIndex` props (threaded through by `GearRow` — see §3's
+  `GearRow` entry), reads that entity's raw `enchantSlots` from
+  `EntityRegistry`, and decodes the one slot it needs with
+  `decodeEnchantIds` (`items/enchantDecode.ts`) — a TypeScript port of
+  `bridge.dps.ParseEnchants#extractEnchantIds` (six-bit/base64url decode, no
+  XML needed). Each decoded id is resolved to a name via
+  `useItemInfo().enchantName`, falling back to `` `Enchant #${id}` `` when the
+  bridge's `enchantNames` table has no definition for it (headless `--fake`
+  mode, or any machine without `assets/xml/enchantments.xml`). A slot with no
+  owner/index (e.g. a Loot panel pickup, which has no equipping entity) simply
+  shows no enchantment section — `rawSlot` stays `null`, distinct from a
+  known-but-unenchanted slot (empty string, decodes to zero ids → "No
+  enchantments").
+- **`Tooltip`** (`ui/Tooltip.tsx`) is the presentation primitive — see
+  `overlay-ui-style.md`'s primitives table for its props. Two things about it
+  are specific to this overlay, not generic tooltip behavior:
+  - **It escapes `PanelFrame`'s clipping.** `PanelFrame`'s outer frame is
+    `overflow-hidden` and its content wrapper `overflow-auto` (§2), so an
+    inline-rendered tooltip would be cropped. `Tooltip` instead
+    `createPortal`s its bubble straight to `document.body`, then
+    viewport-clamps its own position in a `useLayoutEffect` two-pass
+    measure-then-position (mount off-screen-but-in-the-DOM to read its real
+    rendered size, then reposition and reveal) — see the file's docstring for
+    why a two-pass measure beats guessing a fixed max size.
+  - **It must never break click-through mode.** `PanelFrame` already makes a
+    non-interactive panel's entire DOM subtree `pointer-events-none` (§2), so
+    a trigger *inside* a panel never receives a hover event to begin with —
+    but `Tooltip`'s portal renders *outside* that subtree (into
+    `document.body`), so it can't lean on inheriting that CSS. Instead
+    `Tooltip` reads **`useInteractive()`** (`ui/interactiveContext.ts` — a new
+    `InteractiveContext` provided once in `App`, mirroring the `interactive`
+    boolean already threaded as an explicit prop through
+    `AppShell`→`PanelCanvas`→`PanelFrame`) and, when not interactive, renders
+    `children` completely unwrapped: no extra `div`, no `onMouseEnter`
+    listener, no portal. The click-through contract is preserved by never
+    attaching a hover target at all, not by hiding one — there is nothing for
+    the browser to dispatch a hover event *to*.
 
 ---
 
@@ -825,13 +901,15 @@ hidden; if the panel has zero entries across *both* colors it shows the
 shared `EmptyState` instead. A non-empty category renders its bag-color
 sprite (`bagIcon(bagType)`, resolved through the ordinary `<Sprite
 objectType>` path — no special-casing) plus a count, then every obtained
-item as its own sprite, **newest first** so the latest drop is visible
-without scrolling. Each item sprite carries its resolved name (`itemName`,
-falling back to `#<objectType>` if unresolved) as a native `title` tooltip at
-every size, and additionally inline beside the sprite at `size === 'lg'` — the
-"at least a name on hover, or beside the sprite at larger sizes" acceptance
-bar. Sized/registered via the standard checklist (§2): `registry.ts`'s `loot`
-entry, a default-layout instance in `PanelCanvas.tsx`.
+item through **`ItemSprite`** (§4.1) — a hover tooltip (item name/tier/class/
+description from the bridge's `itemInfo` envelope, no enchant section since a
+ground-loot pickup has no equipping entity) superseding the native `title`
+tooltip this panel used before issue #109 — **newest first** so the latest
+drop is visible without scrolling. `useLootTracker`'s own resolved name
+(`itemName`, a *different* source — `lootBagTypes`'s `itemNames` table, kept
+for the always-visible inline label) still renders beside the sprite at
+`size === 'lg'`. Sized/registered via the standard checklist (§2):
+`registry.ts`'s `loot` entry, a default-layout instance in `PanelCanvas.tsx`.
 
 ---
 

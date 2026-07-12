@@ -47,6 +47,8 @@ public class PacketBridge {
     private final DpsBroadcaster dps = new DpsBroadcaster();
     private final SpritePackService sprites = new SpritePackService();
     private final LootBagTypes lootBagTypes = new LootBagTypes();
+    private final ItemInfo itemInfo = new ItemInfo();
+    private final EnchantNames enchantNames = new EnchantNames();
     private final BlockingQueue<String> queue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
     // Set on the sniffer thread when a damage packet lands, so the DPS scheduler
     // pushes a fresh snapshot within DPS_COALESCE_MS instead of waiting a full tick.
@@ -162,6 +164,18 @@ public class PacketBridge {
         flusher.scheduleAtFixedRate(
             this::maybeBroadcastLootBagTypes, 2000, 2000, TimeUnit.MILLISECONDS);
 
+        // Same readiness-poll pattern, for the item-info table (name/tier/class/
+        // description/damage per objectType) the item tooltip (issue #109) reads.
+        flusher.scheduleAtFixedRate(
+            this::maybeBroadcastItemInfo, 2000, 2000, TimeUnit.MILLISECONDS);
+
+        // Enchant id -> name table for the item tooltip's enchantment list. No
+        // readiness gate needed (see EnchantNames' docstring) - just re-sent
+        // periodically like the tables above, so a late-connecting client still
+        // gets it with no separate request message.
+        flusher.scheduleAtFixedRate(
+            () -> enqueue(enchantNames.envelopeJson()), 2000, 2000, TimeUnit.MILLISECONDS);
+
         // 4. Start the packet source.
         if (fake) {
             System.out.println("[bridge] running in FAKE mode (no sniffing)");
@@ -210,6 +224,24 @@ public class PacketBridge {
             System.out.println("[bridge] loot bag types ready - broadcasting to clients");
         }
         enqueue(lootBagTypes.envelopeJson());
+    }
+
+    private boolean itemInfoLogged = false;
+
+    /**
+     * Once object assets finish loading, broadcast the item-info table (name/
+     * tier/class/description/damage per objectType) the item tooltip (issue
+     * #109) reads. Same re-broadcast-forever rationale as
+     * {@link #maybeBroadcastLootBagTypes()} - simplest way to guarantee a late
+     * client still gets it, and the payload stays small.
+     */
+    private void maybeBroadcastItemInfo() {
+        if (!itemInfo.ready()) return;
+        if (!itemInfoLogged) {
+            itemInfoLogged = true;
+            System.out.println("[bridge] item info ready - broadcasting to clients");
+        }
+        enqueue(itemInfo.envelopeJson());
     }
 
     /** Enqueue a JSON message, dropping the oldest if the queue is full so capture never blocks. */

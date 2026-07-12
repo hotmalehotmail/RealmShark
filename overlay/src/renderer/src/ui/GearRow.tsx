@@ -1,4 +1,4 @@
-import { Sprite } from '../sprites/Sprite'
+import { ItemSprite } from '../sprites/ItemSprite'
 import { Swatch } from './Swatch'
 
 /** The 4 equipped slots: weapon / ability / armor / ring. */
@@ -9,17 +9,34 @@ interface GearRowProps {
   equipment: number[] | null | undefined
   /** Slot icon edge length in px; <= 0 renders nothing (a panel size hiding its gear row). */
   slotSize: number
+  /**
+   * The equipping entity's objectId, so a hovered slot's tooltip can resolve
+   * that player's enchant data (`EntityRegistry.enchantSlots`). Omit when
+   * unknown (e.g. a frozen historical snapshot no longer in `EntityRegistry`)
+   * - the tooltip then shows item info only, no enchant section.
+   */
+  ownerObjectId?: number
 }
 
 /** A player's 4 equipment-slot icons in a row, placeholder swatches for empty slots. */
-export function GearRow({ equipment, slotSize }: GearRowProps): React.JSX.Element | null {
+export function GearRow({
+  equipment,
+  slotSize,
+  ownerObjectId
+}: GearRowProps): React.JSX.Element | null {
   if (slotSize <= 0) return null
   const slots = Array.from({ length: SLOT_COUNT }, (_, i) => equipment?.[i] ?? -1)
   return (
     <div className={`flex shrink-0 items-center ${slotSize >= 16 ? 'gap-1' : 'gap-0.5'}`}>
       {slots.map((itemType, i) =>
         itemType > 0 ? (
-          <Sprite key={i} objectType={itemType} size={slotSize} />
+          <ItemSprite
+            key={i}
+            objectType={itemType}
+            size={slotSize}
+            ownerObjectId={ownerObjectId}
+            slotIndex={i}
+          />
         ) : (
           <Swatch key={i} size={slotSize} />
         )

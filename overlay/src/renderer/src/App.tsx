@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import type { BridgeStatus } from '../../shared/ipc'
 import { ingestMainEntry } from './consoleLog'
+import { ItemInfoProvider } from './items/ItemInfoProvider'
 import PanelCanvas from './panels/PanelCanvas'
 import { EntityRegistryProvider } from './sprites/EntityRegistry'
 import { SpriteProvider } from './sprites/SpriteProvider'
+import { InteractiveContext } from './ui/interactiveContext'
 
 const STATUS_STYLES: Record<BridgeStatus, string> = {
   connected: 'bg-success',
@@ -46,7 +48,11 @@ function App(): React.JSX.Element {
   return (
     <SpriteProvider>
       <EntityRegistryProvider>
-        <AppShell status={status} interactive={interactive} showAttachToast={showAttachToast} />
+        <ItemInfoProvider>
+          <InteractiveContext.Provider value={interactive}>
+            <AppShell status={status} interactive={interactive} showAttachToast={showAttachToast} />
+          </InteractiveContext.Provider>
+        </ItemInfoProvider>
       </EntityRegistryProvider>
     </SpriteProvider>
   )

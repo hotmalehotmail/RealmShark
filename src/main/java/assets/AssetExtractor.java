@@ -542,6 +542,16 @@ public class AssetExtractor {
                 case "BagType":
                     ao.bagType = value;
                     break;
+                case "Description":
+                    // ObjectID.list is ';'-delimited (see AssetObject#toString) and
+                    // read back line-by-line - unlike the other fields here,
+                    // free-text flavor text could plausibly contain either
+                    // character, so sanitize rather than let it corrupt column
+                    // alignment or truncate a line.
+                    ao.description = value == null
+                        ? ""
+                        : value.replace(";", ",").replace("\n", " ").replace("\r", "").trim();
+                    break;
                 case "Subattack":
                     addSubattack(n, ao);
                     break;
@@ -703,6 +713,11 @@ public class AssetExtractor {
          * object) self-identifies which color bag entity it is.
          */
         String bagType = "";
+        /**
+         * Raw {@code <Description>} value, or "" when absent. Item tooltip flavor
+         * text (issue #109) - not every object carries one.
+         */
+        String description = "";
 
         ArrayList<AssetProjectile> projectiles;
         ArrayList<Integer> subattack = new ArrayList<>();
@@ -739,7 +754,7 @@ public class AssetExtractor {
             }
 
             return String.format(
-                "%s;%s;%s;%s;%s;%s;%s;%s;%s",
+                "%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s",
                 id,
                 display,
                 clazz,
@@ -748,7 +763,9 @@ public class AssetExtractor {
                 textureString,
                 labels,
                 idName,
-                bagType
+                bagType,
+                tier,
+                description
             );
         }
     }

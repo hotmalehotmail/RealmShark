@@ -92,10 +92,11 @@ apart; new code must use them instead of re-rolling the markup.
 | --- | --- | --- |
 | `EmptyState` | the muted "nothing to show yet" line every panel needs | `children` |
 | `Swatch` | bordered placeholder box for an unknown sprite / empty slot | `size` (px), `className?` |
-| `GearRow` | a player's 4 equipment-slot icons (placeholder swatches for empty slots) | `equipment` (nullable), `slotSize` (px; `<= 0` renders nothing) |
+| `GearRow` | a player's 4 equipment-slot icons (placeholder swatches for empty slots), hoverable for the item tooltip | `equipment` (nullable), `slotSize` (px; `<= 0` renders nothing), `ownerObjectId?` (for equipped-slot enchant tooltips) |
 | `MeterRow` | list row with a proportional damage-bar fill behind its content | `fillPct` (0–100, clamped), `highlight?` (local player: accent ring + tinted fill), `onClick?` (renders a `<button>`), `className?` |
 | `Button` | every button | `variant`: `subtle` (default) \| `ghost` \| `primary` \| `success` \| `warn`; `size`: `xs` \| `sm` (default) \| `md`; `active?` (ghost toggles, e.g. the pin); plus native button props |
 | `StatRow` | label-left / mono-tabular-value-right line | `label`, `children`, `className?` |
+| `Tooltip` | hover tooltip that escapes a panel's clipping (portals to `document.body`) and clamps to the viewport | `content` (`ReactNode`), `children` (the hover trigger), `className?` (trigger wrapper only) |
 
 Conventions for the primitives themselves:
 

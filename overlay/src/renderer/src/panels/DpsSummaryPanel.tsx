@@ -148,7 +148,11 @@ function EnemyRow({
             return (
               <MeterRow key={row.objectId} fillPct={0} highlight={isLocal} className="px-1 py-0.5">
                 <FrozenCharacterSprite cosmetics={cosmetics} size={PLAYER_SPRITE_SIZE} />
-                <GearRow equipment={cosmetics?.equipment} slotSize={GEAR_SLOT_SIZE} />
+                <GearRow
+                  equipment={cosmetics?.equipment}
+                  slotSize={GEAR_SLOT_SIZE}
+                  ownerObjectId={row.objectId}
+                />
                 <span className="min-w-0 flex-1 truncate text-fg-muted">{row.name}</span>
                 <span className="shrink-0 text-right font-mono tabular-nums">
                   <span className="text-fg">{formatDps(row.damage)}</span>
