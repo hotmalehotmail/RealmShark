@@ -244,8 +244,36 @@ app.whenReady().then(() => {
   void ensureBridgeRunning(!supportsAttach)
 
   // Rolling window of recent packets kept for the "Report bug" capture, so a
-  // bug found against the live game ships with a replayable trace.
+  // bug found against the live game ships with a replayable trace. The capture is
+  // attached to a PUBLIC issue, so only gameplay packet types useful for
+  // FakePacketSource repro are retained - an allowlist (default-deny) so a new or
+  // unexpected packet type can't leak. This drops chat (TextPacket, incl. DMs),
+  // account lists, and connection/auth packets (Hello/Reconnect). Credential
+  // FIELDS are separately stripped bridge-side (PacketSerializer); this drops the
+  // whole sensitive packet TYPES.
   const RECENT_PACKETS_MAX = 300
+  const CAPTURE_ALLOWED_TYPES = new Set<string>([
+    // gameplay / combat / world state (what DPS + panels replay)
+    'UpdatePacket',
+    'NewTickPacket',
+    'DamagePacket',
+    'EnemyHitPacket',
+    'ServerPlayerShootPacket',
+    'PlayerShootPacket',
+    'MapInfoPacket',
+    'CreateSuccessPacket',
+    'QuestObjectIdPacket',
+    'MovePacket',
+    'GotoPacket',
+    'GotoAckPacket',
+    'UpdateAckPacket',
+    'ClientStatPacket',
+    'ShowEffectPacket',
+    'NotificationPacket',
+    // bridge-synthesized envelopes the overlay consumes (non-sensitive)
+    'objectNames',
+    'dps'
+  ])
   const recentPackets: PacketEnvelope[] = []
 
   startBridgeClient({
@@ -260,7 +288,12 @@ app.whenReady().then(() => {
       if (overlayWindow && !overlayWindow.isDestroyed()) {
         overlayWindow.webContents.send(IPC.packetBatch, packets)
       }
-      recentPackets.push(...(packets as PacketEnvelope[]))
+      // Retain only allowlisted gameplay types in the shareable capture buffer.
+      // The live overlay above still receives the full batch; only the bug-report
+      // trace is filtered.
+      for (const p of packets as PacketEnvelope[]) {
+        if (CAPTURE_ALLOWED_TYPES.has(p.type)) recentPackets.push(p)
+      }
       if (recentPackets.length > RECENT_PACKETS_MAX) {
         recentPackets.splice(0, recentPackets.length - RECENT_PACKETS_MAX)
       }
