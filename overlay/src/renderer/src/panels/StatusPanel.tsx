@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import type { BridgeStatus, PacketEnvelope, UpdateInfo } from '../../../shared/ipc'
 import { DEFAULT_SETTINGS } from '../../../shared/settings'
+import { Button } from '../ui/Button'
+import { StatRow } from '../ui/StatRow'
 import type { PanelContentProps } from './registry'
 
 const STATUS_STYLES: Record<BridgeStatus, string> = {
-  connected: 'bg-emerald-500',
-  connecting: 'bg-amber-400',
-  disconnected: 'bg-red-500'
+  connected: 'bg-success',
+  connecting: 'bg-warn',
+  disconnected: 'bg-danger'
 }
 
 const MEMORY_POLL_MS = 1000
@@ -86,67 +88,56 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
   }
 
   return (
-    <div className="flex h-full w-full flex-col text-sm text-white">
+    <div className="flex h-full w-full flex-col">
       <div className="flex items-center justify-between">
         <span className="flex items-baseline gap-1.5">
           <span className="font-semibold tracking-wide">RealmShark</span>
-          {version && <span className="text-xs text-white/40 font-mono">v{version}</span>}
+          {version && <span className="font-mono text-xs text-fg-faint">v{version}</span>}
         </span>
-        <span className="flex items-center gap-1.5 text-xs text-white/70">
+        <span className="flex items-center gap-1.5 text-xs text-fg-muted">
           <span className={`h-2 w-2 rounded-full ${STATUS_STYLES[status]}`} />
           {status}
         </span>
       </div>
 
       {size !== 'sm' && (
-        <div className="mt-2 text-xs text-white/50">{toggleHotkey} to return input to the game</div>
+        <div className="mt-2 text-xs text-fg-faint">{toggleHotkey} to return input to the game</div>
       )}
 
       {size !== 'sm' && (
-        <div className="mt-3 flex items-baseline justify-between border-t border-white/10 pt-2">
-          <span className="text-white/60">Packets seen</span>
-          <span className="font-mono text-base">{packetCount}</span>
-        </div>
+        <StatRow label="Packets seen" className="mt-3 border-t border-edge pt-2">
+          {packetCount}
+        </StatRow>
       )}
 
       {size !== 'sm' && (
-        <div className="flex items-baseline justify-between pt-1">
-          <span className="text-white/60">Memory</span>
-          <span className="font-mono text-base">
-            {heapMb === null ? 'n/a' : `${heapMb.toFixed(1)} MB`}
-          </span>
-        </div>
+        <StatRow label="Memory" className="pt-1">
+          {heapMb === null ? 'n/a' : `${heapMb.toFixed(1)} MB`}
+        </StatRow>
       )}
 
       {size !== 'sm' && (
-        <div className="mt-3 border-t border-white/10 pt-2">
+        <div className="mt-3 border-t border-edge pt-2">
           {update && (
             <div className="flex items-center justify-between gap-2">
-              <span className="truncate text-xs text-emerald-400">
+              <span className="truncate text-xs text-success">
                 Update available → v{update.version}
               </span>
               {downloadPct == null ? (
-                <button
-                  onClick={installUpdate}
-                  className="shrink-0 rounded bg-emerald-600 px-2 py-0.5 text-xs font-medium hover:bg-emerald-500"
-                >
+                <Button variant="success" className="shrink-0" onClick={installUpdate}>
                   Update &amp; restart
-                </button>
+                </Button>
               ) : (
-                <span className="shrink-0 text-xs text-white/60">Downloading {downloadPct}%…</span>
+                <span className="shrink-0 text-xs text-fg-muted">Downloading {downloadPct}%…</span>
               )}
             </div>
           )}
           {downloadPct == null && (
             <div className={`flex items-center justify-between gap-2 ${update ? 'mt-1' : ''}`}>
-              <button
-                onClick={checkUpdates}
-                disabled={checking}
-                className="shrink-0 rounded bg-white/10 px-2 py-0.5 text-xs hover:bg-white/20 disabled:opacity-50"
-              >
+              <Button className="shrink-0" onClick={checkUpdates} disabled={checking}>
                 {checking ? 'Checking…' : update ? 'Check again' : 'Check for updates'}
-              </button>
-              {checkMsg && <span className="text-xs text-white/40">{checkMsg}</span>}
+              </Button>
+              {checkMsg && <span className="text-xs text-fg-faint">{checkMsg}</span>}
             </div>
           )}
         </div>
@@ -154,18 +145,15 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
 
       {size !== 'sm' && (
         <div className="mt-2 flex items-center justify-between gap-2">
-          <button
-            onClick={reportBug}
-            className="shrink-0 rounded bg-white/10 px-2 py-0.5 text-xs hover:bg-white/20"
-          >
+          <Button className="shrink-0" onClick={reportBug}>
             Report bug
-          </button>
-          {bugMsg && <span className="truncate text-xs text-white/40">{bugMsg}</span>}
+          </Button>
+          {bugMsg && <span className="truncate text-xs text-fg-faint">{bugMsg}</span>}
         </div>
       )}
 
       {size === 'lg' && lastPacket && (
-        <div className="mt-1 truncate text-xs text-white/40">
+        <div className="mt-1 truncate text-xs text-fg-faint">
           last: {lastPacket.direction} {lastPacket.type}
         </div>
       )}

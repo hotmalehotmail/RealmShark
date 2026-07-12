@@ -55,6 +55,11 @@ moving parts, each with its own doc below.
 - **[overlay-renderer.md](overlay-renderer.md)** — the React renderer: the
   draggable/resizable panel system, the individual panels, the sprite-rendering
   subsystem, and the framework-agnostic `DpsTracker`.
+- **[overlay-ui-style.md](overlay-ui-style.md)** — how the renderer's UI stays
+  visually consistent: the semantic design tokens (Tailwind v4 `@theme`), the
+  shared `ui/` primitives (`Button`, `MeterRow`, `GearRow`, …), the type
+  scale, and the conventions the PR review agent enforces. **Read before
+  writing any panel UI.**
 
 ## Build, run & release
 
