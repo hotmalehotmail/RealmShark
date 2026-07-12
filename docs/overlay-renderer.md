@@ -641,11 +641,14 @@ for how these settings are applied.
 **`DpsList.tsx`** — pure presentation for a `DpsSnapshot`, now also takes the
 panel's `size` (`sm`/`md`/`lg`) so rows can scale down. Renders "No target
 attacked yet" when `targetId === null`, an optional header with the target sprite
-(`<Sprite objectType={entities.objectType(targetId)} />`) + name, then up to
-`maxRows` rows, ranked by **cumulative damage on the focused target** (both the
-bridge `dps` path and the local-estimate fallback sort `rows` descending by
-`damage` — `DpsTracker.ts` — so the two paths agree on ranking even though the
-fallback still tracks a rolling `dps` figure too).
+(`<Sprite objectType={entities.objectType(targetId)} />`) + name, then always
+exactly `maxRows` fixed-height slots — real rows ranked by **cumulative damage
+on the focused target** (both the bridge `dps` path and the local-estimate
+fallback sort `rows` descending by `damage` — `DpsTracker.ts` — so the two
+paths agree on ranking even though the fallback still tracks a rolling `dps`
+figure too), with any unfilled slots rendered as blank placeholder rows
+(`selectVisibleRows()`) so the list's total rendered height never changes as
+players enter/leave the rolling damage window.
 
 Each row is `<CharacterSprite objectId={row.objectId}>` (the attacker's dyed
 skin/class sprite, same path `CharacterPanel` uses) + that player's 4
@@ -664,17 +667,25 @@ painted behind a `relative z-10` wrapper holding the sprite/gear/name/numbers)
 so it never competes with them for horizontal space, and stays meaningful even
 at `sm` where the gear icons are hidden. The row is clipped
 (`overflow-hidden rounded-sm`) so the fill can never overflow the row or panel.
+Every row, real or placeholder, gets an explicit fixed height (`rowHeight`,
+`DpsList.tsx`) so the list's total rendered height is constant regardless of
+how many rows are real vs. blank.
+
 The local player's row (`row.objectId === entities.localPlayerId()`) gets an
 accent ring (`ring-sky-400/70`), a tinted fill, and a `#rank` badge ahead of
 its name giving its true position in the full (unsliced) ranking. Two layers
-keep that row always present: `ensureLocalRow()` synthesizes a 0-damage row
-for the local player if they haven't hit the focused target at all yet (the
-bridge/local-estimate `rows` only ever contain attackers who've actually
-landed damage, so absence otherwise means "no row"), then
-`selectVisibleRows()` pins whichever row that is into the last visible slot
-(displacing the lowest-ranked row otherwise shown) when its true rank falls
-below `maxRows` — so the player can always find themselves, even at 0 damage
-or well outside the top N.
+keep that row always present and pinned: `ensureLocalRow()` synthesizes a
+0-damage row for the local player if they haven't hit the focused target at
+all yet (the bridge/local-estimate `rows` only ever contain attackers who've
+actually landed damage, so absence otherwise means "no row"), then
+`selectVisibleRows()` unconditionally pulls whichever row that is out of the
+ranked pool and reserves it a **permanent last slot**, regardless of its true
+rank — so the player can always find themselves at a fixed position, even at
+0 damage, well outside the top N, or ranked #1 (in which case they render
+below lower-ranked teammates; the `#rank` badge still shows their true
+position). This differs from ranking the local player in with everyone else:
+their row never moves as their damage/rank changes, only the `#rank` badge
+does.
 
 It reads `useEntityRegistry()` for the target sprite, the local player's id
 (`localPlayerId()`), and, per row, `objectType`/`skin`/dyes (via
