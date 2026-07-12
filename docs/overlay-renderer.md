@@ -919,18 +919,28 @@ identical to `EntityRegistry`/`DpsTracker`'s approach) and its own
 populated item id is logged as a pickup — the same shape a real pickup takes
 (landing in a free bag slot), and the one transition that can't also mean
 "dropped" (populated → empty) or "reconnected mid-session" (an already-known
-value re-arriving). Critically, a slot's *first* sighting since the last
-`resetPerInstance()` never logs, regardless of its value — it only seeds
-`slotValues`' baseline. Without that check (issue soak #113), whatever was
-already sitting in the bag at login, or on entering a fresh instance right
-after `resetPerInstance()` clears the map, reads as an unseen slot jumping
-straight to a populated value — indistinguishable from a real
-empty→populated pickup — and got logged as one every time. The new item's
-`objectType` is looked up in `bagTypeTable` (from the `lootBagTypes`
-envelope); if it isn't BagType 6 or 8, nothing is logged. Two different bag
-slots holding the *same* item id both log their own entry — the log is
-chronological, not a de-duplicated set, so two of the same white-bag item
-dropping in one session both appear.
+value re-arriving). Critically, a slot's *first* sighting in a full
+`UpdatePacket.newObjects` snapshot since the last `resetPerInstance()` never
+logs, regardless of its value — it only seeds `slotValues`' baseline. Without
+that check (issue soak #113), whatever was already sitting in the bag at
+login, or on entering a fresh instance right after `resetPerInstance()` clears
+the map, reads as an unseen slot jumping straight to a populated value —
+indistinguishable from a real empty→populated pickup — and got logged as one
+every time. That baseline pass applies *only* to `UpdatePacket.newObjects`
+(the complete current state of a newly-visible/created object) — a slot's
+first sighting via `NewTickPacket.status` (delta-only: reports just what
+changed since the last tick) gets no such pass and is evaluated as an
+ordinary transition, since a delta channel by construction never reports a
+slot's prior empty state. Conflating the two (soak #115) silently dropped the
+first real pickup into any bag slot after every instance change, since bag
+slots — in `FakePacketSource` and potentially a real client — only ever
+arrive via `NewTickPacket` deltas; `UpdatePacket.newObjects`'s full-snapshot
+stat block for the local player never includes `INVENTORY_4..11` at all. The
+new item's `objectType` is looked up in `bagTypeTable` (from the
+`lootBagTypes` envelope); if it isn't BagType 6 or 8, nothing is logged. Two
+different bag slots holding the *same* item id both log their own entry — the
+log is chronological, not a de-duplicated set, so two of the same white-bag
+item dropping in one session both appear.
 
 **Session-scoped, mirroring `DpsTracker`'s retained history (§5.1).**
 `entries` (the loot log itself) persists across `MapInfoPacket` (instance

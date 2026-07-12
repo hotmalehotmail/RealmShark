@@ -32,11 +32,13 @@ export interface LootEntry {
  * "Obtained" is detected as a bag inventory slot (INVENTORY_4..11,
  * statTypeNum 12-19) transitioning from empty (`<= 0`) to a populated item id
  * - the same slot-delta shape EntityRegistry reads for the 4 equipped slots,
- * extended to the 8 held-item slots. A slot's *first* sighting since the last
- * `resetPerInstance()` never logs regardless of its value - it seeds the
- * baseline only - so whatever's already sitting in the bag at login or on
- * entering a fresh instance isn't misread as a same-tick "empty -> populated"
- * pickup. Categorization
+ * extended to the 8 held-item slots. A slot's *first* sighting in a full
+ * `UpdatePacket.newObjects` snapshot since the last `resetPerInstance()` never
+ * logs regardless of its value - it seeds the baseline only - so whatever's
+ * already sitting in the bag at login or on entering a fresh instance isn't
+ * misread as a same-tick "empty -> populated" pickup. A slot's first sighting
+ * via `NewTickPacket` (delta-only) gets no such pass, since that channel never
+ * reports a slot's prior empty state - see `ingestStats`. Categorization
  * (BagType 6/8, the bag icon per color, item display names) comes entirely
  * from the bridge's `lootBagTypes` envelope, itself derived from extracted
  * game asset XML (see `assets.AssetExtractor`/`assets.IdToAsset`) - no
@@ -71,14 +73,14 @@ export class LootTracker {
       } else if (env.type === 'UpdatePacket') {
         const data = env.data as UpdatePacketData | null
         for (const obj of data?.newObjects ?? []) {
-          if (obj?.status && this.ingestStats(obj.status.objectId, obj.status.stats)) {
+          if (obj?.status && this.ingestStats(obj.status.objectId, obj.status.stats, true)) {
             changed = true
           }
         }
       } else if (env.type === 'NewTickPacket') {
         const nt = env.data as NewTickPacketData | null
         for (const st of nt?.status ?? []) {
-          if (this.ingestStats(st.objectId, st.stats)) changed = true
+          if (this.ingestStats(st.objectId, st.stats, false)) changed = true
         }
       } else if (env.type === 'MapInfoPacket') {
         this.resetPerInstance()
@@ -105,8 +107,21 @@ export class LootTracker {
     return true
   }
 
-  /** Merges bag-slot stats for one objectId; returns true if a new loot entry was logged. */
-  private ingestStats(objectId: number, stats?: StatEntry[]): boolean {
+  /**
+   * Merges bag-slot stats for one objectId; returns true if a new loot entry
+   * was logged. `isFullSnapshot` must be true only for stats sourced from
+   * `UpdatePacket.newObjects` (the complete current state of a
+   * newly-visible/created object) and false for `NewTickPacket.status`
+   * (delta-only - reports just what changed since the last tick). The
+   * baseline-suppression below only applies to the former: `NewTickPacket`
+   * never reports a slot's prior empty state, so a slot's first sighting
+   * there is itself the pickup, not evidence of pre-existing inventory.
+   */
+  private ingestStats(
+    objectId: number,
+    stats: StatEntry[] | undefined,
+    isFullSnapshot: boolean
+  ): boolean {
     if (objectId !== this.localPlayerId || !stats) return false
     let logged = false
     for (const s of stats) {
@@ -118,34 +133,23 @@ export class LootTracker {
       ) {
         continue
       }
-      // The very first sighting of a slot (this instance, since the last
-      // resetPerInstance()) is a baseline, not a pickup - without this check,
-      // whatever was already sitting in the bag at login/instance-entry reads
-      // as prev=-1 -> next=populated, an "empty -> populated" transition
-      // indistinguishable from a real drop, and gets logged as one.
-      //
-      // This does NOT create a false negative for a genuine first pickup
-      // right after an instance change: resetPerInstance() (on MapInfoPacket)
-      // clears localPlayerId, but CreateSuccessPacket re-fires on every map
-      // load, not just once at initial connection (see FakePacketSource.loop,
-      // which re-emits it alongside every periodic MapInfoPacket - the same
-      // "authoritative but one-shot, AT MAP LOAD" packet overlay-renderer.md
-      // §4's EntityRegistry section describes, meaning one-shot per load, not
-      // per session). localPlayerId is therefore re-resolved before any real
-      // gameplay in the new instance, so ingestStats runs against the local
-      // player's own post-transition UpdatePacket - which, since the object
-      // is newly (re)created server-side, carries a full re-serialization of
-      // all 12 inventory slots (occupied ones AND empty ones, using the same
-      // <=0 sentinel this method already treats as "empty") - not just a
-      // delta for whichever slot happens to change first. That first
-      // UpdatePacket seeds every slot's baseline (via this same
-      // first-sighting check) before any subsequent NewTickPacket delta could
-      // report a real pickup.
+      // The very first sighting of a slot in a *full* snapshot (this instance,
+      // since the last resetPerInstance()) is a baseline, not a pickup -
+      // without this check, whatever was already sitting in the bag at
+      // login/instance-entry reads as prev=-1 -> next=populated, an
+      // "empty -> populated" transition indistinguishable from a real drop,
+      // and gets logged as one. A delta-only sighting (NewTickPacket) gets no
+      // such pass: it never carries a slot's already-empty state (e.g.
+      // FakePacketSource's lootPickupStatus() - and INVENTORY_4..11 in
+      // general - is never part of localPlayerStats()'s full-snapshot stat
+      // block, only ever arriving via NewTickPacket deltas), so treating its
+      // first sighting as baseline would silently drop the first real pickup
+      // into any bag slot after every instance change.
       const seenBefore = this.slotValues.has(slot)
       const prev = this.slotValues.get(slot) ?? -1
       const next = s.statValue
       this.slotValues.set(slot, next)
-      if (!seenBefore) continue
+      if (isFullSnapshot && !seenBefore) continue
       // Only an empty -> populated transition counts as "obtained" - a real
       // pickup always lands in a free bag slot; this also naturally excludes
       // dropping an item (populated -> empty) and re-syncs on reconnect.
