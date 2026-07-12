@@ -94,11 +94,20 @@ jobs:
           PR_NUM: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-          # Only transition issues that were actually agent-dispatched (carry
-          # agent:in-progress) — don't stamp agent:completed on a human-closed issue.
-          ISSUES="$(gh pr view "$PR_NUM" --repo "$REPO" --json closingIssuesReferences \
-            -q '.closingIssuesReferences[].number' 2>/dev/null || true)"
+          # GitHub only populates closingIssuesReferences for PRs targeting the DEFAULT
+          # branch (bridge); on a staging PR it's empty (verified), so parse the closing
+          # keyword from the PR body ourselves — works regardless of target branch.
+          BODY="$(gh pr view "$PR_NUM" --repo "$REPO" --json body -q '.body' 2>/dev/null || true)"
+          ISSUES="$(printf '%s\n' "$BODY" \
+            | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+#[0-9]+' \
+            | grep -oE '[0-9]+' | sort -u)"
+          # Self-create the label (a bare --add-label silently no-ops if it's missing),
+          # matching fixloop.yml's ensure_label convention.
+          gh label create "agent:completed" --repo "$REPO" --color 0E8A16 \
+            --description "Agent's PR for this issue merged to staging (soaking)" >/dev/null 2>&1 || true
           for N in $ISSUES; do
+            # Only transition issues actually agent-dispatched (carry agent:in-progress) —
+            # don't stamp agent:completed on a human-closed issue.
             HAS="$(gh issue view "$N" --repo "$REPO" --json labels -q '.labels[].name' 2>/dev/null \
               | grep -Fx 'agent:in-progress' || true)"
             [ -z "$HAS" ] && { echo "#$N not agent:in-progress — skipping."; continue; }

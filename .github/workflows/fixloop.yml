@@ -122,7 +122,12 @@ jobs:
             # Mirror the stall onto the issue(s) this PR closes: the agent has stopped, so
             # the issue should no longer read agent:in-progress — flip it to agent:needs-human
             # (just ensured above) so the issue list reflects that a human is now on it.
-            for ISS in $(gh pr view "$PR" --repo "$REPO" --json closingIssuesReferences -q '.closingIssuesReferences[].number' 2>/dev/null || true); do
+            # closingIssuesReferences is empty for non-default-branch PRs, so parse the
+            # closing keyword from the PR body ourselves.
+            ESC_BODY="$(gh pr view "$PR" --repo "$REPO" --json body -q '.body' 2>/dev/null || true)"
+            for ISS in $(printf '%s\n' "$ESC_BODY" \
+                | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+#[0-9]+' \
+                | grep -oE '[0-9]+' | sort -u); do
               gh issue edit "$ISS" --repo "$REPO" --add-label "agent:needs-human" >/dev/null 2>&1 || true
               gh issue edit "$ISS" --repo "$REPO" --remove-label "agent:in-progress" >/dev/null 2>&1 || true
             done
