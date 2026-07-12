@@ -15,7 +15,10 @@ protocol and [overlay-renderer.md](overlay-renderer.md) for the client side).
 This doc covers the Java extraction + packaging pipeline. Dye colours/patterns
 are decoded from the same XML but documented separately in
 [dyes-and-textiles.md](dyes-and-textiles.md); this doc cross-links rather than
-repeats it.
+repeats it. An item's `<BagType>` (which color loot bag it drops in) is
+extracted the same way and covered below ("BagType — loot categorization"),
+feeding the overlay's Loot panel — see
+[overlay-renderer.md](overlay-renderer.md) for the client side.
 
 ## Files covered
 
@@ -27,10 +30,11 @@ repeats it.
 | `src/main/java/assets/flattbuffer/*` | Generated FlatBuffers schema for RotMG's own sprite-sheet (`SpriteSheetRoot → SpriteSheet → Sprite`/`AnimatedSprite`, `Position`, `Color`). |
 | `src/main/java/assets/SpriteFlatBuffer.java` | Loads `spritesheetf`; resolves `(sheetName,index) → atlas rect` / mask rect; representative-frame facing selection. |
 | `src/main/java/assets/SpriteJson.java` | Legacy JSON sprite loader; **not used** by the current pipeline (see note). |
-| `src/main/java/assets/IdToAsset.java` | Loads the flat lists; resolves `objectType → (textureName, index)`, names, projectiles, tile damage. |
+| `src/main/java/assets/IdToAsset.java` | Loads the flat lists; resolves `objectType → (textureName, index)`, names, projectiles, tile damage, BagType. |
 | `src/main/java/assets/ImageBuffer.java` | Desktop (Swing) sprite cropping/outlining from the atlas PNGs; the overlay path does not use it. |
 | `src/main/java/bridge/sprites/SpritePackService.java` | Builds/serves the versioned sprite-pack JSON (atlases + `table` + `maskTable` + `dyeTable`). |
 | `src/main/java/bridge/ObjectNames.java` | Triggers extraction off-thread at bridge start (best-effort). |
+| `src/main/java/bridge/LootBagTypes.java` | Resolves BagType 6/8 item categorization from `IdToAsset`; emits the `lootBagTypes` envelope (see "BagType" below). |
 
 ## The problem: input path in, `assets/` out
 
@@ -68,7 +72,7 @@ assets/sprites/*.png               ← the 4 atlas PNGs (characters, characters_
 assets/xml/*.xml                   ← every object/tile TextAsset, as .xml
       │  AssetExtractor.extractAssetsFromXML() (2nd pass)
       ▼
-assets/ObjectID.list               ← objectType;display;class;group;proj;texture;labels;name
+assets/ObjectID.list               ← objectType;display;class;group;proj;texture;labels;name;bagType
 assets/TileID.list                 ← tileType;texture;damage;name
 ```
 
@@ -255,8 +259,9 @@ min/max/AP, texture `file,index`, labels), sorts by id, and writes them via
 `"-"` suffix passed to `Util.print` (`:399`, `:404`) tells `Util.getPrintWriter`
 to use the literal filename with no timestamp (`util/Util.java:95-96`). Only a
 subset of child nodes is captured — notably `<Texture>`/`<AnimatedTexture>` for
-the sprite lookup (`:548-551`, `:647-665`); dye `<Tex1>`/`<Tex2>` are **not**
-extracted here (that parsing lives in `SpritePackService`, see
+the sprite lookup (`:548-551`, `:647-665`) and `<BagType>` (raw string, appended
+as the 9th `ObjectID.list` column — see "BagType" below); dye `<Tex1>`/`<Tex2>`
+are **not** extracted here (that parsing lives in `SpritePackService`, see
 [dyes-and-textiles.md](dyes-and-textiles.md)).
 
 ## The sprite-sheet model (`flattbuffer/`)
@@ -326,6 +331,66 @@ objectType ──IdToAsset.getObjectTextureName/Index──► (sheetName, index
            ──SpriteFlatBuffer.getSpriteData──────────► {x, y, w, h, aId}
            ──atlas PNG #aId, crop (x,y,w,h)──────────► the sprite
 ```
+
+### BagType — loot categorization (issue #105)
+
+`<BagType>` is a 0-9 enum child element on an object `<Object>` entry that,
+depending on the object, means one of two things:
+
+- **On an item** (e.g. a weapon, a piece of equipment): which color loot bag
+  it drops in when an enemy holding it dies. `6` = white bag, `8` = orange
+  (ST/self-found) bag - the two colors players actually screenshot, and the
+  only two the overlay's Loot panel tracks (issue #105); other values (and no
+  `<BagType>` at all) are common and simply untracked.
+- **On a `Class=Bag` object** (the ground-bag entity itself - a separate
+  object with its own `objectType`/sprite, not the item inside it): which
+  color bag *this entity is*. This is the same field, read the same way -
+  items and bag entities both self-report a BagType, so one generic parse
+  path serves both categorization and icon resolution with no separate
+  hand-maintained table.
+
+`parseChildObjects` captures the raw `<BagType>` string the same way it
+already captures `<Tier>`/`<SlotType>` (`AssetExtractor.java`'s
+`AssetObject.bagType`), and `AssetObject.toString()` appends it as
+`ObjectID.list`'s 9th column (see the file layout diagram above).
+`IdToAsset` parses that column once, in the constructor, to an `int` (`-1`
+when blank/unparseable, decimal or `0x`-hex accepted - `IdToAsset.parseBagType`),
+exposed via:
+
+- **`getBagType(id)`** — the parsed BagType for any loaded id, or `-1`.
+- **`findBagIconObjectType(bagType)`** — linear-scans loaded objects for the
+  first `Class=Bag` entry whose own BagType matches, returning its id (the
+  bag entity's `objectType`, i.e. its sprite) or `null`. Called once per
+  tracked BagType when building the `lootBagTypes` envelope (below), not
+  hot-path, so the scan cost doesn't matter.
+
+**`bridge/LootBagTypes.java`** is the only consumer: it builds `bagTypeTable`
+(item id → BagType, filtered to 6/8 and excluding `Class=Bag` entries so a bag
+entity can't be mistaken for a pickupable item), `lootBagIcons` (BagType →
+bag entity id, via `findBagIconObjectType`), and `itemNames` (item id →
+`IdToAsset.objectName`) for the tracked items, and ships them as the
+synthetic `lootBagTypes` envelope - see
+[bridge-server.md](bridge-server.md#6-lootbagtypes--synthetic-loot-categorization)
+for the bridge-side broadcast mechanics and
+[architecture.md](architecture.md) for the exact wire shape. Deliberately
+**not** part of `SpritePackService`'s pack: this data needs only `IdToAsset`
+(no atlas), so it's available - and broadcast - independent of the sprite
+pack's atlas-readiness gate.
+
+> **Non-obvious fact — `IdToAsset.registerFake` (real assets don't exist in
+> CI or most dev sandboxes).** Real game asset XML only exists on a machine
+> with RotMG installed (see "The problem" above) - `--fake` bridge mode and
+> CI have neither the game nor a prior extraction on disk, so `IdToAsset`
+> would otherwise never carry BagType data and the Loot panel could never be
+> demonstrated headlessly. `IdToAsset.registerFake(id, clazz, bagType)`
+> inserts a synthetic entry directly (bypassing `ObjectID.list` entirely) -
+> `FakePacketSource` registers a couple of `Class=Bag` icon ids and a handful
+> of item ids with known BagTypes at startup (see `bridge-server.md` §7), the
+> same "arbitrary plausible objectType" convention the rest of that class
+> already uses for weapon/skin/equipment ids. Entries registered this way are
+> tracked in a separate `fakeEntries` map and re-applied after every
+> `reloadAssets()` call (real or fake), so they survive regardless of
+> call-order races with `ObjectNames.init`'s own background reload.
 
 ### `ImageBuffer` — desktop-side cropping (`ImageBuffer.java`)
 
@@ -433,3 +498,7 @@ mask-compositing model, and the renderer side are documented in
   loader is `SpriteFlatBuffer` reading `assets/flatbuffer/spritesheetf`.
 - **Persisted `realmResPath` is write-only** in the current code — a custom
   install path isn't re-read at headless startup.
+- **BagType is one generic field serving two roles** — an item's own drop
+  color, or (on a `Class=Bag` object) a bag entity's self-identified color —
+  see "BagType — loot categorization" above. `IdToAsset.registerFake` is the
+  seam that makes it demonstrable with no game installed.

@@ -539,6 +539,9 @@ public class AssetExtractor {
                 case "SlotType":
                     ao.slotType = value;
                     break;
+                case "BagType":
+                    ao.bagType = value;
+                    break;
                 case "Subattack":
                     addSubattack(n, ao);
                     break;
@@ -693,6 +696,13 @@ public class AssetExtractor {
         String labels = "";
         String tier = "";
         String slotType = "";
+        /**
+         * Raw {@code <BagType>} value (a 0-9 enum; 6 = white bag, 8 = orange/ST
+         * bag - see docs/asset-pipeline.md), or "" when the object has none.
+         * Categorizes which color bag an item drops in, and (on a Bag-class
+         * object) self-identifies which color bag entity it is.
+         */
+        String bagType = "";
 
         ArrayList<AssetProjectile> projectiles;
         ArrayList<Integer> subattack = new ArrayList<>();
@@ -729,7 +739,7 @@ public class AssetExtractor {
             }
 
             return String.format(
-                "%s;%s;%s;%s;%s;%s;%s;%s",
+                "%s;%s;%s;%s;%s;%s;%s;%s;%s",
                 id,
                 display,
                 clazz,
@@ -737,7 +747,8 @@ public class AssetExtractor {
                 projectileString,
                 textureString,
                 labels,
-                idName
+                idName,
+                bagType
             );
         }
     }

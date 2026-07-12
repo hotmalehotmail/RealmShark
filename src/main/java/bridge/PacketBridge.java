@@ -46,6 +46,7 @@ public class PacketBridge {
     private final ObjectNames objectNames = new ObjectNames();
     private final DpsBroadcaster dps = new DpsBroadcaster();
     private final SpritePackService sprites = new SpritePackService();
+    private final LootBagTypes lootBagTypes = new LootBagTypes();
     private final BlockingQueue<String> queue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
     // Set on the sniffer thread when a damage packet lands, so the DPS scheduler
     // pushes a fresh snapshot within DPS_COALESCE_MS instead of waiting a full tick.
@@ -154,6 +155,13 @@ public class PacketBridge {
         flusher.scheduleAtFixedRate(
             this::maybeBroadcastSpritePack, 2000, 2000, TimeUnit.MILLISECONDS);
 
+        // Same readiness-poll pattern as the sprite pack above, but for the
+        // loot BagType metadata specifically - it needs only IdToAsset (no
+        // atlas PNG), so it can become ready and broadcast well before (or
+        // without) the full sprite pack ever does.
+        flusher.scheduleAtFixedRate(
+            this::maybeBroadcastLootBagTypes, 2000, 2000, TimeUnit.MILLISECONDS);
+
         // 4. Start the packet source.
         if (fake) {
             System.out.println("[bridge] running in FAKE mode (no sniffing)");
@@ -183,6 +191,25 @@ public class PacketBridge {
             spriteNotReadyLogs++;
             System.out.println("[bridge] sprite pack not ready yet (" + sprites.diagnostic() + ")");
         }
+    }
+
+    private boolean lootBagTypesLogged = false;
+
+    /**
+     * Once object assets finish loading, broadcast the loot BagType table.
+     * Unlike the one-shot sprite pack (which has an on-demand request/response
+     * fallback for a late-connecting client), this keeps re-broadcasting on
+     * every poll - the payload is tiny (two small id maps), and it's the
+     * simplest way to guarantee a client that connects after the first
+     * broadcast still gets it, with no separate request message needed.
+     */
+    private void maybeBroadcastLootBagTypes() {
+        if (!lootBagTypes.ready()) return;
+        if (!lootBagTypesLogged) {
+            lootBagTypesLogged = true;
+            System.out.println("[bridge] loot bag types ready - broadcasting to clients");
+        }
+        enqueue(lootBagTypes.envelopeJson());
     }
 
     /** Enqueue a JSON message, dropping the oldest if the queue is full so capture never blocks. */
