@@ -17,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Two projects in one repo, on the `bridge` branch:
 
-1. **RealmShark** (`src/main/java/`) — a Java library that sniffs Realm of the Mad God's network traffic at the packet level (via the `ardikars` pcap binding + Npcap on Windows) and decodes it into typed `Packet` objects. It reads only; it cannot modify, block, or send packets. This is a fork of `X-com/RealmShark` (`upstream` remote); `origin` is the fork `hotmalehotmail/RealmShark`.
+1. **RealmShark** (`src/main/java/`) — a Java library that sniffs Realm of the Mad God's network traffic at the packet level (via the `ardikars` pcap binding + Npcap on Windows) and decodes it into typed `Packet` objects. It reads only; it cannot modify, block, or send packets. This is a fork of `X-com/RealmShark` (`upstream` remote); `origin` is the fork `white-bag/thessal`.
 2. **`overlay/`** — a separate Electron + React + TypeScript + Vite + Tailwind app: a game overlay UI fed by decoded packets over a local WebSocket bridge (`src/main/java/bridge/`). This is new work built on top of the upstream library, not part of it.
 
 Upstream also has `tomato`/`potato` branches (full Swing GUI overlays built directly in Java) — useful prior art to check before reinventing something (e.g. DPS-meter attribution logic), via `git fetch upstream <branch>` + `git show upstream/<branch>:<path>`.
@@ -129,7 +129,7 @@ A CI release path exists: `.github/workflows/release.yml` (`workflow_dispatch`, 
    VERSION=$(node -p "require('./overlay/package.json').version")   # e.g. 0.9.11-alpha
    TAG="v$VERSION"
    git tag "$TAG" <commit> && git push origin "$TAG"
-   gh release create "$TAG" --repo hotmalehotmail/RealmShark --prerelease \
+   gh release create "$TAG" --repo white-bag/thessal --prerelease \
      --title "Overlay $TAG — ..." --notes "..." \
      overlay/dist/*-setup.exe#RealmShark-Overlay-Setup.exe build/libs/bridge.jar
    ```

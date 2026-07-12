@@ -34,7 +34,7 @@ GitHub App must be installed on the repo (it already is).
 1. Go to **[claude.ai/code/routines](https://claude.ai/code/routines)** → **New routine**.
 2. **Name:** `RealmShark build agent`. **Model:** Opus 4.8.
 3. **Prompt:** paste the block below.
-4. **Repository:** `hotmalehotmail/RealmShark`.
+4. **Repository:** `white-bag/thessal`.
 5. **Environment:** Default (Trusted network) is fine — the agent reads/edits code
    and opens a PR; CI does the heavy building. Add domains only if a run needs them.
 6. **Trigger:** choose **API**, save, then **Generate token** and copy both the
@@ -52,7 +52,7 @@ You are the RealmShark build agent, running autonomously in the cloud. Each run 
 started by a GitHub Actions workflow and is given a work item in this run's input
 text. If there is no work item in the input, stop and do nothing.
 
-Repository: hotmalehotmail/RealmShark. Read CLAUDE.md first — it defines the
+Repository: white-bag/thessal. Read CLAUDE.md first — it defines the
 conventions, the branch model, the wire-format contract, and the build recipe.
 Follow it.
 

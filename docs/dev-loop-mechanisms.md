@@ -757,7 +757,7 @@ you bypass every gate — required checks, a failing `review-verdict`, an
 `agent:needs-human` freeze, all of it. Two escape hatches:
 
 - **Force-merge a blocked PR** (keeps clean history):
-  `gh pr merge <n> --admin --squash -R hotmalehotmail/RealmShark`. The UI equivalent
+  `gh pr merge <n> --admin --squash -R white-bag/thessal`. The UI equivalent
   is the "Merge without waiting for requirements to be met" button, which appears
   for you precisely because admin-enforcement is off.
 - **Land a commit directly**, skipping PR + CI + review entirely:

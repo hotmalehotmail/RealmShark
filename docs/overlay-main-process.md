@@ -457,7 +457,7 @@ re-renders the menu with the mapped label.
 ### `updater.ts` (brief — see `build-and-release.md`)
 
 A lightweight self-updater that polls GitHub releases of
-`hotmalehotmail/RealmShark` for a newer `vX.Y.Z[-alpha]` (or legacy
+`white-bag/thessal` for a newer `vX.Y.Z[-alpha]` (or legacy
 `overlay-test-vX.Y.Z`) tag with a `*-setup.exe` asset. **What triggers it:**
 `startUpdatePolling` (`index.ts:266`) runs one check ~10 s after launch then every
 6 h, and is a **no-op when unpackaged** (`app.isPackaged`); the config UI can also
