@@ -10,8 +10,11 @@ const TARGET_HEADER_HEIGHT = 20 // DpsList's "Target: ..." line + mb-1; hidden o
 const FRAME_CHROME = 44 // PanelFrame title bar (~28) + content area's p-2 padding (16)
 const BUFFER = 10 // rounding/border slack so rows never require internal scrolling
 
-function rowHeight(size: PanelSize): number {
-  return Math.max(DPS_ROW_SPRITE_SIZE[size], 16)
+/** Minimum row height in px — a row is never shorter than this even if the sprite is. */
+export const MIN_ROW_HEIGHT = 16
+
+export function rowHeight(size: PanelSize): number {
+  return Math.max(DPS_ROW_SPRITE_SIZE[size], MIN_ROW_HEIGHT)
 }
 
 /**
