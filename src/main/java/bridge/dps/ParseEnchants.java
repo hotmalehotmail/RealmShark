@@ -52,7 +52,29 @@ public class ParseEnchants {
         ENCHANTS.put((short) -1, "[empty]");
     }
 
-    private static void loadEnchants(String path) {
+    /**
+     * Re-reads enchantments.xml from disk. Mirrors {@link
+     * bridge.dps.enums.CharacterClass#reload}: the bridge's asset-extraction
+     * runs on a background thread ({@code ObjectNames.init}) that can still be
+     * writing this file the first time this class is touched (e.g. by {@link
+     * bridge.EnchantNames#envelopeJson}, on its own 2s broadcast schedule) - a
+     * JVM only runs a class's static initializer once, so that first premature
+     * read would otherwise leave {@link #ENCHANTS} permanently containing only
+     * the built-in {@code -1 -> "[empty]"} entry (every real id falling back
+     * to the bare enchant id in the item tooltip) for the rest of the process.
+     * Callers that know extraction has since finished should call this to pick
+     * up the real data.
+     */
+    public static synchronized void reload() {
+        ENCHANTS.clear();
+        ENCHANT_EFFECTS.clear();
+        ENCHANT_REGEN.clear();
+        ENCHANT_LOOT_BONUS.clear();
+        loadEnchants(ENCHANT_XML_PATH);
+        ENCHANTS.put((short) -1, "[empty]");
+    }
+
+    private static synchronized void loadEnchants(String path) {
         try {
             FileInputStream file = new FileInputStream(path);
             String result = new BufferedReader(new InputStreamReader(file))
@@ -187,8 +209,10 @@ public class ParseEnchants {
     /**
      * Parse an encoded enchantment string into a human-readable multi-line list of
      * "DisplayName(id)" entries. Keeps legacy locked/empty handling.
+     * {@code synchronized} - see {@link #reload}: {@link #ENCHANTS} is a plain
+     * HashMap {@code reload()} can mutate concurrently from another thread.
      */
-    public static String parse(String code) {
+    public static synchronized String parse(String code) {
         if (code == null || code.isEmpty()) return "";
         byte[] rawBytes = PcStatsDecoder.sixBitStringToBytes(code);
 
@@ -468,8 +492,10 @@ public class ParseEnchants {
     /**
      * Compute life (HP) regeneration bonuses from a single encoded enchant string.
      * Uses parsed ActivateOnEquip(mutators) for FlatRegen/PercentageRegen on HP.
+     * {@code synchronized} - see {@link #reload}: {@link #ENCHANT_REGEN} is a
+     * plain HashMap {@code reload()} can mutate concurrently from another thread.
      */
-    public static RegenTotals computeLifeRegenBonuses(String code) {
+    public static synchronized RegenTotals computeLifeRegenBonuses(String code) {
         RegenTotals totals = new RegenTotals();
         if (code == null || code.isEmpty()) return totals;
 
@@ -551,8 +577,11 @@ public class ParseEnchants {
      * - Damage Bonus I-IV (MultiplyMinDamage/MultiplyMaxDamage)
      * - FireRate Bonus I-IV (MultiplyRateOfFire)
      * - Tradeoffs (combinations of the above)
+     * {@code synchronized} - see {@link #reload}: {@link #ENCHANT_EFFECTS} is a
+     * plain HashMap {@code reload()} can mutate concurrently from another
+     * thread, and this method is on the hot per-hit DPS-computation path.
      */
-    public static Totals computeWeaponMultipliers(String code) {
+    public static synchronized Totals computeWeaponMultipliers(String code) {
         Totals totals = new Totals();
         if (code == null || code.isEmpty()) return totals;
 
@@ -612,8 +641,11 @@ public class ParseEnchants {
      * Any <ActivateOnEquip amount="X">LootBonus</ActivateOnEquip> encountered for an enchant is
      * aggregated during XML load and stored in ENCHANT_LOOT_BONUS; this method just decodes the
      * enchant IDs and sums those mapped values.
+     * {@code synchronized} - see {@link #reload}: {@link #ENCHANT_LOOT_BONUS}
+     * is a plain HashMap {@code reload()} can mutate concurrently from another
+     * thread.
      */
-    public static float computeLootBonus(String code) {
+    public static synchronized float computeLootBonus(String code) {
         if (code == null || code.isEmpty()) return 0f;
 
         byte[] rawBytes = PcStatsDecoder.sixBitStringToBytes(code);

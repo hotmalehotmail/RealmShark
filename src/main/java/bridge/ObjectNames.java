@@ -2,6 +2,7 @@ package bridge;
 
 import assets.AssetExtractor;
 import assets.IdToAsset;
+import bridge.dps.ParseEnchants;
 import bridge.dps.enums.CharacterClass;
 import com.google.gson.Gson;
 import packets.data.ObjectData;
@@ -49,6 +50,12 @@ public class ObjectNames {
                     // extraction finished, it cached empty data forever. Now that
                     // extraction has written the file, give it a chance to reload.
                     CharacterClass.reload();
+                    // Same race for ParseEnchants' static initializer reading
+                    // assets/xml/enchantments.xml (see ParseEnchants#reload) - the
+                    // item tooltip's enchant names silently degraded to bare ids
+                    // whenever EnchantNames' first broadcast (2s after startup)
+                    // beat this thread's extraction.
+                    ParseEnchants.reload();
                 } catch (Throwable e) {
                     System.out.println("[bridge] asset extraction skipped: " + e);
                 }

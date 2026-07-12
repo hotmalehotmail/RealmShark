@@ -54,19 +54,23 @@ not the token count.
 Opacity modifiers on accent tokens are fine where the old design used softened
 shades (`text-accent/70`, `ring-accent/70`, `bg-accent/25`).
 
-### Damage-share meter (`--color-meter-hot` / `--color-meter-cool`)
+### Damage-share meter (`--color-meter-high` / `--color-meter-low`)
 
 | Token | Meaning | Examples |
 | --- | --- | --- |
-| `--color-meter-hot` | top-of-scale end of a damage-share bar | `MeterRow`'s fill at `fillPct` near 100 (the top damager) |
-| `--color-meter-cool` | bottom-of-scale end of a damage-share bar | `MeterRow`'s fill at `fillPct` near 0 (a trailing attacker) |
+| `--color-meter-high` | top-of-scale end of a damage-share bar (green) | `MeterRow`'s fill at `fillPct` near 100 (the top damager) |
+| `--color-meter-low` | bottom-of-scale end of a damage-share bar (red) | `MeterRow`'s fill at `fillPct` near 0 (a trailing attacker) |
 
-`MeterRow`'s fill is `color-mix(in oklab, var(--color-meter-hot) <pct>%, var(--color-meter-cool))`,
+`MeterRow`'s fill is `color-mix(in oklab, var(--color-meter-high) <pct>%, var(--color-meter-low))`,
 where `<pct>` is the same `fillPct` (0-100) that already drives the fill's
 *width* — so a row's bar communicates its share (typically
 `damage / topDamage`) by both length and color, monotonically, with no extra
 per-caller wiring. Deliberately distinct from `--color-accent`: the local
 player's identity ring/badge stay independent of a row's damage-share color.
+Both tokens are capped at a moderate alpha (0.4-0.5) rather than a near-opaque
+fill, specifically so the row's white text (`text-fg`, not the dimmer
+`text-fg-muted`) and sprite content sitting on top keep sufficient contrast
+across the whole gradient, not just at the low-share end.
 
 ### Rarity roles
 

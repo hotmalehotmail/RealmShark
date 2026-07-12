@@ -28,7 +28,7 @@ interface MeterRowProps {
  * The fill is an absolutely-positioned div under a relative z-10 content
  * wrapper, clipped by the row (overflow-hidden), so it never competes with
  * the content for horizontal space and can't overflow the row. The fill's
- * color is `color-mix`'d between the `--color-meter-cool`/`--color-meter-hot`
+ * color is `color-mix`'d between the `--color-meter-low`/`--color-meter-high`
  * tokens by `fillPct`, so a row's bar communicates its share by both length
  * and color (see `overlay-ui-style.md`).
  */
@@ -52,7 +52,7 @@ export function MeterRow({
         className="absolute inset-y-0 left-0"
         style={{
           width: `${pct}%`,
-          backgroundColor: `color-mix(in oklab, var(--color-meter-hot) ${pct}%, var(--color-meter-cool))`
+          backgroundColor: `color-mix(in oklab, var(--color-meter-high) ${pct}%, var(--color-meter-low))`
         }}
       />
       <div className="relative z-10 flex w-full min-w-0 items-center gap-1.5">{children}</div>

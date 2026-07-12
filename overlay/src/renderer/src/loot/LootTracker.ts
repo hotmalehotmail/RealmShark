@@ -30,9 +30,13 @@ export interface LootEntry {
  * slot contents, mirroring DpsTracker's per-instance-vs-session split.
  * <p>
  * "Obtained" is detected as a bag inventory slot (INVENTORY_4..11,
- * statTypeNum 12-19) transitioning from empty (`<= 0`, or never seen) to a
- * populated item id - the same slot-delta shape EntityRegistry reads for the
- * 4 equipped slots, extended to the 8 held-item slots. Categorization
+ * statTypeNum 12-19) transitioning from empty (`<= 0`) to a populated item id
+ * - the same slot-delta shape EntityRegistry reads for the 4 equipped slots,
+ * extended to the 8 held-item slots. A slot's *first* sighting since the last
+ * `resetPerInstance()` never logs regardless of its value - it seeds the
+ * baseline only - so whatever's already sitting in the bag at login or on
+ * entering a fresh instance isn't misread as a same-tick "empty -> populated"
+ * pickup. Categorization
  * (BagType 6/8, the bag icon per color, item display names) comes entirely
  * from the bridge's `lootBagTypes` envelope, itself derived from extracted
  * game asset XML (see `assets.AssetExtractor`/`assets.IdToAsset`) - no
@@ -114,9 +118,34 @@ export class LootTracker {
       ) {
         continue
       }
+      // The very first sighting of a slot (this instance, since the last
+      // resetPerInstance()) is a baseline, not a pickup - without this check,
+      // whatever was already sitting in the bag at login/instance-entry reads
+      // as prev=-1 -> next=populated, an "empty -> populated" transition
+      // indistinguishable from a real drop, and gets logged as one.
+      //
+      // This does NOT create a false negative for a genuine first pickup
+      // right after an instance change: resetPerInstance() (on MapInfoPacket)
+      // clears localPlayerId, but CreateSuccessPacket re-fires on every map
+      // load, not just once at initial connection (see FakePacketSource.loop,
+      // which re-emits it alongside every periodic MapInfoPacket - the same
+      // "authoritative but one-shot, AT MAP LOAD" packet overlay-renderer.md
+      // §4's EntityRegistry section describes, meaning one-shot per load, not
+      // per session). localPlayerId is therefore re-resolved before any real
+      // gameplay in the new instance, so ingestStats runs against the local
+      // player's own post-transition UpdatePacket - which, since the object
+      // is newly (re)created server-side, carries a full re-serialization of
+      // all 12 inventory slots (occupied ones AND empty ones, using the same
+      // <=0 sentinel this method already treats as "empty") - not just a
+      // delta for whichever slot happens to change first. That first
+      // UpdatePacket seeds every slot's baseline (via this same
+      // first-sighting check) before any subsequent NewTickPacket delta could
+      // report a real pickup.
+      const seenBefore = this.slotValues.has(slot)
       const prev = this.slotValues.get(slot) ?? -1
       const next = s.statValue
       this.slotValues.set(slot, next)
+      if (!seenBefore) continue
       // Only an empty -> populated transition counts as "obtained" - a real
       // pickup always lands in a free bag slot; this also naturally excludes
       // dropping an item (populated -> empty) and re-syncs on reconnect.
