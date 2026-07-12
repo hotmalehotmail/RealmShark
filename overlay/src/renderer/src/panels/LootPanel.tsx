@@ -2,6 +2,7 @@ import type { PanelSize } from '../../../shared/panels'
 import type { LootEntry, TrackedBagType } from '../loot/LootTracker'
 import { TRACKED_BAG_TYPES } from '../loot/LootTracker'
 import { useLootTracker } from '../loot/useLootTracker'
+import { ItemSprite } from '../sprites/ItemSprite'
 import { Sprite } from '../sprites/Sprite'
 import { EmptyState } from '../ui/EmptyState'
 import { Swatch } from '../ui/Swatch'
@@ -60,8 +61,8 @@ function LootPanel({ size }: PanelContentProps): React.JSX.Element {
               {ordered.map((entry) => {
                 const name = itemName(entry.objectType) ?? `#${entry.objectType}`
                 return (
-                  <div key={entry.id} className="flex items-center gap-1" title={name}>
-                    <Sprite objectType={entry.objectType} size={ITEM_SIZE[size]} />
+                  <div key={entry.id} className="flex items-center gap-1">
+                    <ItemSprite objectType={entry.objectType} size={ITEM_SIZE[size]} />
                     {size === 'lg' && <span className="max-w-[90px] truncate text-xs">{name}</span>}
                   </div>
                 )

@@ -17,8 +17,10 @@ are decoded from the same XML but documented separately in
 [dyes-and-textiles.md](dyes-and-textiles.md); this doc cross-links rather than
 repeats it. An item's `<BagType>` (which color loot bag it drops in) is
 extracted the same way and covered below ("BagType — loot categorization"),
-feeding the overlay's Loot panel — see
-[overlay-renderer.md](overlay-renderer.md) for the client side.
+feeding the overlay's Loot panel; an item's `<Tier>`/`<Description>` are
+covered below too ("Item info — tooltip data"), feeding the overlay's item
+hover tooltip — see [overlay-renderer.md](overlay-renderer.md) for the client
+side of both.
 
 ## Files covered
 
@@ -31,11 +33,12 @@ feeding the overlay's Loot panel — see
 | `src/main/java/assets/flattbuffer/*` | Generated FlatBuffers schema for RotMG's own sprite-sheet (`SpriteSheetRoot → SpriteSheet → Sprite`/`AnimatedSprite`, `Position`, `Color`). |
 | `src/main/java/assets/SpriteFlatBuffer.java` | Loads `spritesheetf`; resolves `(sheetName,index) → atlas rect` / mask rect; representative-frame facing selection. |
 | `src/main/java/assets/SpriteJson.java` | Legacy JSON sprite loader; **not used** by the current pipeline (see note). |
-| `src/main/java/assets/IdToAsset.java` | Loads the flat lists; resolves `objectType → (textureName, index)`, names, projectiles, tile damage, BagType. |
+| `src/main/java/assets/IdToAsset.java` | Loads the flat lists; resolves `objectType → (textureName, index)`, names, projectiles, tile damage, BagType, Tier, Description. |
 | `src/main/java/assets/ImageBuffer.java` | Desktop (Swing) sprite cropping/outlining from the atlas PNGs; the overlay path does not use it. |
 | `src/main/java/bridge/sprites/SpritePackService.java` | Builds/serves the versioned sprite-pack JSON (atlases + `table` + `maskTable` + `dyeTable`). |
 | `src/main/java/bridge/ObjectNames.java` | Triggers extraction off-thread at bridge start (best-effort). |
 | `src/main/java/bridge/LootBagTypes.java` | Resolves BagType 6/8 item categorization from `IdToAsset`; emits the `lootBagTypes` envelope (see "BagType" below). |
+| `src/main/java/bridge/ItemInfo.java` | Resolves item name/tier/class/description/damage from `IdToAsset`; emits the `itemInfo` envelope (see "Item info" below). |
 
 ## The problem: input path in, `assets/` out
 
@@ -73,7 +76,7 @@ assets/sprites/*.png               ← the 4 atlas PNGs (characters, characters_
 assets/xml/*.xml                   ← every object/tile TextAsset, as .xml
       │  AssetExtractor.extractAssetsFromXML() (2nd pass)
       ▼
-assets/ObjectID.list               ← objectType;display;class;group;proj;texture;labels;name;bagType
+assets/ObjectID.list               ← objectType;display;class;group;proj;texture;labels;name;bagType;tier;description
 assets/TileID.list                 ← tileType;texture;damage;name
 ```
 
@@ -260,10 +263,11 @@ min/max/AP, texture `file,index`, labels), sorts by id, and writes them via
 `"-"` suffix passed to `Util.print` (`:399`, `:404`) tells `Util.getPrintWriter`
 to use the literal filename with no timestamp (`util/Util.java:95-96`). Only a
 subset of child nodes is captured — notably `<Texture>`/`<AnimatedTexture>` for
-the sprite lookup (`:548-551`, `:647-665`) and `<BagType>` (raw string, appended
-as the 9th `ObjectID.list` column — see "BagType" below); dye `<Tex1>`/`<Tex2>`
-are **not** extracted here (that parsing lives in `SpritePackService`, see
-[dyes-and-textiles.md](dyes-and-textiles.md)).
+the sprite lookup (`:561-564`), `<BagType>` (raw string, appended as the 9th
+`ObjectID.list` column — see "BagType" below), and `<Tier>`/`<Description>`
+(appended as the 10th/11th columns — see "Item info" below); dye
+`<Tex1>`/`<Tex2>` are **not** extracted here (that parsing lives in
+`SpritePackService`, see [dyes-and-textiles.md](dyes-and-textiles.md)).
 
 ## The sprite-sheet model (`flattbuffer/`)
 
@@ -439,6 +443,66 @@ only needs `assets/xml/enchantments.xml` (itself only present after a real
 extraction) and reports "NOT FOUND" the same way when absent. Never throws.
 `AssetProbeTest` covers both the no-assets path and the XML tag scan without
 needing a real game install.
+
+### Item info — tooltip data (issue #109)
+
+The overlay's item hover tooltip (`ItemSprite`, the shared item-rendering
+path every gear/loot icon goes through — see
+[overlay-renderer.md](overlay-renderer.md)) needs more than a sprite: a
+display name, tier, class, description, and (for weapons) a damage range.
+Everything but `<Tier>`/`<Description>` was already parsed for other purposes
+(`display`/`clazz` for BagType above, projectile min/max/slot for the DPS
+engine); `<Tier>` and `<Description>` are new, added the same way `<BagType>`
+was for issue #105:
+
+- **`<Tier>`** (e.g. `"UT"`, `"1"`..`"15"`) — `parseChildObjects` already
+  captured it into `AssetObject.tier` (used internally to build the
+  projectile string's leading slot-type field), but `AssetObject.toString()`
+  never emitted it as its own `ObjectID.list` column until now — appended as
+  the **10th** column.
+- **`<Description>`** — a new `case "Description":` in `parseChildObjects`
+  (`AssetExtractor.java:545-553`), sanitized (`;`/newlines stripped) before
+  being appended as the **11th** column, since — unlike every other captured
+  field — it's free text that could otherwise corrupt the `;`-delimited line
+  or truncate it if it happened to contain either character. Not every object
+  carries a `<Description>`; absent is "".
+
+`IdToAsset` parses both with the same length-guarded backward-compat pattern
+`bagType` already uses (`l.length > 9 ? l[9] : ""` for tier, `l.length > 10 ?
+l[10] : ""` for description — an older `ObjectID.list` written before these
+columns existed just yields ""), exposed via **`getTier(id)`** /
+**`getDescription(id)`**. Weapon damage range reuses the existing projectile
+getters (`getIdProjectileMinDmg`/`MaxDmg(id, 0)`); those two, plus
+`getIdProjectileArmorPierces`/`getIdProjectileSlotType`, were also
+bounds-checked as part of this change (previously they indexed
+`i.projectiles[0]` unconditionally, which threw
+`ArrayIndexOutOfBoundsException` for any object with zero projectile entries
+— every non-weapon object, since `parseProjectile("")` yields a zero-length
+array, not `null`). A new **`getIdProjectileCount(id)`** lets a caller check
+for projectile data before asking for its damage, rather than relying on the
+bounds guard as an implicit "not a weapon" signal.
+
+**`bridge/ItemInfo.java`** is the consumer, mirroring `LootBagTypes`: it
+walks every loaded object id and builds `names`/`tiers`/`classes`/
+`descriptions`/`minDamage`/`maxDamage` tables, ships them as the synthetic
+`itemInfo` envelope (cached the same way, rebuilt only when
+`IdToAsset.loadedObjectCount()` changes), and — like `lootBagTypes` — needs no
+atlas, so it's independent of the sprite pack's readiness gate. See
+[bridge-server.md](bridge-server.md#8-iteminfo--enchantnames--the-item-tooltips-data-issue-109)
+for the broadcast mechanics and [architecture.md](architecture.md) for the
+exact wire shape. Enchantment names (a *separate* small table, `bridge/EnchantNames.java`,
+reflecting `bridge.dps.ParseEnchants.ENCHANTS`) ship the same way but aren't
+`IdToAsset`-derived — see `bridge-server.md` §8 and
+[dps-engine.md](dps-engine.md) for where that map comes from.
+
+`IdToAsset.registerFake` gained a second overload,
+`registerFake(id, clazz, bagType, tier, display, description)`, for the same
+reason as the BagType callout above: `--fake` mode has no real `ObjectID.list`
+to source item info from. `FakePacketSource` seeds one equipped item
+(`WEAPON_ID`) and one loot item (`LOOT_ITEM_TYPES[0]`) this way so the
+tooltip's "real data" path is exercisable headlessly; every other fake
+objectType is deliberately left unregistered, exercising the tooltip's
+no-resolvable-data fallback (just the objectType) instead.
 
 ### `ImageBuffer` — desktop-side cropping (`ImageBuffer.java`)
 

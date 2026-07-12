@@ -133,6 +133,7 @@ function DpsList({ snapshot, maxRows, showHeader, size }: DpsListProps): React.J
                   equipment={entities.equipment(row.objectId)}
                   rarity={entities.equipmentRarity(row.objectId)}
                   slotSize={slotSize}
+                  ownerObjectId={row.objectId}
                 />
                 <span className="min-w-0 flex-1 truncate text-fg-muted">
                   {isLocal && (

@@ -9,7 +9,7 @@ const INVENTORY_0_STAT = 8
 const NAME_STAT = 31
 const CLOTHING_DYE_STAT = 32 // TEX1 - clothing dye objectType
 const ACCESSORY_DYE_STAT = 33 // TEX2 - accessory dye objectType
-const UNIQUE_DATA_STRING_STAT = 80 // per-slot encoded enchant data - see sprites/enchantRarity.ts
+const UNIQUE_DATA_STRING_STAT = 80 // per-equipped-slot encoded enchant data - see sprites/enchantRarity.ts
 
 interface StatEntry {
   statTypeNum: number
@@ -37,6 +37,8 @@ interface EntityRecord {
   /** Clothing (Tex1) / accessory (Tex2) dye, as dye objectTypes. */
   clothingDye?: number
   accessoryDye?: number
+  /** 4 equipped slots' raw encoded enchant strings (UNIQUE_DATA_STRING), same order as `equipment`. */
+  enchantSlots?: string[]
   name?: string
 }
 
@@ -44,7 +46,9 @@ interface EntityRecord {
  * App-level registry of live entities, built from the packet stream so any panel
  * (DPS, character, a future party panel) can resolve an entity to its sprite and
  * loadout. Per objectId we merge `objectType`, the equipped `skin` (SKIN_ID), the
- * 4 `equipment` slots (INVENTORY_0..3), and the `name` (NAME_STAT). Stats arrive
+ * 4 `equipment` slots (INVENTORY_0..3), the 4 `enchantSlots` raw encoded strings
+ * (UNIQUE_DATA_STRING - see `items/enchantDecode.ts`, consumed by the item
+ * tooltip's `ItemSprite`), and the `name` (NAME_STAT). Stats arrive
  * as deltas across UpdatePackets, so each packet is MERGED into the existing
  * record rather than overwriting it. Also resolves the local player's objectId
  * from CreateSuccessPacket (one-shot, at map load) and EnemyHitPacket.mainID
@@ -137,7 +141,12 @@ export function EntityRegistryProvider({
         } else if (s.statTypeNum === ACCESSORY_DYE_STAT && s.statValue != null) {
           rec.accessoryDye = s.statValue
           changed = true
-        } else if (s.statTypeNum === UNIQUE_DATA_STRING_STAT && s.stringStatValue) {
+        } else if (s.statTypeNum === UNIQUE_DATA_STRING_STAT && s.stringStatValue != null) {
+          // Comma-joined weapon/ability/armor/ring slots (see
+          // bridge.dps.ParseEnchants#getEnchantStrings); a slot can itself be
+          // an empty string ("known, no enchantments"), so this only guards
+          // on the stat being present at all, not on a truthy value.
+          rec.enchantSlots = s.stringStatValue.split(',')
           rec.equipmentRarity = equipmentRarityFromUniqueDataString(s.stringStatValue)
           changed = true
         } else if (s.statTypeNum === NAME_STAT && s.stringStatValue) {
@@ -243,6 +252,11 @@ export function EntityRegistryProvider({
       objectId == null ? null : (recordsRef.current.get(objectId)?.accessoryDye ?? null),
     []
   )
+  const enchantSlots = useCallback(
+    (objectId: number | null | undefined): string[] | null =>
+      objectId == null ? null : (recordsRef.current.get(objectId)?.enchantSlots ?? null),
+    []
+  )
   const characters = useCallback((): number[] => {
     const ids: number[] = []
     for (const [id, rec] of recordsRef.current) {
@@ -264,6 +278,7 @@ export function EntityRegistryProvider({
         equipmentRarity,
         clothingDye,
         accessoryDye,
+        enchantSlots,
         name,
         characters,
         localPlayerId,

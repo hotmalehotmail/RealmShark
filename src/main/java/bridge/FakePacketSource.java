@@ -134,14 +134,17 @@ public class FakePacketSource {
 
     // Per-roster-member filled-enchant-slot counts (weapon/ability/armor/ring),
     // 0-4 each - the rarity derivation issue #107 uses (0=common/no border,
-    // 1=uncommon, 2=rare, 3=legendary, 4=divine). Alice covers all four tiers
-    // in one row; Bob is fully unenchanted; Carol/Dave mix both so the roster
-    // as a whole exercises every tier plus unenchanted gear.
+    // 1=uncommon, 2=rare, 3=legendary, 4=divine), and the same encoded slots
+    // feed the item tooltip's enchant-id list (issue #109; ids resolve to the
+    // bare-id fallback headless). Alice covers all four tiers in one row; Bob
+    // is fully unenchanted (known-empty slots - the tooltip's "No
+    // enchantments" state); Carol mixes tiers; Dave (null) sends no
+    // UNIQUE_DATA_STRING stat at all (tooltip shows no enchant section).
     private static final int[][] ROSTER_ENCHANTS = {
         {1, 2, 3, 4}, // Alice (local): one of each tier
         {0, 0, 0, 0}, // Bob: fully unenchanted
         {4, 0, 2, 0}, // Carol: mixed
-        {0, 3, 0, 1}  // Dave: mixed
+        null          // Dave: no enchant stat at all
     };
 
     // A non-local player whose weapon we periodically swap, to prove OTHER players'
@@ -174,6 +177,14 @@ public class FakePacketSource {
     // appear in the Loot panel.
     private static final int[] LOOT_ITEM_TYPES = {9100, 9100, 9200, 9300};
     private static final int[] LOOT_ITEM_BAG_TYPES = {6, 6, 8, 3};
+
+    // Item tooltip demo (issue #109): seeds a couple of the ids above with
+    // IdToAsset.registerFake's item-info fields (tier/display name/description),
+    // so the hover tooltip mechanism is exercisable end-to-end even with no
+    // game installed - one equipped item (WEAPON_ID, hovered via GearRow) and
+    // one loot item (LOOT_ITEM_TYPES[0], hovered via the Loot panel). Every
+    // other fake objectType deliberately stays unregistered, exercising the
+    // tooltip's "no resolvable data" fallback (shows just the objectType).
     // The 8 bag/held inventory slots (INVENTORY_4..11); slot 0..3 are the
     // equipped gear ROSTER_EQUIPMENT already covers.
     private static final int LOOT_SLOT_COUNT = 8;
@@ -202,6 +213,14 @@ public class FakePacketSource {
         for (int i = 0; i < LOOT_ITEM_TYPES.length; i++) {
             IdToAsset.registerFake(LOOT_ITEM_TYPES[i], "Equipment", LOOT_ITEM_BAG_TYPES[i]);
         }
+        IdToAsset.registerFake(
+            WEAPON_ID, "Equipment", -1, "UT",
+            "Fake Sword of Testing", "A synthetic weapon seeded by --fake mode for the item tooltip demo."
+        );
+        IdToAsset.registerFake(
+            LOOT_ITEM_TYPES[0], "Equipment", LOOT_ITEM_BAG_TYPES[0], "8",
+            "Fake Potion of Testing", "A synthetic loot item seeded by --fake mode for the item tooltip demo."
+        );
 
         Thread t = new Thread(this::loop, "fake-packet-source");
         t.setDaemon(true);
@@ -577,6 +596,9 @@ public class FakePacketSource {
      *
      * @param enchantCounts filled-enchant-slot count per equipped slot (0-4 each,
      *                      weapon/ability/armor/ring) - see {@link #ROSTER_ENCHANTS}.
+     *                      Null omits the UNIQUE_DATA_STRING stat entirely (this
+     *                      player reports no enchant data at all - the tooltip's
+     *                      no-enchant-section state).
      */
     private StatData[] playerStats(String name, int[] equipment, int[] enchantCounts) {
         StatData nameStat = new StatData();
@@ -584,13 +606,13 @@ public class FakePacketSource {
         nameStat.statType = StatType.NAME_STAT;
         nameStat.stringStatValue = name;
         nameStat.statValueTwo = -1;
-        return new StatData[]{
+
+        StatData[] base = {
             nameStat,
             stat(StatType.INVENTORY_0_STAT, equipment[0]),
             stat(StatType.INVENTORY_1_STAT, equipment[1]),
             stat(StatType.INVENTORY_2_STAT, equipment[2]),
             stat(StatType.INVENTORY_3_STAT, equipment[3]),
-            stringStat(StatType.UNIQUE_DATA_STRING, enchantUniqueDataString(enchantCounts)),
             stat(StatType.MAX_HP_STAT, 770), stat(StatType.HP_STAT, 770),
             stat(StatType.MAX_MP_STAT, 252), stat(StatType.MP_STAT, 252),
             stat(StatType.ATTACK_STAT, 75), stat(StatType.DEFENSE_STAT, 25),
@@ -603,6 +625,15 @@ public class FakePacketSource {
             stat(StatType.VITALITY_BOOST_STAT, 0), stat(StatType.WISDOM_BOOST_STAT, 0),
             stat(StatType.EXALTATION_BONUS_DAMAGE, 1000) // /1000 -> x1.0 multiplier
         };
+        if (enchantCounts == null) return base;
+
+        StatData[] all = new StatData[base.length + 1];
+        System.arraycopy(base, 0, all, 0, base.length);
+        all[base.length] = stringStat(
+            StatType.UNIQUE_DATA_STRING,
+            enchantUniqueDataString(enchantCounts)
+        );
+        return all;
     }
 
     /**

@@ -152,6 +152,7 @@ function EnemyRow({
                   equipment={cosmetics?.equipment}
                   rarity={cosmetics?.equipmentRarity}
                   slotSize={GEAR_SLOT_SIZE}
+                  ownerObjectId={row.objectId}
                 />
                 <span className="min-w-0 flex-1 truncate text-fg-muted">{row.name}</span>
                 <span className="shrink-0 text-right font-mono tabular-nums">

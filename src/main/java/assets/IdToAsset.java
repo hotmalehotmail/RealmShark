@@ -28,6 +28,10 @@ public class IdToAsset {
      * (the ground bag entity itself), this is which color bag it is.
      */
     private final int bagType;
+    /** Raw {@code <Tier>} value (e.g. "UT", "1".."15"), or "" if none. */
+    private final String tier;
+    /** Raw, semicolon/newline-sanitized {@code <Description>} value, or "" if none. */
+    private final String description;
     private static final HashMap<Integer, IdToAsset> objectID = new HashMap<>();
     private static final HashMap<Integer, IdToAsset> tileID = new HashMap<>();
     /**
@@ -51,8 +55,10 @@ public class IdToAsset {
      * @param label       Label of the resource
      * @param group       Group of the resource
      * @param bagType     Raw {@code <BagType>} value, or "" if none
+     * @param tier        Raw {@code <Tier>} value, or "" if none
+     * @param description Sanitized {@code <Description>} value, or "" if none
      */
-    public IdToAsset(String l, int id, String idName, String display, String clazz, Projectile[] projectiles, String texture, String label, String group, String bagType) {
+    public IdToAsset(String l, int id, String idName, String display, String clazz, Projectile[] projectiles, String texture, String label, String group, String bagType, String tier, String description) {
         this.l = l;
         this.id = id;
         this.idName = idName;
@@ -63,6 +69,8 @@ public class IdToAsset {
         this.label = label;
         this.group = group;
         this.bagType = parseBagType(bagType);
+        this.tier = tier == null ? "" : tier;
+        this.description = description == null ? "" : description;
     }
 
     /**
@@ -86,6 +94,8 @@ public class IdToAsset {
         group = "";
         label = "";
         bagType = -1;
+        tier = "";
+        description = "";
     }
 
     /*
@@ -120,8 +130,27 @@ public class IdToAsset {
      * @param bagType BagType to report for this id.
      */
     public static void registerFake(int id, String clazz, int bagType) {
+        registerFake(id, clazz, bagType, "", "", "");
+    }
+
+    /**
+     * Like {@link #registerFake(int, String, int)}, additionally seeding the
+     * item-info fields (issue #109) so the {@code --fake} bridge mode can
+     * demonstrate the item tooltip end-to-end with no game installed.
+     *
+     * @param id          Synthetic object id (must not collide with a real one).
+     * @param clazz       Class of the fake object (e.g. "Equipment").
+     * @param bagType     BagType to report for this id.
+     * @param tier        Fake {@code <Tier>} value, or "" for none.
+     * @param display     Fake display name, or "" to fall back to "Fake&lt;id&gt;".
+     * @param description Fake description, or "" for none.
+     */
+    public static void registerFake(
+        int id, String clazz, int bagType, String tier, String display, String description
+    ) {
         IdToAsset entry = new IdToAsset(
-            "", id, "Fake" + id, "", clazz, null, "", "", "", String.valueOf(bagType)
+            "", id, "Fake" + id, display == null ? "" : display, clazz, null, "", "", "",
+            String.valueOf(bagType), tier == null ? "" : tier, description == null ? "" : description
         );
         fakeEntries.put(id, entry);
         objectID.put(id, entry);
@@ -160,10 +189,12 @@ public class IdToAsset {
                 String texture = l[5];
                 String label = l[6];
                 String idName = l[7];
-                // bagType is a newer column - default "" for an older ObjectID.list
-                // written before this field existed.
+                // bagType/tier/description are newer columns - default "" for an
+                // older ObjectID.list written before they existed.
                 String bagType = l.length > 8 ? l[8] : "";
-                objectID.put(id, new IdToAsset(line, id, idName, display, clazz, projectiles, texture, label, group, bagType));
+                String tier = l.length > 9 ? l[9] : "";
+                String description = l.length > 10 ? l[10] : "";
+                objectID.put(id, new IdToAsset(line, id, idName, display, clazz, projectiles, texture, label, group, bagType, tier, description));
             }
             br.close();
         } catch (Exception e) {
@@ -171,7 +202,7 @@ public class IdToAsset {
             e.printStackTrace();
         }
 
-        objectID.put(-1, new IdToAsset("", -1, "Unloaded", "Unloaded", "", null, "", "", "Unloaded", ""));
+        objectID.put(-1, new IdToAsset("", -1, "Unloaded", "Unloaded", "", null, "", "", "Unloaded", "", "", ""));
     }
 
     /**
@@ -336,6 +367,31 @@ public class IdToAsset {
     }
 
     /**
+     * Tier of the object (e.g. "UT", "1".."15"), from its {@code <Tier>} tag.
+     *
+     * @param id Id of the object.
+     * @return Tier string, or "" if unknown/not set.
+     */
+    public static String getTier(int id) {
+        IdToAsset i = objectID.get(id);
+        if (i == null) return "";
+        return i.tier;
+    }
+
+    /**
+     * Flavor-text description of the object, from its {@code <Description>}
+     * tag (issue #109 - item tooltips). Not every object carries one.
+     *
+     * @param id Id of the object.
+     * @return Description string, or "" if unknown/not set.
+     */
+    public static String getDescription(int id) {
+        IdToAsset i = objectID.get(id);
+        if (i == null) return "";
+        return i.description;
+    }
+
+    /**
      * Finds the ground-bag entity ({@code <Class>Bag</Class>}) that
      * self-identifies as the given BagType, e.g. the white/orange bag sprite
      * the Loot panel uses as a category header. Derived entirely from loaded
@@ -420,7 +476,9 @@ public class IdToAsset {
      */
     public static int getIdProjectileMinDmg(int id, int projectileId) {
         IdToAsset i = objectID.get(id);
-        if (i == null) return -1;
+        if (i == null || i.projectiles == null || projectileId < 0 || projectileId >= i.projectiles.length) {
+            return -1;
+        }
         return i.projectiles[projectileId].min;
     }
 
@@ -433,7 +491,9 @@ public class IdToAsset {
      */
     public static int getIdProjectileMaxDmg(int id, int projectileId) {
         IdToAsset i = objectID.get(id);
-        if (i == null) return -1;
+        if (i == null || i.projectiles == null || projectileId < 0 || projectileId >= i.projectiles.length) {
+            return -1;
+        }
         return i.projectiles[projectileId].max;
     }
 
@@ -446,7 +506,9 @@ public class IdToAsset {
      */
     public static boolean getIdProjectileArmorPierces(int id, int projectileId) {
         IdToAsset i = objectID.get(id);
-        if (i == null) return false;
+        if (i == null || i.projectiles == null || projectileId < 0 || projectileId >= i.projectiles.length) {
+            return false;
+        }
         return i.projectiles[projectileId].ap;
     }
 
@@ -458,8 +520,20 @@ public class IdToAsset {
      */
     public static int getIdProjectileSlotType(int id) {
         IdToAsset i = objectID.get(id);
-        if (i == null) return 0;
+        if (i == null || i.projectiles == null || i.projectiles.length == 0) return 0;
         return i.projectiles[0].slotType;
+    }
+
+    /**
+     * Number of projectiles the object has data for (0 for a non-weapon).
+     *
+     * @param id Id of the object.
+     * @return Projectile count.
+     */
+    public static int getIdProjectileCount(int id) {
+        IdToAsset i = objectID.get(id);
+        if (i == null || i.projectiles == null) return 0;
+        return i.projectiles.length;
     }
 
     /**

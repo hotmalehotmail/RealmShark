@@ -4,11 +4,13 @@ The **bridge** is the Java process that turns RealmShark's decoded packet stream
 into a stream of JSON the overlay can consume. It subscribes to every decoded
 `Packet`, serializes each one to a `{type,direction,time,data}` envelope, and
 broadcasts them in batches over a **loopback-only** WebSocket on
-`127.0.0.1:47474`. Alongside the raw packets it also emits four *synthetic*
+`127.0.0.1:47474`. Alongside the raw packets it also emits six *synthetic*
 envelope kinds the overlay needs but the game never sends: `objectNames`
 (enemy id→name), `dps` (server-computed damage), `lootBagTypes` (BagType 6/8
-item categorization for the Loot panel), and `spritePack` (the atlas
-bundle). Capture runs on the sniffer thread; everything client-facing runs on a
+item categorization for the Loot panel), `itemInfo` (name/tier/class/
+description/damage per objectType, for the item tooltip - issue #109),
+`enchantNames` (enchant id→name, also for the item tooltip), and `spritePack`
+(the atlas bundle). Capture runs on the sniffer thread; everything client-facing runs on a
 single scheduled flusher thread, and a bounded drop-oldest queue sits between
 them so a slow or dead client can never stall packet capture.
 
@@ -29,6 +31,8 @@ this is [overlay-main-process.md](overlay-main-process.md).
 | `src/main/java/bridge/ObjectNames.java` | Loads enemy/NPC name assets; emits the synthetic `objectNames` envelope. |
 | `src/main/java/bridge/DpsBroadcaster.java` | Thin adapter between the packet stream and the DPS engine; emits `dps` snapshots. |
 | `src/main/java/bridge/LootBagTypes.java` | Resolves BagType 6/8 item categorization from asset data; emits the synthetic `lootBagTypes` envelope. |
+| `src/main/java/bridge/ItemInfo.java` | Resolves item metadata (name/tier/class/description/damage) from asset data; emits the synthetic `itemInfo` envelope (issue #109). |
+| `src/main/java/bridge/EnchantNames.java` | Resolves enchant id→name from `ParseEnchants.ENCHANTS`; emits the synthetic `enchantNames` envelope (issue #109). |
 | `src/main/java/bridge/FakePacketSource.java` | `--fake` dev mode: synthetic traffic through the real `Register` pipeline. |
 
 Out of scope (own docs): `bridge/dps/**` → [dps-engine.md](dps-engine.md);
@@ -151,8 +155,8 @@ frame counts low during dungeon bursts and lines up with a UI render frame.
 
 ### The scheduled flushers
 
-All five periodic jobs run on **one** single-thread daemon scheduler named
-`bridge-flusher` (`PacketBridge.java:122-163`):
+All seven periodic jobs run on **one** single-thread daemon scheduler named
+`bridge-flusher` (`PacketBridge.java:122-177`):
 
 | Job | Cadence | What it does | Ref |
 | --- | --- | --- | --- |
@@ -160,7 +164,9 @@ All five periodic jobs run on **one** single-thread daemon scheduler named
 | DPS snapshot | polls every 50 ms; sends on damage or a 250 ms heartbeat | `dps.snapshotJson()`, enqueue if non-null | `:134-142` |
 | engine diagnostic | 3000 ms | `System.out.println("[dps-engine] " + dps.debugState())` | `:146-148` |
 | sprite-pack readiness | 2000 ms | `maybeBroadcastSpritePack()` (one-shot) | `:154-155` |
-| loot BagType readiness | 2000 ms | `maybeBroadcastLootBagTypes()` (repeats every poll once ready) | `:157-163` |
+| loot BagType readiness | 2000 ms | `maybeBroadcastLootBagTypes()` (repeats every poll once ready) | `:164-165` |
+| item-info readiness | 2000 ms | `maybeBroadcastItemInfo()` (repeats every poll once ready, issue #109) | `:169-170` |
+| enchant-name table | 2000 ms | `enqueue(enchantNames.envelopeJson())` (repeats every poll, no readiness gate needed) | `:176-177` |
 
 The DPS snapshot is *enqueued*, so it flows out with the next 33 ms flush like
 any other message. The diagnostic writes to stdout only (it surfaces in the
@@ -556,11 +562,62 @@ game.
 
 ---
 
+## 8. `ItemInfo` / `EnchantNames` — the item tooltip's data (issue #109)
+
+Two small synthetic tables feeding the overlay's item hover tooltip
+(`ItemSprite` - see [overlay-renderer.md](overlay-renderer.md)): item metadata
+per objectType, and enchant id→name resolution. Both follow `LootBagTypes`'s
+shape and broadcast pattern (§6) rather than `ObjectNames`'s or the sprite
+pack's.
+
+- **`ItemInfo`** (`src/main/java/bridge/ItemInfo.java`) - `ready()` is the same
+  `IdToAsset.loadedObjectCount() > 1` check as `LootBagTypes`. `envelopeJson()`
+  walks every loaded object id and builds five id→value tables: `names`
+  (`IdToAsset.objectName`), `tiers` (`IdToAsset.getTier`, new - see
+  [asset-pipeline.md](asset-pipeline.md)), `classes` (`IdToAsset.getClazz`),
+  `descriptions` (`IdToAsset.getDescription`, new), and `minDamage`/`maxDamage`
+  (`IdToAsset.getIdProjectileMinDmg`/`MaxDmg(id, 0)`, only for ids that have
+  projectile data at all - `IdToAsset.getIdProjectileCount(id) > 0`, a new
+  bounds-safe query added alongside a fix to the projectile getters, which
+  previously threw `ArrayIndexOutOfBoundsException` for any non-weapon object
+  since every object gets a zero-length `Projectile[]`, not `null`). Cached
+  and rebuilt on the same `loadedObjectCount()`-changed condition as
+  `LootBagTypes`. Envelope: `type:"itemInfo"`, `direction:"internal"`.
+- **`EnchantNames`** (`src/main/java/bridge/EnchantNames.java`) - reflects
+  `bridge.dps.ParseEnchants.ENCHANTS` (enchant id→display name, loaded once
+  from `assets/xml/enchantments.xml` at class-init - see
+  [dps-engine.md](dps-engine.md)) into `{"type":"enchantNames","data":{"names":{...}}}`.
+  Unlike `ItemInfo`/`LootBagTypes` there's no async readiness gate to poll:
+  `ParseEnchants`'s static initializer reads the XML file synchronously the
+  first time the class is referenced, so the map (real names, or just its
+  built-in `-1 -> "[empty]"` entry when the XML is missing, e.g. `--fake` mode
+  or any machine without the game's assets extracted) is already final by the
+  time this class is constructed. `envelopeJson()` is therefore built once and
+  cached forever, not rebuilt on a poll.
+- **Both re-sent every poll, not one-shot** - same rationale as
+  `LootBagTypes` (§6): a tiny payload, re-sent so a client that connects after
+  the first broadcast still gets it, with no separate request/response
+  message. `PacketBridge` schedules them the same way (`maybeBroadcastItemInfo`
+  `:169-170`; the enchant-names job `:176-177` - see the flushers table above).
+- **How the overlay uses these**: `ItemSprite` (the shared item-rendering
+  path every gear/loot icon goes through) reads `itemInfo` for the tooltip's
+  name/tier/damage/description line, and decodes the *equipping* entity's raw
+  `UNIQUE_DATA_STRING` stat (already crossing the wire on every player's
+  stats - no new packet needed) client-side into enchant ids
+  (`items/enchantDecode.ts`, a TypeScript port of
+  `bridge.dps.ParseEnchants#extractEnchantIds` - the six-bit/base64url decode
+  needs no XML, only `enchantNames` does), then resolves each id to a name via
+  `enchantNames`, falling back to the bare id when no definition is loaded.
+  See [overlay-renderer.md](overlay-renderer.md) for the full consumer side.
+
+---
+
 ## Cross-references
 
 - Envelope catalog (every `type` and its `data` shape): [architecture.md](architecture.md)
 - DPS math and why self-damage is reconstructed: [dps-engine.md](dps-engine.md)
 - Sprite-pack contents / `SpritePackService`: [asset-pipeline.md](asset-pipeline.md), [dyes-and-textiles.md](dyes-and-textiles.md)
 - BagType extraction, `IdToAsset.registerFake`, and the Loot panel: [asset-pipeline.md](asset-pipeline.md), [overlay-renderer.md](overlay-renderer.md)
+- Item tooltip data (`ItemInfo`/`EnchantNames`) and the enchant wire format: [asset-pipeline.md](asset-pipeline.md), [overlay-renderer.md](overlay-renderer.md)
 - The client that consumes 47474 (supervisor, hello validation, reconnect): [overlay-main-process.md](overlay-main-process.md)
 - Running with `--fake`, ports, the `bridge.jar`: [build-and-release.md](build-and-release.md)
