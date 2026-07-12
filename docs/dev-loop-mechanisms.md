@@ -626,14 +626,20 @@ constrained to a branch push. The gatekeeper gains an `issue_comment` trigger (f
 marker) so the comment itself wakes arming, and its arm path now also requires: the current head's
 review is complete (`review-verdict = success` on that exact sha, so the finding count is stable),
 and if that head has findings, a matching `session-triaged` marker exists — else it holds. No
-sweep dependence: the marker comment is the edge trigger.
+sweep dependence for the happy path: the marker comment is the edge trigger. But `sweep.yml`
+(the second, level-triggered merge path) **also** enforces the triage gate in its `CLEAN`
+branch — it must be exactly as restrictive as the gatekeeper, or it would merge a held PR on
+its next cycle — with an analogous idle-past-`CRASH_MIN` backstop, which doubles as the recovery
+for a triage agent that died before posting the marker (the fix loop's auto-accept can't fire
+then, since a decline-only crash produces no new review event).
 
 **Status.** 🟡 Built (this change), not yet live-validated — shares §7.2's dependency on a real
 Routine run (TRIAGE MODE is a new routine-prompt mode; the prompt lives in the routine config, so
 `docs/build-agent-routine.md` must be re-pasted there — see its ⚠️ note).
 
 **What must be built for §7.3.** ✅ fixloop TRIAGE branch (detect findings, separate budget,
-auto-accept); ✅ gatekeeper triage gate + `issue_comment` trigger; ✅ routine-prompt TRIAGE MODE.
+auto-accept); ✅ gatekeeper triage gate + `issue_comment` trigger; ✅ **sweep triage gate + crash
+backstop** (mirror, so the second merge path can't bypass the hold); ✅ routine-prompt TRIAGE MODE.
 ⏳ re-paste the routine prompt; ⏳ live validation on a Routine run.
 
 ---

@@ -113,23 +113,43 @@ jobs:
             case "$STATE" in
               CLEAN)
                 # Green + mergeable + up to date -> all required checks (ci + review-verdict) have
-                # passed. But honor the interlock gate: merge only if the head has a session-done
-                # marker (authoring session ended), EXCEPT the crash backstop (idle past CRASH_MIN).
-                if gh api "repos/$REPO/git/ref/heads/session-done/$POID" >/dev/null 2>&1; then
-                  GATED_OK=1; REASON="session-done marker present"
-                else
-                  HEAD_AGE_MIN=0
-                  CDATE="$(gh api "repos/$REPO/commits/$POID" -q '.commit.committer.date' 2>/dev/null || true)"
-                  if [ -n "$CDATE" ]; then
-                    NOWS="$(date -u +%s)"; CS="$(date -u -d "$CDATE" +%s 2>/dev/null || echo "$NOWS")"
-                    HEAD_AGE_MIN=$(( (NOWS - CS) / 60 ))
-                  fi
+                # passed. Sweep is a SECOND merge path, so it must be exactly as restrictive as the
+                # gatekeeper: honor BOTH the interlock gate (§7.2, session-done marker) AND the
+                # triage gate (§7.3, session-triaged marker when the passing review left findings).
+                # Each gate shares the SAME crash backstop: if the head has been idle past CRASH_MIN
+                # the awaited marker's producer (the SessionEnd hook / the triage agent) likely
+                # died, so merge anyway rather than strand the PR forever.
+                HEAD_AGE_MIN=0
+                CDATE="$(gh api "repos/$REPO/commits/$POID" -q '.commit.committer.date' 2>/dev/null || true)"
+                if [ -n "$CDATE" ]; then
+                  NOWS="$(date -u +%s)"; CS="$(date -u -d "$CDATE" +%s 2>/dev/null || echo "$NOWS")"
+                  HEAD_AGE_MIN=$(( (NOWS - CS) / 60 ))
+                fi
+                GATED_OK=1; REASON="gates satisfied"
+                # (a) Interlock: the authoring session has ended.
+                if ! gh api "repos/$REPO/git/ref/heads/session-done/$POID" >/dev/null 2>&1; then
                   if [ "$HEAD_AGE_MIN" -ge "$CRASH_MIN" ]; then
-                    GATED_OK=1; REASON="crash backstop: no marker, head idle ${HEAD_AGE_MIN}m >= ${CRASH_MIN}m (SessionEnd likely never fired)"
-                    echo "::warning::#$P has no session-done marker but its head is ${HEAD_AGE_MIN}m idle — merging as the crash backstop."
+                    REASON="crash backstop: no session-done marker, head idle ${HEAD_AGE_MIN}m"
+                    echo "::warning::#$P has no session-done marker but its head is ${HEAD_AGE_MIN}m idle — merging as the interlock crash backstop."
                   else
                     GATED_OK=0
-                    echo "#$P is CLEAN but has no session-done marker (head ${HEAD_AGE_MIN}m old) — authoring session may still be running; skipping (gatekeeper arms it when the marker lands)."
+                    echo "#$P is CLEAN but has no session-done marker (head ${HEAD_AGE_MIN}m old) — authoring session may still be running; skipping."
+                  fi
+                fi
+                # (b) Triage: a passing review's medium/low findings were decided (only if (a) passed).
+                if [ "$GATED_OK" = 1 ]; then
+                  FINDINGS="$(gh api --paginate "repos/$REPO/pulls/$P/comments" \
+                                -q ".[] | select(.user.login==\"github-actions[bot]\" and .commit_id==\"$POID\") | .id" 2>/dev/null | wc -l | tr -d ' ')"
+                  if [ "${FINDINGS:-0}" -gt 0 ] \
+                     && ! gh api --paginate "repos/$REPO/issues/$P/comments" \
+                            -q ".[] | select(.body | contains(\"<!-- session-triaged: $POID -->\")) | .id" 2>/dev/null | grep -q .; then
+                    if [ "$HEAD_AGE_MIN" -ge "$CRASH_MIN" ]; then
+                      REASON="crash backstop: $FINDINGS untriaged finding(s), head idle ${HEAD_AGE_MIN}m"
+                      echo "::warning::#$P has $FINDINGS untriaged finding(s) but its head is ${HEAD_AGE_MIN}m idle — accepting as the triage crash backstop (covers a dead triage agent)."
+                    else
+                      GATED_OK=0
+                      echo "#$P is CLEAN but has $FINDINGS unaddressed review finding(s) and no session-triaged marker — holding for the triage pass."
+                    fi
                   fi
                 fi
                 if [ "$GATED_OK" = 1 ]; then
