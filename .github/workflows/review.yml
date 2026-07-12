@@ -78,7 +78,7 @@ jobs:
           # Read-only gh: the diff, the changed-file list, and the PR title/body.
           gh pr diff "$PR_NUMBER" --repo "$REPO" > "$IN/diff.txt" || true
           gh pr diff "$PR_NUMBER" --repo "$REPO" --name-only > "$IN/files.txt" || true
-          gh pr view "$PR_NUMBER" --repo "$REPO" --json title,body,headRefName > "$IN/pr.json"
+          gh pr view "$PR_NUMBER" --repo "$REPO" --json title,body,headRefName,labels > "$IN/pr.json"
 
           HEADREF="$(jq -r '.headRefName // ""' "$IN/pr.json")"
           PRBODY="$(jq -r '.body // ""' "$IN/pr.json")"
@@ -102,13 +102,24 @@ jobs:
             HAS_CLOSING=0
             echo "(this PR declares no Closes/Fixes #N issue reference)" > "$IN/issue.txt"
           fi
+          # is-soakfix: a fix-forward PR for a failed alpha soak closes NO discrete issue —
+          # the soak issue is loop-managed (superseded on re-cut, closed on promotion), so the
+          # fix PR must not close it. Such PRs are therefore EXEMPT from the issue-link
+          # requirement below. Detected the same way the gatekeeper's §9.5 freeze exemption is
+          # (the `soak-fix` label, or an "Addresses soak #N" body reference — the body ref is
+          # present at PR-open time, before the label may have been applied), so the two stay
+          # consistent. The `.github/**` tripwire still applies (a soak-fix shouldn't touch CI).
+          IS_SOAKFIX=0
+          if printf '%s' "$PRBODY" | grep -qiE 'addresses soak #[0-9]+'; then IS_SOAKFIX=1; fi
+          if jq -e '.labels[]? | select(.name == "soak-fix")' "$IN/pr.json" >/dev/null 2>&1; then IS_SOAKFIX=1; fi
           {
             echo "IS_AGENT=$IS_AGENT"
             echo "TOUCHES_GITHUB=$TOUCHES_GITHUB"
             echo "HAS_CLOSING=$HAS_CLOSING"
+            echo "IS_SOAKFIX=$IS_SOAKFIX"
             echo "ISSNUM=${ISSNUM:-}"
           } > "$IN/meta.env"
-          echo "Staged review inputs: is_agent=$IS_AGENT touches_github=$TOUCHES_GITHUB has_closing=$HAS_CLOSING issue=${ISSNUM:-none}"
+          echo "Staged review inputs: is_agent=$IS_AGENT touches_github=$TOUCHES_GITHUB has_closing=$HAS_CLOSING is_soakfix=$IS_SOAKFIX issue=${ISSNUM:-none}"
 
       # 2. JUDGE — assess only. Read/Grep/Glob/Write, NO Bash and NO gh, so it cannot
       #    post anything: its sole output is review-inputs/verdict.json.
@@ -217,7 +228,7 @@ jobs:
             FAIL=1
             NOTES="$NOTES"$'\n'"- ❌ **Agent PR modifies \`.github/\`** — auto-failed (audit H1 tripwire). Workflow/CI changes must come from a maintainer, not the build agent."
           fi
-          if [ "${IS_AGENT:-0}" = 1 ] && [ "${HAS_CLOSING:-0}" = 0 ]; then
+          if [ "${IS_AGENT:-0}" = 1 ] && [ "${HAS_CLOSING:-0}" = 0 ] && [ "${IS_SOAKFIX:-0}" = 0 ]; then
             FAIL=1
             NOTES="$NOTES"$'\n'"- ❌ **No \`Closes #N\` / \`Fixes #N\` reference** — an agent PR must link the issue it resolves (drives auto-close, the label lifecycle, and this acceptance check)."
           fi
@@ -267,7 +278,7 @@ jobs:
             DESC="changes requested: ${HIGHCRIT:-0} high/critical"
             if [ "${UNMET:-0}" -gt 0 ]; then DESC="$DESC; ${UNMET} unmet criteria"; fi
             if [ "${IS_AGENT:-0}" = 1 ] && [ "${TOUCHES_GITHUB:-0}" = 1 ]; then DESC="$DESC; .github tripwire"; fi
-            if [ "${IS_AGENT:-0}" = 1 ] && [ "${HAS_CLOSING:-0}" = 0 ]; then DESC="$DESC; missing issue link"; fi
+            if [ "${IS_AGENT:-0}" = 1 ] && [ "${HAS_CLOSING:-0}" = 0 ] && [ "${IS_SOAKFIX:-0}" = 0 ]; then DESC="$DESC; missing issue link"; fi
           else
             DESC="clean"
           fi
