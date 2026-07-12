@@ -16,6 +16,11 @@ name: sweep
 #     ON review.yml staying `on: pull_request` (never `pull_request_target`, which would hand
 #     secrets to fork PRs and break this reasoning).
 #   - Respects the §9.5 soak freeze and the `agent:needs-human` escalation, same as the gatekeeper.
+#
+# It is also the level-triggered backstop for conflict-watch.yml (§6.5): a DIRTY candidate
+# is re-fired through the same `.github/scripts/rebase-refire.sh` (same separate rebase
+# budget, same dedupe) instead of skipped — so a dropped pull_request_target/push event
+# self-heals within a sweep cycle too.
 on:
   schedule:
     - cron: "*/30 * * * *" # every ~30 min (GitHub may delay/throttle scheduled runs; it's a net)
@@ -23,8 +28,8 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read # list candidates + read mergeability (the merge itself uses MERGE_PAT)
-  issues: read # check for an open soak (freeze)
+  pull-requests: write # list/merge candidates; rebase-refire posts marker comments
+  issues: write # soak check; rebase-refire escalation label
 
 concurrency:
   group: sweep
@@ -34,11 +39,17 @@ jobs:
   sweep:
     runs-on: ubuntu-latest
     steps:
+      # Only to obtain .github/scripts/rebase-refire.sh for the DIRTY branch below.
+      - uses: actions/checkout@v4
+
       - name: Merge stranded agent PRs (no soak, green, same-repo)
         env:
           GH_TOKEN: ${{ github.token }}
           MERGE_PAT: ${{ secrets.MERGE_PAT }}
           REPO: ${{ github.repository }}
+          FIRE_URL: ${{ secrets.ROUTINE_FIRE_URL }}
+          FIRE_TOKEN: ${{ secrets.ROUTINE_FIRE_TOKEN }}
+          MAINTAINER: ${{ vars.MAINTAINER_HANDLE }}
         run: |
           set -euo pipefail
 
@@ -60,7 +71,7 @@ jobs:
                  | select(.headRefName | startswith("claude/"))
                  | select(.autoMergeRequest == null)
                  | select([.labels[].name] | index("agent:needs-human") | not)
-                 | .number' 2>/dev/null || true)"
+                 | "\(.number) \(.headRefName)"' 2>/dev/null || true)"
           if [ -z "$CANDIDATES" ]; then
             echo "No stranded agent PRs to sweep."
             exit 0
@@ -81,7 +92,8 @@ jobs:
 
           # 4) Merge each CLEAN candidate. Poll mergeStateStatus first: right after staging moved,
           #    GitHub recomputes it (UNKNOWN) — the exact race that stranded these PRs.
-          for P in $CANDIDATES; do
+          while read -r P PHEAD; do
+            [ -z "$P" ] && continue
             STATE="UNKNOWN"
             for _ in 1 2 3 4 5 6; do
               STATE="$(gh pr view "$P" --repo "$REPO" --json mergeStateStatus -q '.mergeStateStatus' 2>/dev/null || echo UNKNOWN)"
@@ -99,11 +111,14 @@ jobs:
                 fi
                 ;;
               DIRTY)
-                echo "#$P conflicts with staging — needs a rebase (the gatekeeper's §6.5 job); skipping." ;;
+                # Level-triggered §6.5 backstop: re-fire the rebase FIX MODE (dedupes on the
+                # current staging head, so an in-flight rebase agent isn't double-fired).
+                echo "#$P conflicts with staging — invoking the rebase re-fire backstop."
+                NUM="$P" HEAD="$PHEAD" DEDUP=1 bash .github/scripts/rebase-refire.sh </dev/null || true ;;
               BEHIND|BLOCKED)
                 echo "#$P not ready ('$STATE' — behind base, or checks not all green); skipping." ;;
               *)
                 echo "#$P mergeability unresolved ('$STATE') — will retry next sweep." ;;
             esac
-          done
+          done <<< "$CANDIDATES"
           echo "Sweep complete."

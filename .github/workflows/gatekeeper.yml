@@ -1,7 +1,6 @@
 name: gatekeeper
 
-# Auto-merge agent PRs into staging once ci + review are green (full-spec §02, §7),
-# and drive the merge-conflict rebase path (§6.5).
+# Auto-merge agent PRs into staging once ci + review are green (full-spec §02, §7).
 #
 # Triggers on the COMPLETION of the ci/review workflows. workflow_run fires
 # regardless of which token produced the checks (unlike pull_request_review, which
@@ -9,11 +8,12 @@ name: gatekeeper
 # no GATEKEEPER_TOKEN / PAT is needed; the built-in token suffices.
 #
 # For a green, mergeable PR it ARMS GitHub native auto-merge and lets branch
-# protection do the final "wait for green, then merge". For an otherwise-green PR
-# that CONFLICTS with staging (§6.5) it can't merge, so instead it re-fires the build
-# agent in FIX MODE with a rebase instruction — shared with the fix loop's re-fire
-# marker and MAX_FIX_ROUNDS budget (§6.1/§6.2), so a conflict that can't be resolved
-# escalates to a human rather than looping.
+# protection do the final "wait for green, then merge". A PR that CONFLICTS with
+# staging is NOT this workflow's problem anymore: a conflicted PR emits no ci/review
+# runs at all (GitHub can't build its merge ref), so a workflow_run trigger
+# structurally cannot drive conflict recovery — conflict-watch.yml owns the rebase
+# FIX-MODE re-fire (§6.5), on the events a conflict actually produces, with its own
+# MAX_REBASE_ROUNDS budget separate from the fix loop's review rounds.
 on:
   workflow_run:
     workflows: [ci, review]
@@ -47,13 +47,9 @@ jobs:
           REPO: ${{ github.repository }}
           HEAD: ${{ github.event.workflow_run.head_branch }}
           SHA: ${{ github.event.workflow_run.head_sha }}
-          EVENT_WF: ${{ github.event.workflow_run.name }}
-          FIRE_URL: ${{ secrets.ROUTINE_FIRE_URL }}
-          FIRE_TOKEN: ${{ secrets.ROUTINE_FIRE_TOKEN }}
           MAINTAINER: ${{ vars.MAINTAINER_HANDLE }}
         run: |
           set -euo pipefail
-          MAX_FIX_ROUNDS=3 # keep in sync with fixloop.yml / resume.yml
 
           # The open agent PR for this head branch, targeting staging, plus its mergeability.
           PR="$(gh pr list --repo "$REPO" --head "$HEAD" --base staging --state open \
@@ -160,66 +156,11 @@ jobs:
             exit 0
           fi
 
-          # ---- Conflicted (§6.5). ----
-          # This job fires on BOTH `ci` and `review` completion (to arm auto-merge on
-          # either). But the rebase re-fire must happen ONCE per PR state, so gate it to
-          # the `review` completion only — otherwise one push would fire two rebases.
-          # (Arming above is idempotent, so it's fine on both.)
-          if [ "$EVENT_WF" != "review" ]; then
-            echo "PR #$NUM conflicts with staging; deferring the rebase to the review-completion run."
-            exit 0
-          fi
-
-          # Only act when the PR is OTHERWISE green; a failing review is the fix loop's
-          # job (it'll re-fire, and the agent's push may resolve the conflict
-          # incidentally). Re-firing a rebase on top of a failing review would double-fire
-          # and race the shared budget.
-          VERDICT="$(gh api "repos/$REPO/commits/$SHA/status" \
-                       -q '.statuses[] | select(.context=="review-verdict") | .state' 2>/dev/null | head -n1 || true)"
-          if [ "$VERDICT" != "success" ]; then
-            echo "PR #$NUM conflicts with staging but review-verdict is '${VERDICT:-absent}' — the fix loop owns it; not rebasing."
-            exit 0
-          fi
-
-          # Shared budget: count the fix loop's own re-fire markers (§6.1) — rebase attempts
-          # carry the same marker, so review-fix and rebase rounds share MAX_FIX_ROUNDS.
-          PRIOR_REFIRES="$(gh api --paginate "repos/$REPO/issues/$NUM/comments" \
-                             -q '.[] | select(.user.login=="github-actions[bot]" and (.body|contains("<!-- fixloop:refire -->"))) | .id' \
-                             2>/dev/null | wc -l | tr -d ' ')"
-          ATTEMPT=$((PRIOR_REFIRES + 1))
-
-          if [ "$PRIOR_REFIRES" -ge "$MAX_FIX_ROUNDS" ]; then
-            # Budget spent on an unresolved conflict — freeze for a human (a conflict-specific,
-            # lighter escalation than §6.2: auto-merge is already off on a DIRTY PR, and there
-            # is no reviewer summary to quote).
-            echo "PR #$NUM still conflicts after $PRIOR_REFIRES attempt(s) — escalating."
-            gh label create "agent:needs-human" --repo "$REPO" --color "B60205" --description "Agent loop stalled — needs a maintainer" --force >/dev/null 2>&1 || true
-            gh pr edit "$NUM" --repo "$REPO" --add-label "agent:needs-human" >/dev/null 2>&1 || true
-            MENTION=""; [ -n "${MAINTAINER:-}" ] && MENTION="@$MAINTAINER "
-            gh pr comment "$NUM" --repo "$REPO" --body "${MENTION}🛑 **Merge conflict couldn't be auto-resolved** in $MAX_FIX_ROUNDS attempt(s). This PR conflicts with \`staging\` and now needs a manual rebase (\`git merge origin/staging\`, resolve, push), then remove \`agent:needs-human\` (or apply \`agent:retry\`)."
-            exit 0
-          fi
-
-          # Under budget: re-fire the agent in FIX MODE with a rebase instruction (§6.5).
-          if [ -z "${FIRE_URL:-}" ] || [ -z "${FIRE_TOKEN:-}" ]; then
-            echo "::warning::PR #$NUM conflicts but ROUTINE_FIRE_* secrets are unset — cannot auto-rebase."
-            gh pr comment "$NUM" --repo "$REPO" --body "⚙️ This PR conflicts with \`staging\`, but the fix loop can't re-fire the agent to rebase (missing ROUTINE_FIRE_* secrets). Rebase manually."
-            exit 0
-          fi
-          TEXT="$(printf 'FIX MODE. Repository %s. PR #%s, head branch `%s`, base `staging`.\nThis PR CONFLICTS with `staging`. Check out `%s`, merge `origin/staging` into it, resolve the conflicts, and PUSH to `%s` — do NOT open a new PR. Do not change anything beyond what the conflict resolution requires.' \
-            "$REPO" "$NUM" "$HEAD" "$HEAD" "$HEAD")"
-          jq -nc --arg t "$TEXT" '{text: $t}' > /tmp/fire.json
-          RESP="$(curl -sS -X POST "$FIRE_URL" \
-            -H "Authorization: Bearer $FIRE_TOKEN" \
-            -H "anthropic-version: 2023-06-01" \
-            -H "anthropic-beta: experimental-cc-routine-2026-04-01" \
-            -H "Content-Type: application/json" \
-            --data @/tmp/fire.json || true)"
-          URL="$(printf '%s' "$RESP" | jq -r '.claude_code_session_url // empty' 2>/dev/null || true)"
-          if [ -n "$URL" ]; then
-            # Same marker as fixloop => this counts against the shared MAX_FIX_ROUNDS budget.
-            gh pr comment "$NUM" --repo "$REPO" --body "🔀 Conflicts with \`staging\` — re-fired the agent in **FIX MODE** to rebase (attempt $ATTEMPT/$MAX_FIX_ROUNDS). [Watch the session]($URL). <!-- fixloop:refire -->"
-          else
-            gh pr comment "$NUM" --repo "$REPO" --body "$(printf '⚠️ Tried to auto-rebase the conflict but the FIX MODE re-fire failed. Routine response:\n```\n%s\n```' "$RESP")"
-            exit 1
-          fi
+          # ---- Conflicted (§6.5): conflict-watch.yml's job, not ours. It fires on the
+          #      events a conflicted PR actually emits (pull_request_target + staging
+          #      pushes; this workflow_run trigger never fires for a born-DIRTY PR at
+          #      all), re-fires the builder's rebase FIX MODE, and owns the separate
+          #      MAX_REBASE_ROUNDS budget. Arming is impossible on a DIRTY PR, so
+          #      there is nothing for the gatekeeper to do here. ----
+          echo "PR #$NUM conflicts with staging — conflict-watch owns the rebase re-fire; nothing to arm."
+          exit 0

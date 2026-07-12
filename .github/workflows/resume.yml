@@ -5,18 +5,21 @@ name: resume
 # fresh set of automated fix attempts — optionally after leaving a steering comment.
 #
 # Security: applying a label requires write/triage permission, so GitHub already
-# guarantees the actor is a maintainer — the SAME gate as issue kickoff (§1). No
-# author_association check is needed. Agent PRs are same-repo (`claude/*`), so this
-# pull_request-triggered workflow has the secrets it needs. A fork PR is doubly safe:
-# `pull_request` from a fork receives NO secrets and only a read-only token, so the
-# re-fire and comment-deletion steps below can do nothing even if a maintainer retries
-# one — the `claude/*` head check is a convenience filter, not the security boundary
-# (a fork can name its head `claude/anything`).
+# guarantees the actor is a maintainer — the SAME gate as issue kickoff (§1).
+# TRIGGER NOTE: this is `pull_request_target` (not `pull_request`) deliberately —
+# GitHub creates NO `pull_request` workflow runs while a PR has a merge conflict,
+# which made `agent:retry` silently dead on exactly the conflicted-and-frozen PRs
+# it exists to rescue (§6.5). `pull_request_target` runs in the base context (no
+# merge ref needed) and so fires regardless. That hands secrets to fork-PR events
+# too, so the job `if` below excludes fork PRs outright (same-repo heads only),
+# and — as everywhere in this loop — nothing from the PR head is ever checked out
+# or executed; this job only calls the API and the /fire endpoint.
 #
 # What it does:
-#   1. Resets the budget by DELETING fixloop's own `<!-- fixloop:refire -->` marker
-#      comments. The fix loop counts those markers, NOT reviews (§6.1), so clearing
-#      them — not dismissing reviews — is what resets the count to 0.
+#   1. Resets BOTH budgets by DELETING the loop's own marker comments: fixloop's
+#      `<!-- fixloop:refire -->` (review-fix rounds, §6.1) AND conflict-watch's
+#      `<!-- conflictwatch:refire ... -->` (rebase rounds, §6.5). The loops count
+#      those markers, NOT reviews, so clearing them is what resets the counts to 0.
 #   2. Clears the freeze (`agent:needs-human`) + the `agent:retry` trigger label.
 #   3. Re-fires the build agent in FIX MODE (this is attempt 1 of the fresh budget, so
 #      its comment carries the marker). The FIX-MODE agent reads the whole PR
@@ -24,7 +27,7 @@ name: resume
 #
 # Runs on the built-in GITHUB_TOKEN + the existing ROUTINE_FIRE_* secrets — no PAT.
 on:
-  pull_request:
+  pull_request_target:
     types: [labeled]
 
 # Share fixloop's per-branch group so a resume can't race a fix-loop run on the same
@@ -40,7 +43,10 @@ permissions:
 
 jobs:
   resume:
-    if: github.event.label.name == 'agent:retry'
+    # Fork PRs are excluded up front — this trigger runs with secrets (see header).
+    if: >
+      github.event.label.name == 'agent:retry' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - name: Reset the fix-loop budget and re-fire in FIX MODE
@@ -62,11 +68,11 @@ jobs:
             *) echo "PR #$PR head '$HEAD' is not a claude/* agent branch — nothing to resume."; exit 0;;
           esac
 
-          # 1. Reset the budget: delete fixloop's own re-fire marker comments so the
-          #    marker count (§6.1) reads 0 again. They're authored by github-actions[bot]
-          #    = this GITHUB_TOKEN, so it is allowed to delete them.
+          # 1. Reset BOTH budgets: delete the loop's own re-fire marker comments (review-fix
+          #    AND rebase rounds) so both marker counts (§6.1, §6.5) read 0 again. They're
+          #    authored by github-actions[bot] = this GITHUB_TOKEN, so it may delete them.
           MARKED="$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
-                      -q '.[] | select(.user.login=="github-actions[bot]" and (.body|contains("<!-- fixloop:refire -->"))) | .id' 2>/dev/null || true)"
+                      -q '.[] | select(.user.login=="github-actions[bot]" and ((.body|contains("<!-- fixloop:refire -->")) or (.body|contains("<!-- conflictwatch:refire")))) | .id' 2>/dev/null || true)"
           N=0
           for CID in $MARKED; do
             gh api -X DELETE "repos/$REPO/issues/comments/$CID" >/dev/null 2>&1 && N=$((N + 1)) || true
@@ -84,11 +90,18 @@ jobs:
             gh pr comment "$PR" --repo "$REPO" --body "⚙️ \`agent:retry\`: budget reset ($N attempt(s) cleared), but can't re-fire — ROUTINE_FIRE_* secrets are unset."
             exit 0
           fi
+          # If the PR is currently conflicted, the retry must say so — the frozen state
+          # may be a stuck rebase (§6.5), not review findings.
+          MERGEABLE="$(gh pr view "$PR" --repo "$REPO" --json mergeable -q '.mergeable' 2>/dev/null || echo UNKNOWN)"
+          CONFLICT_NOTE=""
+          if [ "$MERGEABLE" = "CONFLICTING" ]; then
+            CONFLICT_NOTE="$(printf '\nNOTE: this PR currently CONFLICTS with `staging`. First merge `origin/staging` into `%s`, resolve the conflicts, and include that in your push.\n' "$HEAD")"
+          fi
           # Untrusted review text -> jq via --arg (never interpolated into the shell).
           REVIEW_BODY="$(gh api "repos/$REPO/pulls/$PR/reviews" -q '[.[] | select(.state=="CHANGES_REQUESTED")] | last | .body' 2>/dev/null || true)"
           INLINE="$(gh api --paginate "repos/$REPO/pulls/$PR/comments" -q '.[] | "- \(.path):\(.line // .original_line // "?"): \(.body)"' 2>/dev/null || true)"
-          TEXT="$(printf 'FIX MODE. Repository %s. PR #%s, head branch `%s`, base `staging`.\nA maintainer (@%s) reset the fix budget and asked you to try again. Check out `%s`, read the full PR conversation (review findings AND any maintainer steering comments) for guidance, address every unresolved finding, and PUSH your fixes to `%s` — do NOT open a new PR. If you believe a finding is wrong, reply to that review comment explaining why instead of changing code.\n\nReviewer summary:\n%s\n\nInline review comments:\n%s\n' \
-            "$REPO" "$PR" "$HEAD" "$ACTOR" "$HEAD" "$HEAD" "${REVIEW_BODY:-(none)}" "${INLINE:-(none)}")"
+          TEXT="$(printf 'FIX MODE. Repository %s. PR #%s, head branch `%s`, base `staging`.\nA maintainer (@%s) reset the fix budget and asked you to try again. Check out `%s`, read the full PR conversation (review findings AND any maintainer steering comments) for guidance, address every unresolved finding, and PUSH your fixes to `%s` — do NOT open a new PR. If you believe a finding is wrong, reply to that review comment explaining why instead of changing code.\n%s\nReviewer summary:\n%s\n\nInline review comments:\n%s\n' \
+            "$REPO" "$PR" "$HEAD" "$ACTOR" "$HEAD" "$HEAD" "${CONFLICT_NOTE:-}" "${REVIEW_BODY:-(none)}" "${INLINE:-(none)}")"
           jq -nc --arg t "$TEXT" '{text: $t}' > /tmp/fire.json
           RESP="$(curl -sS -X POST "$FIRE_URL" \
             -H "Authorization: Bearer $FIRE_TOKEN" \
