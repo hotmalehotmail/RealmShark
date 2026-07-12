@@ -86,4 +86,39 @@ public class PcStatsDecoder {
         if (c == '=') return 0; // (padding)
         return c;
     }
+
+    /**
+     * Inverse of {@link #sixBitStringToBytes}: packs a byte array into the same
+     * six-bit (base64url-like) string encoding. Used by {@code FakePacketSource}
+     * and tests to synthesize encoded stat strings (e.g. UNIQUE_DATA_STRING) with
+     * no game running; never used on the live decode path.
+     */
+    public static String bytesToSixBitString(byte[] bytes) {
+        StringBuilder sb = new StringBuilder();
+        int len = bytes.length;
+        for (int i = 0; i < len; i += 3) {
+            int b1 = bytes[i] & 0xFF;
+            int b2 = (i + 1 < len) ? (bytes[i + 1] & 0xFF) : 0;
+            int b3 = (i + 2 < len) ? (bytes[i + 2] & 0xFF) : 0;
+
+            int v1 = b1 >> 2;
+            int v2 = ((b1 & 0b11) << 4) | (b2 >> 4);
+            int v3 = ((b2 & 0b1111) << 2) | (b3 >> 6);
+            int v4 = b3 & 0b111111;
+
+            sb.append(sixBitChar(v1));
+            sb.append(sixBitChar(v2));
+            sb.append(i + 1 < len ? sixBitChar(v3) : '=');
+            sb.append(i + 2 < len ? sixBitChar(v4) : '=');
+        }
+        return sb.toString();
+    }
+
+    private static char sixBitChar(int v) {
+        if (v < 26) return (char) ('A' + v); // 0-25
+        if (v < 52) return (char) ('a' + (v - 26)); // 26-51
+        if (v < 62) return (char) ('0' + (v - 52)); // 52-61
+        if (v == 62) return '-';
+        return '_'; // 63
+    }
 }

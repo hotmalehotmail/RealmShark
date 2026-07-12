@@ -49,7 +49,11 @@ function InstancePanel({ size }: PanelContentProps): React.JSX.Element {
                 <span className="truncate font-semibold">{name ?? `#${id}`}</span>
                 {id === localId && <span className="text-2xs text-accent/70">you</span>}
               </div>
-              <GearRow equipment={entities.equipment(id)} slotSize={SLOT_SIZE[size]} />
+              <GearRow
+                equipment={entities.equipment(id)}
+                rarity={entities.equipmentRarity(id)}
+                slotSize={SLOT_SIZE[size]}
+              />
             </div>
           </div>
         )

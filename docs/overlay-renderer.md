@@ -32,8 +32,9 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/assets/main.css` | Tailwind entry + the `@theme` design-token block — see `overlay-ui-style.md`. |
 | `overlay/src/renderer/src/sprites/SpriteProvider.tsx` | Loads/decodes the atlas pack; `getSprite` / `getDyedSprite`. |
 | `overlay/src/renderer/src/sprites/Sprite.tsx` / `CharacterSprite.tsx` | `<Sprite objectType>` / `<CharacterSprite objectId>` components. |
-| `overlay/src/renderer/src/sprites/EntityRegistry.tsx` | objectId → name/skin/equipment/dyes, built from the packet stream. |
+| `overlay/src/renderer/src/sprites/EntityRegistry.tsx` | objectId → name/skin/equipment/equipmentRarity/dyes, built from the packet stream. |
 | `overlay/src/renderer/src/sprites/context.ts` | The two React contexts + `useSprites` / `useEntityRegistry` hooks. |
+| `overlay/src/renderer/src/sprites/enchantRarity.ts` | Decodes `UNIQUE_DATA_STRING` into a per-slot rarity-border tier (issue #107) — see §4.1. |
 | `overlay/src/renderer/src/dps/DpsTracker.ts` | Framework-agnostic class ingesting packets → `DpsSnapshot`; also retains a session-scoped per-instance damage history (§5.1). |
 | `overlay/src/renderer/src/dps/useDpsTracker.ts` | React hook wrapping `DpsTracker` (event-driven on bridge `dps` packets + 1 s fallback recompute). |
 | `overlay/src/renderer/src/dps/useDpsHistory.ts` | React hook owning a dedicated `DpsTracker` instance for the DPS summary panel; exposes `DpsHistoryEntry[]`. |
@@ -327,15 +328,19 @@ them through `useSprites()` or the `<Sprite>` component.
 ### `Sprite` and `CharacterSprite`
 
 `Sprite` (`sprites/Sprite.tsx`) takes an `objectType` (+ optional `size`, dyes,
-`className`). It picks `getDyedSprite` when a dye is present else `getSprite`
-(`Sprite.tsx:51-53`), and renders an `<img style={{imageRendering:'pixelated'}}>`.
-When the lookup returns `null` (no real pack / undecoded atlas) it renders a
-**deterministic HSL placeholder chip** so an unresolved objectType is still a
-stable coloured box (`Sprite.tsx:16-19,67-79`). It also ticks its own animation
-clock: `isAnimated(objectType, clothingDye, accessoryDye)` (from `SpriteContext`)
-says whether this particular sprite has an idle-frame or textile-frame animation,
+`rarity`, `className`). It picks `getDyedSprite` when a dye is present else
+`getSprite` (`Sprite.tsx:51-53`), and renders an
+`<img style={{imageRendering:'pixelated'}}>`. When the lookup returns `null`
+(no real pack / undecoded atlas) it renders a **deterministic HSL placeholder
+chip** so an unresolved objectType is still a stable coloured box
+(`Sprite.tsx:16-19,67-79`). It also ticks its own animation clock:
+`isAnimated(objectType, clothingDye, accessoryDye)` (from `SpriteContext`) says
+whether this particular sprite has an idle-frame or textile-frame animation,
 and only then does a local `setInterval` at `frameMs` re-render it
 (`Sprite.tsx:37-45`) — static sprites and event-driven panels never tick.
+`rarity` (0-4, see §4.1) adds a `ring-2 ring-rarity-<tier>` class on whichever
+of the three render paths (canvas/`<img>`/placeholder) is taken, so it never
+changes the sprite's rendered layout size the way a `border` would.
 
 `CharacterSprite` (`sprites/CharacterSprite.tsx`) takes an **`objectId`** and
 resolves everything from the entity registry: base type is the equipped `skin` if
@@ -361,6 +366,7 @@ A ref-backed store built from the packet stream. On mount it subscribes to
 | `NAME_STAT` | 31 | username string — comma-separated on the wire (`"PlayerName,a0ca,…"`); only the part before the first comma is kept, dropping the trailing title/label cosmetic codes (matches the bridge's `Entity.name()`) |
 | `CLOTHING_DYE_STAT` | 32 | Tex1 clothing dye objectType |
 | `ACCESSORY_DYE_STAT` | 33 | Tex2 accessory dye objectType |
+| `UNIQUE_DATA_STRING_STAT` | 80 | per-slot encoded enchant data → `equipmentRarity[4]` (see §4.1) |
 
 > **Non-obvious fact — stats are deltas, so records are merged, never replaced.**
 > `mergeStats` (`EntityRegistry.tsx:89-127`) reads stats from **both**
@@ -390,10 +396,47 @@ sets a local `changed` flag and calls `scheduleNotify()`
 `requestAnimationFrame` call to every subscriber — see the `CharacterPanel`/
 `InstancePanel` callout in §3.
 
-Accessors (`objectType`, `skin`, `equipment`, `name`, `clothingDye`,
-`accessoryDye`, `characters`, `localPlayerId`) are `useCallback`-stable and read
-the ref synchronously (`EntityRegistry.tsx:171-211`). `characters()` returns every
-objectId with a non-empty `name` — i.e. the instance's players.
+Accessors (`objectType`, `skin`, `equipment`, `equipmentRarity`, `name`,
+`clothingDye`, `accessoryDye`, `characters`, `localPlayerId`) are
+`useCallback`-stable and read the ref synchronously
+(`EntityRegistry.tsx:171-211`). `characters()` returns every objectId with a
+non-empty `name` — i.e. the instance's players.
+
+### 4.1 Enchant rarity borders (`sprites/enchantRarity.ts`, issue #107)
+
+`UNIQUE_DATA_STRING` (StatType #80) already crosses the bridge unfiltered —
+`PacketSerializer` reflects every `StatData` field verbatim, with no
+stat-type filtering (see `bridge-server.md`'s wire-format notes) — so no
+bridge change was needed to get it into the renderer. `enchantRarity.ts` is a
+straight TypeScript port of the Java decode already used bridge-side for DPS
+math (`bridge.dps.PcStatsDecoder.sixBitStringToBytes` +
+`bridge.dps.ParseEnchants.extractEnchantIds`), chosen over adding a synthetic
+bridge envelope (the `objectNames`/`lootBagTypes` precedent) specifically so
+rarity merges on the same per-objectId timeline `equipment`/`skin`/dyes
+already use — it updates from both `UpdatePacket` and `NewTickPacket` deltas
+for free, with no extra envelope to keep in sync.
+
+Wire shape: the stat's `stringStatValue` is 4 comma-separated per-slot codes
+(weapon/ability/armor/ring, same order as `equipment`/INVENTORY_0..3); each
+code is a six-bit-encoded byte blob decoding to a header byte + a `type`
+that must equal 1026 + up to 4 enchant ids, terminated by `-3`.
+`extractEnchantIds` returns that slot's list of filled enchant ids (skipping
+locked/empty markers); `slotRarityTier` is just `min(ids.length, 4)`.
+
+**Rarity derivation and how it was verified.** The tier is the count of an
+item's filled enchant slots: 1 = uncommon (green), 2 = rare (blue), 3 =
+legendary (purple), 4 = divine (gold); 0 (or no `UNIQUE_DATA_STRING` at all)
+renders no border. This matches RotMG Exalt's own in-game enchant-slot border
+system (public game knowledge — the client colors an item's border by how
+many of its enchant slots are filled, independent of which specific enchants
+those are). **This build agent had no game client to verify the rule live
+against** (a headless cloud sandbox — see CLAUDE.md's dev-loop constraints);
+if a live-game check ever contradicts it, `slotRarityTier` in
+`enchantRarity.ts` is the one place to correct. `FakePacketSource`'s
+`ROSTER_ENCHANTS` (Java) synthesizes all five outcomes (0 through 4 filled
+slots) across the fake roster via `ParseEnchants.encodeEnchantSlot`, so the
+tier boundaries are exercised and regression-tested (`ParseEnchantsRarityTest`,
+`PcStatsDecoderTest`) even with no game installed.
 
 ---
 
@@ -411,7 +454,7 @@ than the task's summary implies:
 | `EnemyHitPacket` | `ingestEnemyHit` | local-player id (from `mainID`), a last-hit focus signal (via `onLocalHit`), and a despawn signal when `kill` is set |
 | `ServerPlayerShootPacket` | `ingestShoot` | `minionOwners`: minion/pet id → owning player |
 | `DamagePacket` | `ingestDamage` | per-target, per-attacker rolling hit buffers, and a last-hit focus signal for the local player's own attributed hits |
-| `UpdatePacket` | `ingestUpdate` | `entityNames` (`NAME_STAT`), `enemyMaxHp` (`MAX_HP_STAT`), `objectTypes` (every seen objectId's `objectType`), `playerCosmetics` (skin/equipment/dyes, for history's frozen per-player sprite — §5.1), and a despawn signal per dropped id |
+| `UpdatePacket` | `ingestUpdate` | `entityNames` (`NAME_STAT`), `enemyMaxHp` (`MAX_HP_STAT`), `objectTypes` (every seen objectId's `objectType`), `playerCosmetics` (skin/equipment/equipmentRarity/dyes, for history's frozen per-player sprite — §5.1, §4.1), and a despawn signal per dropped id |
 | `objectNames` (synthetic) | `ingestObjectNames` | enemy names resolved bridge-side |
 | `dps` (synthetic) | `ingestBridgeDps` | **the Java engine's computed DPS snapshot** |
 | `QuestObjectIdPacket` | `ingestQuestObjectId` | locks/re-locks the sticky boss focus, carrying forward the prior phase's damage on a phase change |
@@ -581,9 +624,9 @@ still render correctly long after the instance ended, but `EntityRegistry`
 (§4) clears itself on every `MapInfoPacket` — by the time a user opens an old
 entry, its players' `objectId`s may resolve to nothing, or worse, to a
 different instance's different player. So `DpsTracker` keeps its own
-`playerCosmetics` map (objectId → skin/equipment/clothingDye/accessoryDye),
-merged from `UpdatePacket` the same way `EntityRegistry` does but kept
-independent, and a history entry's `DpsHistoryEnemy.cosmetics` is a **snapshot
+`playerCosmetics` map (objectId → skin/equipment/equipmentRarity/clothingDye/
+accessoryDye), merged from `UpdatePacket` the same way `EntityRegistry` does
+but kept independent, and a history entry's `DpsHistoryEnemy.cosmetics` is a **snapshot
 copy** taken at retention time. `DpsSummaryPanel.tsx`'s `FrozenCharacterSprite`
 renders directly from that frozen record (`<Sprite objectType clothingDye
 accessoryDye>`), never through `CharacterSprite`/`useEntityRegistry`.
