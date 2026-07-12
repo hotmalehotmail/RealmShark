@@ -60,6 +60,8 @@ export interface PlayerCosmetics {
   equipment?: number[]
   /** Rarity-border tier (0-4) per equipped slot, decoded from UNIQUE_DATA_STRING - see sprites/enchantRarity.ts. */
   equipmentRarity?: number[]
+  /** 4 equipped slots' raw encoded enchant strings (UNIQUE_DATA_STRING), same order as `equipment` - frozen so a retained history entry's gear tooltip still shows enchantments after the live EntityRegistry has moved on to a later instance. */
+  enchantSlots?: string[]
   clothingDye?: number
   accessoryDye?: number
 }
@@ -361,6 +363,7 @@ export class DpsTracker {
       } else if (s.statTypeNum === UNIQUE_DATA_STRING_STAT_TYPE_NUM && s.stringStatValue) {
         rec = rec ?? { objectType }
         rec.equipmentRarity = equipmentRarityFromUniqueDataString(s.stringStatValue)
+        rec.enchantSlots = s.stringStatValue.split(',')
       } else if (s.statTypeNum === CLOTHING_DYE_STAT_TYPE_NUM && s.statValue !== undefined) {
         rec = rec ?? { objectType }
         rec.clothingDye = s.statValue
@@ -948,7 +951,8 @@ export class DpsTracker {
         cosmetics.set(row.objectId, {
           ...rec,
           equipment: rec.equipment?.slice(),
-          equipmentRarity: rec.equipmentRarity?.slice()
+          equipmentRarity: rec.equipmentRarity?.slice(),
+          enchantSlots: rec.enchantSlots?.slice()
         })
     }
     return cosmetics

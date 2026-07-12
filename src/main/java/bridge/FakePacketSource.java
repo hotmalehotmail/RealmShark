@@ -15,7 +15,9 @@ import packets.incoming.NewTickPacket;
 import packets.incoming.QuestObjectIdPacket;
 import packets.incoming.ServerPlayerShootPacket;
 import packets.incoming.UpdatePacket;
+import packets.data.SlotObjectData;
 import packets.outgoing.EnemyHitPacket;
+import packets.outgoing.InvSwapPacket;
 import packets.outgoing.PlayerShootPacket;
 import packets.packetcapture.register.Register;
 
@@ -84,6 +86,15 @@ import java.util.Random;
  * rarity tiers (1-4 filled slots) plus unenchanted (0) gear across the roster
  * - so the overlay's rarity-border rendering (issue #107) is demonstrable and
  * regression-testable with no game installed.
+ * <p>
+ * Also runs a periodic equip/unequip round-trip on the local player's ability
+ * slot ({@link #localSelfSwap} + {@link #localPlayerSlotDeltas}, an
+ * {@link InvSwapPacket} naming the local player on both ends immediately
+ * followed by the correlated {@link NewTickPacket} slot deltas - the same
+ * shape a real client sends) - unequipping lands the item back in a bag slot,
+ * an empty->populated transition that must NOT be logged as a Loot panel
+ * pickup (issue #122: the LootTracker previously couldn't tell an unequip
+ * apart from a real ground drop).
  */
 public class FakePacketSource {
 
@@ -178,6 +189,15 @@ public class FakePacketSource {
     private static final int[] LOOT_ITEM_TYPES = {9100, 9100, 9200, 9300};
     private static final int[] LOOT_ITEM_BAG_TYPES = {6, 6, 8, 3};
 
+    // Equip/unequip demo (issue #122): the local player's ability slot
+    // (INVENTORY_1_STAT) round-trips into bag slot 6 (INVENTORY_6_STAT) and
+    // back - see the class doc comment. Ticks chosen out of phase with the
+    // 40-tick map-reset/24-tick transient/16-tick loot-pickup schedules above,
+    // purely so the three demos don't visually overlap.
+    private static final int EQUIP_SWAP_ABILITY_ITEM = ROSTER_EQUIPMENT[0][1];
+    private static final int EQUIP_SWAP_BAG_SLOT_ID = 6;
+    private static final int EQUIP_SWAP_CYCLE_TICKS = 48;
+
     // Item tooltip demo (issue #109): seeds a couple of the ids above with
     // IdToAsset.registerFake's item-info fields (tier/display name/description),
     // so the hover tooltip mechanism is exercisable end-to-end even with no
@@ -265,6 +285,22 @@ public class FakePacketSource {
             } else if (tick % 24 == 18) {
                 Register.INSTANCE.emitPacketLogs(transientLeave());
             }
+            // Equip/unequip round-trip demo (issue #122) - see class doc comment.
+            // The outgoing InvSwapPacket (naming the local player on both ends)
+            // is emitted first, then the correlated slot deltas ride along on
+            // this tick's NewTickPacket below (see equipSwapStatus) - matching a
+            // real client's ordering (the client requests the swap, the server
+            // then confirms it via the next tick's stat deltas).
+            int equipOffset = tick % EQUIP_SWAP_CYCLE_TICKS;
+            if (equipOffset == 10) {
+                // Unequip: ability slot -> bag slot. The bag slot's resulting
+                // empty->populated transition is exactly the false-positive
+                // LootTracker used to log as a pickup.
+                Register.INSTANCE.emitPacketLogs(localSelfSwap(1, EQUIP_SWAP_BAG_SLOT_ID));
+            } else if (equipOffset == 14) {
+                // Re-equip: bag slot -> ability slot, restoring steady state.
+                Register.INSTANCE.emitPacketLogs(localSelfSwap(EQUIP_SWAP_BAG_SLOT_ID, 1));
+            }
             // Fake boss encounter, scheduled against this map's 40-tick life (see the
             // tick%40==0 instance-reset block above): phase 1 locks in at offset 2,
             // transitions to phase 2 (new objectId) at offset 20 - dropping phase 1 and
@@ -298,7 +334,9 @@ public class FakePacketSource {
             // the Instance panel shows OTHER players' equipment updating live (the
             // merge/render path is identical for every objectId). Every
             // LOOT_CYCLE_TICKS it also carries a local-player bag-slot update, to
-            // exercise the Loot panel (see lootPickupStatus()).
+            // exercise the Loot panel (see lootPickupStatus()), and at the two
+            // equip-swap offsets above it carries that swap's correlated 2-slot
+            // delta (see equipSwapStatus()).
             NewTickPacket nt = newTick(tick);
             java.util.List<ObjectStatusData> status = new java.util.ArrayList<>();
             if (tick > 0 && tick % 10 == 0) {
@@ -306,6 +344,8 @@ public class FakePacketSource {
             }
             ObjectStatusData loot = lootPickupStatus(tick);
             if (loot != null) status.add(loot);
+            ObjectStatusData equipSwap = equipSwapStatus(equipOffset);
+            if (equipSwap != null) status.add(equipSwap);
             if (!status.isEmpty()) {
                 nt.status = status.toArray(new ObjectStatusData[0]);
             }
@@ -552,6 +592,54 @@ public class FakePacketSource {
         p.newObjects = new ObjectData[0];
         p.drops = new int[]{TRANSIENT_ID};
         return p;
+    }
+
+    /**
+     * One InvSwapPacket moving an item between two of the local player's own
+     * slots (weapon=0/ability=1/armor=2/ring=3, bag=4..11 - see
+     * packets/data/SlotObjectData.java) - see the equip/unequip demo in the
+     * class doc comment.
+     */
+    private InvSwapPacket localSelfSwap(int fromSlotId, int toSlotId) {
+        InvSwapPacket p = new InvSwapPacket();
+        p.time = 0;
+        p.playerWorldPos = new WorldPosData();
+        p.slotFrom = new SlotObjectData();
+        p.slotFrom.objectId = LOCAL_PLAYER_ID;
+        p.slotFrom.slotId = fromSlotId;
+        p.slotTo = new SlotObjectData();
+        p.slotTo.objectId = LOCAL_PLAYER_ID;
+        p.slotTo.slotId = toSlotId;
+        return p;
+    }
+
+    /**
+     * The correlated 2-slot stat delta for the equip-swap demo's current tick
+     * offset (see {@link #localSelfSwap} and the class doc comment), or null
+     * on a tick with nothing to report. Both slots change in the SAME status
+     * update, like a real client's atomic swap confirmation.
+     */
+    private ObjectStatusData equipSwapStatus(int equipOffset) {
+        if (equipOffset == 10) {
+            return localPlayerSlotDeltas(
+                StatType.INVENTORY_1_STAT, -1,
+                StatType.INVENTORY_6_STAT, EQUIP_SWAP_ABILITY_ITEM);
+        }
+        if (equipOffset == 14) {
+            return localPlayerSlotDeltas(
+                StatType.INVENTORY_6_STAT, -1,
+                StatType.INVENTORY_1_STAT, EQUIP_SWAP_ABILITY_ITEM);
+        }
+        return null;
+    }
+
+    /** One local-player NewTickPacket status update carrying 2 correlated slot deltas - see {@link #localSelfSwap}. */
+    private ObjectStatusData localPlayerSlotDeltas(StatType typeA, int valueA, StatType typeB, int valueB) {
+        ObjectStatusData st = new ObjectStatusData();
+        st.objectId = LOCAL_PLAYER_ID;
+        st.pos = new WorldPosData();
+        st.stats = new StatData[]{stat(typeA, valueA), stat(typeB, valueB)};
+        return st;
     }
 
     /** A numeric stat entry. */

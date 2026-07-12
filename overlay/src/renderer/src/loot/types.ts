@@ -26,6 +26,18 @@ export interface NewTickPacketData {
   status?: ObjectStatusData[]
 }
 
+/** packets/data/SlotObjectData.java field names verbatim - see packets/outgoing/InvSwapPacket.java. */
+export interface SlotObjectEntry {
+  objectId?: number
+  slotId?: number
+}
+
+/** packets/outgoing/InvSwapPacket.java - sent by the client on any inventory-slot swap (equip, unequip, bag rearrange, or a ground-loot pickup drag). */
+export interface InvSwapPacketData {
+  slotFrom?: SlotObjectEntry
+  slotTo?: SlotObjectEntry
+}
+
 /** bridge/LootBagTypes.java's synthetic {type:"lootBagTypes"} envelope payload. */
 export interface LootBagTypesData {
   /** item objectType -> BagType (only 6/white or 8/orange entries are sent). */
