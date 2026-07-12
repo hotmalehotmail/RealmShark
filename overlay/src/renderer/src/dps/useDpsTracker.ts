@@ -19,8 +19,10 @@ export function useDpsTracker(): DpsSnapshot {
       // Re-snapshot when a fresh bridge `dps` snapshot arrives. The bridge pushes
       // one within ~50ms of any damage packet (and a focus switch rides along,
       // since that hit marks the bridge dirty), so this captures every relevant
-      // change while staying capped at the bridge's coalesced rate.
-      if (packets.some((p) => p.type === 'dps')) {
+      // change while staying capped at the bridge's coalesced rate. Also
+      // re-snapshot immediately on QuestObjectIdPacket so a boss lock/phase
+      // transition shows up right away instead of waiting for the 1s fallback.
+      if (packets.some((p) => p.type === 'dps' || p.type === 'QuestObjectIdPacket')) {
         setSnapshot(tracker.snapshot(Date.now()))
       }
     })

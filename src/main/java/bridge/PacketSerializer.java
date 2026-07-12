@@ -19,17 +19,32 @@ import java.util.Set;
  * </pre>
  * The raw {@code byte[]} payload carried on the base {@link Packet} class is
  * excluded - it is noise for a UI and bloats every message.
+ *
+ * <p>Login/device credentials ({@link #SENSITIVE_FIELDS}, all carried on
+ * {@code HelloPacket}) are also stripped from every serialized packet. They have
+ * no UI or repro value, and must never reach a client - nor the "Report bug"
+ * capture, which users attach to public issues. Matched by field name (not class)
+ * so any future packet carrying one is covered too.</p>
  */
 public class PacketSerializer {
+
+    /** Credential/device-token field names stripped from every serialized packet. */
+    private static final Set<String> SENSITIVE_FIELDS = new HashSet<>(Arrays.asList(
+            "accessToken", "platformToken", "clientToken", "userToken", "password"));
 
     private final Gson gson;
     private final Set<Integer> incomingIndices;
 
     public PacketSerializer() {
-        ExclusionStrategy skipRawPayload = new ExclusionStrategy() {
+        ExclusionStrategy skipSensitive = new ExclusionStrategy() {
             @Override
             public boolean shouldSkipField(FieldAttributes f) {
-                return f.getDeclaringClass() == Packet.class && "data".equals(f.getName());
+                // Raw undecoded payload on the base Packet class: noise for a UI.
+                if (f.getDeclaringClass() == Packet.class && "data".equals(f.getName())) {
+                    return true;
+                }
+                // Login/device credentials: never serialize these anywhere.
+                return SENSITIVE_FIELDS.contains(f.getName());
             }
 
             @Override
@@ -38,7 +53,7 @@ public class PacketSerializer {
             }
         };
         gson = new GsonBuilder()
-                .addSerializationExclusionStrategy(skipRawPayload)
+                .addSerializationExclusionStrategy(skipSensitive)
                 .create();
         incomingIndices = new HashSet<>(Arrays.asList(PacketType.getPacketTypeByDirection(true)));
     }

@@ -119,6 +119,20 @@ jobs:
             fi
             echo "Automated budget spent ($PRIOR_REFIRES re-fires >= $MAX_FIX_ROUNDS) — escalating."
             ensure_label "agent:needs-human" "B60205" "Agent loop stalled — needs a maintainer"
+            # Mirror the stall onto the issue(s) this PR closes: the agent has stopped, so
+            # the issue should no longer read agent:in-progress — flip it to agent:needs-human
+            # (just ensured above) so the issue list reflects that a human is now on it.
+            # closingIssuesReferences is empty for non-default-branch PRs, so parse the
+            # closing keyword from the PR body ourselves.
+            ESC_BODY="$(gh pr view "$PR" --repo "$REPO" --json body -q '.body' 2>/dev/null || true)"
+            # `|| true`: grep exits 1 on no match, which under `set -euo pipefail` would
+            # abort escalation for a PR with no closing keyword. Empty loop is fine.
+            for ISS in $(printf '%s\n' "$ESC_BODY" \
+                | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+#[0-9]+' \
+                | grep -oE '[0-9]+' | sort -u || true); do
+              gh issue edit "$ISS" --repo "$REPO" --add-label "agent:needs-human" >/dev/null 2>&1 || true
+              gh issue edit "$ISS" --repo "$REPO" --remove-label "agent:in-progress" >/dev/null 2>&1 || true
+            done
             # Clear any loop:* visibility labels from prior rounds (reuse the labels above).
             LOOP_LABELS="$(printf '%s\n' "$LABELS" | grep '^loop:' || true)"
             for L in $LOOP_LABELS; do gh pr edit "$PR" --repo "$REPO" --remove-label "$L" >/dev/null 2>&1 || true; done
@@ -139,7 +153,7 @@ jobs:
             SUMMARY_Q="$(printf '%s\n' "${SUMMARY:-(no summary posted)}" | sed 's/^/> /')"
             MENTION=""; ASSIGN=0
             if [ -n "${MAINTAINER:-}" ]; then MENTION="@$MAINTAINER "; ASSIGN=1; fi
-            gh pr comment "$PR" --repo "$REPO" --body "$(printf '%s🛑 **Automated fix budget exhausted.** %s automated attempts did not clear review, so this PR is now yours (labeled `agent:needs-human`; auto-merge disabled).\n\nLatest reviewer summary:\n\n%s\n\n**To unblock:** push your own fixes to `%s` (CI + review re-run automatically), or admin-merge if you accept it as-is. An `agent:retry` resume path that re-runs the agent with a fresh budget is a separate follow-up (resume.yml).' \
+            gh pr comment "$PR" --repo "$REPO" --body "$(printf '%s🛑 **Automated fix budget exhausted.** %s automated attempts did not clear review, so this PR is now yours (labeled `agent:needs-human`; auto-merge disabled).\n\nLatest reviewer summary:\n\n%s\n\n**To unblock, any of:**\n- **Push your own fixes** to `%s` — CI + review re-run automatically, and once the review passes the gatekeeper clears `agent:needs-human` and merges it for you (no need to remove the label by hand).\n- **Apply `agent:retry`** to reset the automated budget and hand it back to the build agent (leave a steering comment first if you want).\n- **Admin-merge** if you accept it as-is.' \
               "$MENTION" "$MAX_FIX_ROUNDS" "$SUMMARY_Q" "$HEAD")"
             [ "$ASSIGN" -eq 1 ] && gh pr edit "$PR" --repo "$REPO" --add-assignee "$MAINTAINER" >/dev/null 2>&1 || true
             echo "Escalated PR #$PR."

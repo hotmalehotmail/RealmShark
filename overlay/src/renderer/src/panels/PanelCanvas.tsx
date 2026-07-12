@@ -28,6 +28,13 @@ function defaultLayout(): PanelInstance[] {
       anchor: { pos: 'tl', x: 65, y: 2 },
       size: 'md',
       zIndex: 5
+    },
+    {
+      id: 'dpsSummary',
+      type: 'dpsSummary',
+      anchor: { pos: 'tl', x: 65, y: 40 },
+      size: 'md',
+      zIndex: 6
     }
   ]
 }

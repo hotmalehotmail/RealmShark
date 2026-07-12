@@ -287,19 +287,29 @@ names verbatim** — there are no custom `TypeAdapter`s for packet data. So
 those names. Enums serialize as their **name string** (Gson default), e.g. a
 `StatData.statType` becomes `"NAME_STAT"`.
 
-The one thing excluded is the raw payload. The base class carries
+Two kinds of field are excluded. First, the raw payload: the base class carries
 `private byte[] data` (`packets/Packet.java:12`) — Gson reflects private fields,
-so an `ExclusionStrategy` explicitly drops it (`PacketSerializer.java:29-39`):
+so an `ExclusionStrategy` explicitly drops it. Second, **login/device credentials**
+— `HelloPacket`'s `accessToken`/`platformToken`/`clientToken`/`userToken` (and
+`password`) — which have no UI or repro value and must never reach a client:
 
 ```java
 public boolean shouldSkipField(FieldAttributes f) {
-    return f.getDeclaringClass() == Packet.class && "data".equals(f.getName());
+    if (f.getDeclaringClass() == Packet.class && "data".equals(f.getName())) return true;
+    return SENSITIVE_FIELDS.contains(f.getName()); // accessToken, platformToken, …
 }
 ```
 
-The strategy keys on `declaringClass == Packet.class`, so it only skips the base
-class's byte array — a subclass field that happened to be named `data` would
-still be serialized.
+The raw-payload rule keys on `declaringClass == Packet.class` (a subclass field
+named `data` would still serialize); the credential rule keys on the field **name**
+(matched on any class, so a future packet reusing one of those names is covered).
+
+> **Bug-report privacy (defense in depth).** Credential *fields* are stripped
+> here so they never reach the wire. Separately, the overlay's "Report bug"
+> capture — attached to public issues — retains only an **allowlist** of gameplay
+> packet *types* (`overlay/src/main/index.ts`, `CAPTURE_ALLOWED_TYPES`), so whole
+> sensitive types (chat/`TextPacket`, account lists, `HelloPacket`) never enter a
+> shared dump even though they still flow to the live overlay.
 
 > **Wire-format gotcha.** Because the `data` object is a direct reflection of
 > Java field names, any TypeScript consumer must match the Java class's public

@@ -378,20 +378,30 @@ one-shot broadcast once assets finish loading, polled every 2 s by
 `maybeBroadcastSpritePack` (`PacketBridge.java:140-172`) so clients that got an
 early not-ready reply still receive the real sprites.
 
-**`buildPack(v)`** (`:83-160`) assembles (and caches by version, `:84`,
-`:157-159`) a JSON object with:
+**`buildPack(v)`** (`:84-185`) assembles (and caches by version) a JSON object
+with:
 
 - `atlases` — `atlasId(1-4) → data:image/png;base64,…` for each atlas PNG that
-  exists (`:92-104`). `ATLASES` order (`:30-35`) matches `ImageBuffer`'s, so
-  index `i` = `atlasId i+1`.
+  exists. `ATLASES` order matches `ImageBuffer`'s, so index `i` = `atlasId i+1`.
 - `table` — `objectType → [atlasId, x, y, w, h]` for every object id, via the
-  same `IdToAsset → SpriteFlatBuffer.getSpriteData` chain (`:114-128`).
+  same `IdToAsset → SpriteFlatBuffer.getSpriteData` chain.
 - `maskTable` — `objectType → [3, x, y, w, h]` only for objects that have a dye
-  mask (atlas 3 = `characters_masks`), via `getMaskSpriteData` (`:130-139`).
+  mask (atlas 3 = `characters_masks`), via `getMaskSpriteData`.
 - `animTable` — `objectType → flat 9-ints/frame [x,y,w,h,aId,mx,my,mw,mh]` for
   animated (idle) character sprites, via `getAnimationFrames`; only present
   for objectTypes with more than one frame.
-- `dyeTable` — `dyeId → cloth`, built by `buildDyeTable` (`:152-153`).
+- `dyeTable` — `dyeId → cloth`, built by `buildDyeTable` (`:246-337`).
+- `animDyeTable` — `dyeId → [type, speed, pivotX, pivotY]`, built alongside
+  `dyeTable` (see "The dye table" below).
+- `dungeonIcons` — `dungeon display name → spriteId`, built by
+  `buildDungeonIcons` (`:198-209`) from `CharacterStatistics`' parallel
+  `DUNGEON_NAMES`/`DUNGEONS` lists (`dps/enums/CharacterStatistics.java` — the
+  same curated `(pcStatId, spriteId, name)` enum table `docs/dps-engine.md`
+  describes for the character-statistics decoder). Static data (no XML/atlas
+  read), so cached once and unaffected by `ready()`/version gating beyond the
+  rest of the pack. The overlay's `dungeonIcon(name)` (`SpriteProvider.tsx`)
+  looks a `MapInfoPacket.displayName` up in this table to resolve a DPS
+  summary-panel instance row's icon — see `overlay-renderer.md` §5.
 
 **The dye table.** `buildDyeTable(sfb)` (`:175-243`) is the one piece that reads
 the XML directly: it regex-scans `assets/xml/*.xml` for `<Object>`s containing

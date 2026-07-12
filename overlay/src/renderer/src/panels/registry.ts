@@ -1,9 +1,11 @@
 import type { ComponentType } from 'react'
 import type { PanelSize } from '../../../shared/panels'
+import { dpsPanelHeight } from '../dps/rowLayout'
 import type { SizePx } from './anchor'
 import CharacterPanel from './CharacterPanel'
 import ConsolePanel from './ConsolePanel'
 import DpsPanel from './DpsPanel'
+import DpsSummaryPanel from './DpsSummaryPanel'
 import InstancePanel from './InstancePanel'
 import StatusPanel from './StatusPanel'
 
@@ -33,9 +35,9 @@ export const PANEL_REGISTRY: Record<string, PanelSpec> = {
     type: 'dps',
     title: 'DPS',
     sizes: {
-      sm: { width: 180, height: 110 },
-      md: { width: 260, height: 200 },
-      lg: { width: 320, height: 320 }
+      sm: { width: 180, height: dpsPanelHeight('sm') },
+      md: { width: 260, height: dpsPanelHeight('md') },
+      lg: { width: 320, height: dpsPanelHeight('lg') }
     },
     component: DpsPanel
   },
@@ -68,5 +70,15 @@ export const PANEL_REGISTRY: Record<string, PanelSpec> = {
       lg: { width: 360, height: 360 }
     },
     component: InstancePanel
+  },
+  dpsSummary: {
+    type: 'dpsSummary',
+    title: 'DPS Summary',
+    sizes: {
+      sm: { width: 240, height: 200 },
+      md: { width: 320, height: 300 },
+      lg: { width: 400, height: 420 }
+    },
+    component: DpsSummaryPanel
   }
 }

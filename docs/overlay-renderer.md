@@ -25,13 +25,14 @@ for the Java DPS engine that feeds this UI see `dps-engine.md`.
 | `overlay/src/renderer/src/panels/PanelFrame.tsx` | One panel's chrome: title bar, drag, size/pin buttons, visibility. |
 | `overlay/src/renderer/src/panels/anchor.ts` | Percentage-anchor ↔ pixel math (`panelStyle`, `anchorFromPointer`). |
 | `overlay/src/renderer/src/panels/registry.ts` | `type → { title, per-size px dims, component }` and `PanelContentProps`. |
-| `overlay/src/renderer/src/panels/{Status,Dps,Console,Character,Instance}Panel.tsx` | The five panel bodies. |
+| `overlay/src/renderer/src/panels/{Status,Dps,Console,Character,Instance,DpsSummary}Panel.tsx` | The six panel bodies. |
 | `overlay/src/renderer/src/sprites/SpriteProvider.tsx` | Loads/decodes the atlas pack; `getSprite` / `getDyedSprite`. |
 | `overlay/src/renderer/src/sprites/Sprite.tsx` / `CharacterSprite.tsx` | `<Sprite objectType>` / `<CharacterSprite objectId>` components. |
 | `overlay/src/renderer/src/sprites/EntityRegistry.tsx` | objectId → name/skin/equipment/dyes, built from the packet stream. |
 | `overlay/src/renderer/src/sprites/context.ts` | The two React contexts + `useSprites` / `useEntityRegistry` hooks. |
-| `overlay/src/renderer/src/dps/DpsTracker.ts` | Framework-agnostic class ingesting packets → `DpsSnapshot`. |
+| `overlay/src/renderer/src/dps/DpsTracker.ts` | Framework-agnostic class ingesting packets → `DpsSnapshot`; also retains a session-scoped per-instance damage history (§5.1). |
 | `overlay/src/renderer/src/dps/useDpsTracker.ts` | React hook wrapping `DpsTracker` (event-driven on bridge `dps` packets + 1 s fallback recompute). |
+| `overlay/src/renderer/src/dps/useDpsHistory.ts` | React hook owning a dedicated `DpsTracker` instance for the DPS summary panel; exposes `DpsHistoryEntry[]`. |
 | `overlay/src/renderer/src/dps/types.ts` | Packet-field shapes the tracker reads. |
 
 ---
@@ -135,8 +136,16 @@ window (= the game window) resizes, with no reclamp needed.
 
 `PanelSize` is the literal union `'sm' | 'md' | 'lg'` (`panels.ts:18`). There is
 **no drag-to-resize handle anywhere**. `registry.ts` gives each panel type an
-explicit pixel width/height per preset (`registry.ts:21-72`), e.g. DPS is
-`180×110 / 260×200 / 320×320`. The size button cycles
+explicit pixel width/height per preset (`registry.ts:21-72`), e.g. Character is
+a literal `160×100 / 220×130 / 280×170`. The DPS panel's height is instead
+*derived* rather than literal: `dpsPanelHeight(size)`
+(`dps/rowLayout.ts`) computes the pixel height needed to fit
+`DPS_MAX_ROWS[size]` rows (plus the target header and pinned local-player row)
+without internal scrolling, currently `180×110 / 260×214 / 320×406`. Any
+change to `DPS_MAX_ROWS`/`DPS_ROW_SPRITE_SIZE` or the row markup in
+`DpsList.tsx` must keep `dpsPanelHeight`'s constants (row gap, header height,
+frame chrome) in sync, since registry sizes are static and can't be measured
+from the live DOM. The size button cycles
 `sm → md → lg → sm` via `SIZE_CYCLE` (`PanelFrame.tsx:6`, exported and reused by
 `PanelCanvas.tsx:111`). Panels never store pixel dimensions — only the preset
 key — so retuning a size means editing the registry, and it applies to every
@@ -213,16 +222,17 @@ content (sprite px, row counts, which optional lines to show).
 
 ## 3. The panels
 
-All five bodies are thin; the data lives in the shared services. `size` maps to
+All six bodies are thin; the data lives in the shared services. `size` maps to
 per-panel scale tables at the top of each file.
 
 | Panel | Title | Data source | Notes |
 | --- | --- | --- | --- |
 | `StatusPanel` | "RealmShark" | `window.overlay.*` directly | Connection dot, hotkey hint, packet count, JS heap MB, app version + **auto-update** UI. |
-| `DpsPanel` | "DPS" | `useDpsTracker()` → `<DpsList>` | Rows per attacker vs. the focused enemy (§5). `MAX_ROWS = {sm:3, md:6, lg:12}`. Each row also renders that attacker's dyed `CharacterSprite` + equip-slot icons (gear hidden at `sm`), resolved from `EntityRegistry` by `row.objectId`. |
+| `DpsPanel` | "DPS" | `useDpsTracker()` → `<DpsList>` | Rows per attacker vs. the focused enemy, ranked by cumulative damage (§5). `MAX_ROWS = {sm:3, md:6, lg:12}`. Each row also renders that attacker's dyed `CharacterSprite` + equip-slot icons (gear hidden at `sm`), resolved from `EntityRegistry` by `row.objectId`, plus a proportional damage bar and a highlight/rank badge on the local player's row (§6). |
 | `ConsolePanel` | "Console" | `consoleLog.ts` buffer | Live log with search (Ctrl/Cmd+F), level colours, clear. |
 | `CharacterPanel` | "Character" | `EntityRegistry` (local player) | Big dyed sprite + 4 equip icons + username. |
 | `InstancePanel` | "Instance" | `EntityRegistry.characters()` | Every named player in the instance, dyed sprites + gear. |
+| `DpsSummaryPanel` | "DPS Summary" | `useDpsHistory()` | Post-fight master/detail: a master list of retained past instances (icon + name + a "You: Xdmg (#rank)" headline), each opening a detail view of that instance's enemies ranked by total damage, expandable to a frozen per-player breakdown. See §5.1. |
 
 **StatusPanel** (`panels/StatusPanel.tsx`) is the only panel wired straight to
 the IPC surface rather than a shared service. It subscribes to `onBridgeStatus`,
@@ -379,35 +389,217 @@ objectId with a non-empty `name` — i.e. the instance's players.
 ### `DpsTracker` (`dps/DpsTracker.ts`)
 
 A framework-agnostic class (no React) that ingests `PacketEnvelope[]` and answers
-`snapshot(nowMs)`. Its `ingest` switch (`DpsTracker.ts:82-117`) consumes **six**
-envelope types — more than the task's summary implies:
+`snapshot(nowMs)`. Its `ingest` switch consumes **seven** envelope types — more
+than the task's summary implies:
 
 | Envelope | Handler | What it builds |
 | --- | --- | --- |
 | `CreateSuccessPacket` | sets `localPlayerId` | local-player identity (one-shot) |
-| `EnemyHitPacket` | `ingestEnemyHit` | local-player id (from `mainID`) **and** the focus target (from `targetId`) |
+| `EnemyHitPacket` | `ingestEnemyHit` | local-player id (from `mainID`), a last-hit focus signal (via `onLocalHit`), and a despawn signal when `kill` is set |
 | `ServerPlayerShootPacket` | `ingestShoot` | `minionOwners`: minion/pet id → owning player |
-| `DamagePacket` | `ingestDamage` | per-target, per-attacker rolling hit buffers |
-| `UpdatePacket` | `ingestUpdate` | `entityNames`: objectId → `NAME_STAT` username |
+| `DamagePacket` | `ingestDamage` | per-target, per-attacker rolling hit buffers, and a last-hit focus signal for the local player's own attributed hits |
+| `UpdatePacket` | `ingestUpdate` | `entityNames` (`NAME_STAT`), `enemyMaxHp` (`MAX_HP_STAT`), `objectTypes` (every seen objectId's `objectType`), `playerCosmetics` (skin/equipment/dyes, for history's frozen per-player sprite — §5.1), and a despawn signal per dropped id |
 | `objectNames` (synthetic) | `ingestObjectNames` | enemy names resolved bridge-side |
 | `dps` (synthetic) | `ingestBridgeDps` | **the Java engine's computed DPS snapshot** |
-| `MapInfoPacket` | `reset()` | wipes all state on instance change |
+| `QuestObjectIdPacket` | `ingestQuestObjectId` | locks/re-locks the sticky boss focus, carrying forward the prior phase's damage on a phase change |
+| `MapInfoPacket` | `retainInstanceIfQualifying()` then `reset()` | freezes the ending instance's damage into session history (§5.1) if it qualifies, *then* wipes all live state for the new instance |
 
-**Focus target.** The tracker only ever reports DPS against *one* enemy: the one
-the local player last hit (`focusTargetId`), set from `EnemyHitPacket.targetId`
-(`DpsTracker.ts:218-225`) and from a local-player `DamagePacket`
-(`DpsTracker.ts:251-256`).
+**Focus target — sticky quest-objective lock, falling back to last-hit.** The
+tracker reports DPS against *one* enemy (`focusTargetId`), chosen by:
 
-**Local rolling window.** `ingestDamage` (`DpsTracker.ts:228-257`) buckets hits as
+1. **Quest-objective lock** (`lockedBossId`, `bossAlive`, `bossDamagedByLocal`)
+   — armed from `QuestObjectIdPacket.objectId` (`ingestQuestObjectId`), the
+   game's own boss/objective marker (in a dungeon, the main boss), but the
+   lock does **not** actually take effect — and `focusTargetId` is **not**
+   forced onto it — until the local player lands a hit on it
+   (`bossDamagedByLocal`, set the first time `onLocalHit`'s `targetId` equals
+   `lockedBossId`); until then, focus keeps following last-hit as if no
+   objective were active, so the panel doesn't jump to a boss the player
+   hasn't reached yet. A phase transition on an already-*damaged*, still-*alive*
+   encounter (`bossDamagedByLocal` carried over — see point 3 below) does snap
+   focus straight to the new phase, since that's a continuation of an engaged
+   fight; but if the previous lock had already despawned (`bossAlive` false) by
+   the time the new objective arrives, `bossDamagedByLocal` resets instead —
+   that's a genuinely new objective, not a phase continuation, and should be
+   treated the same as a fresh, undamaged encounter (`ingestQuestObjectId`).
+   Once damaged-and-alive, every last-hit signal on anything else
+   (`onLocalHit`, called from both `ingestEnemyHit` and `ingestDamage`) is a
+   no-op — AoEing adds cannot steal focus from the boss — **unless** overridden
+   by a sustained-attack streak (point 3). The lock only moves when either
+   (a) a *different*, non-zero objective id arrives (a phase/form change
+   re-points the objective at the next phase's entity), or (b) the locked
+   entity despawns (`onBossDespawn`, driven by `EnemyHitPacket.kill` on it or
+   its id appearing in `UpdatePacket.drops`) — at which point `bossAlive` goes
+   false and last-hit resumes until a new objective re-locks. Despawning does
+   **not** itself clear `focusTargetId`, so the panel keeps showing the final
+   numbers rather than blanking mid-transition.
+2. **Last-hit fallback** (`maybeSwitchFallbackFocus`) — used whenever no quest
+   objective is locked-and-damaged (open world, a not-yet-damaged objective, or
+   after the locked boss despawned with no new objective yet). Ordinarily this
+   is plain last-hit, same as before this feature; the one refinement is that
+   a hit on a new target does **not** steal focus away from the current one
+   when both entities' `MAX_HP_STAT` are known (from `UpdatePacket`, no bridge
+   dependency) and the current target's is larger — so an AoE tick on a small
+   add can't flip focus off a bigger enemy already being fought. Falls
+   straight through to plain last-hit whenever either max-HP is unknown, which
+   is the common case.
+3. **Sustained-attack override** — even once damaged-and-locked, a hit on the
+   boss itself always reclaims focus immediately (the player isn't sustaining
+   anything else anymore). But if the player continuously hits one *other*
+   target for `SUSTAINED_ATTACK_MS` (2000ms) straight — tracked per-hit by
+   `updateLocalStreak`/`localStreakDurationMs`, reset the instant the hit
+   target changes — that streak overrides the lock and `focusTargetId` moves
+   to it, on the read that a deliberate, unbroken 2+ second switch away from
+   the objective is intentional, unlike a stray AoE tick. The streak (and
+   `bossDamagedByLocal`) persists across a phase transition, since that's the
+   same encounter continuing.
+
+**Boss-phase damage carryover — only across a *live* phase change.** A boss
+changing form gets a brand-new `objectId` server-side (a new `Entity` in the
+bridge's `DpsEngine`, damage total starting at zero — see the discrepancy
+note in `dps-engine.md`), so carrying a boss's total across phases is
+entirely the renderer's job. `ingestQuestObjectId` calls
+`carryForwardBossDamage` on the *previous* `lockedBossId` before switching,
+but **only when that previous lock is still alive** (`bossAlive` true) — a
+genuine phase/form change on the same encounter. It snapshots the previous
+lock's current per-attacker damage (`totalDamageRows` — bridge rows if
+present, else the summed local buffer) into `bossCarry`. `snapshot()` then
+takes the `bossSnapshot` branch whenever `bossCarry` is non-empty and the
+focus is still the locked boss: each row's `damage` is `bossCarry + the
+current phase's live damage`, while `dps` is just the current phase's live
+rate (not a whole-encounter average).
+
+If the previous lock had already **despawned** (`bossAlive` false) by the
+time a new objective arrives, it is *not* a phase change — it's an unrelated
+new encounter (the next quest boss; the common case in the open-world Realm,
+which cycles through many independent quest bosses with no instance change
+between them, but equally possible in any instance with more than one
+distinct boss). Carrying that dead boss's damage forward here would
+misattribute it to whichever boss locks next — the bug behind "the DPS
+summary attributes a Realm quest boss's damage to the *next* quest boss
+instead of the one that was just killed." Instead, `ingestQuestObjectId`
+calls `resolveBossChain()`, which bakes the just-finished chain (its own
+`bossSnapshot`, merging any still-unflushed `bossCarry` from that chain's own
+earlier phases) into its own `resolvedBossEncounters` entry — see §5.1's
+"Boss-phase merging" — and clears `bossCarry` so the new chain starts at
+zero rather than inheriting the old one's total.
+
+**Local rolling window.** `ingestDamage` buckets hits as
 `targets[targetId][attackerId] = HitEvent[]`, redirecting a minion's `objectId`
-to its owner via `minionOwners` (`DpsTracker.ts:231`). `snapshot` trims each
-buffer to the last **`WINDOW_MS = 8000`** ms (`DpsTracker.ts:13,314-332`) and
-computes `dps = windowDamage / 8`.
+to its owner via `minionOwners`. `snapshot` trims each buffer to the last
+**`WINDOW_MS = 8000`** ms and computes `dps = windowDamage / 8`.
 
-**Reset.** `reset()` (`DpsTracker.ts:260-271`) wipes names, minion map, targets,
-focus, and local id. It runs on `MapInfoPacket` internally and is also called from
-the hook on detach. Debug counters are deliberately *kept* across resets. Note
-`CreateSuccessPacket` does **not** reset — it only sets the local id.
+**Reset.** `reset()` wipes names, minion map, targets, focus, local id, the
+boss lock (`lockedBossId`/`bossAlive`/`bossDamagedByLocal`/`bossCarry`), the
+local attack streak (`localStreakTargetId`/`localStreakStartedAt`),
+`enemyMaxHp`, `objectTypes`, `playerCosmetics`, and `bossPhaseIds` — all
+*per-instance* state. It runs on
+`MapInfoPacket` internally (after `retainInstanceIfQualifying()` — §5.1) and is
+also called from the hook on detach (which skips retention — see §5.1). Debug
+counters and the retained `history`/`historySeq`/`currentInstanceName` are
+deliberately *kept* across resets — they're session-scoped, not per-instance.
+Note `CreateSuccessPacket` does **not** reset — it only sets the local id.
+
+### 5.1 Retained instance history (the DPS summary panel)
+
+`DpsTracker` also retains a session-scoped, in-memory history of past
+instances' damage, so a separate **DPS summary panel** (`DpsSummaryPanel.tsx`)
+can show a post-fight master/detail view with no time pressure — unlike the
+live DPS panel (§3), which only ever shows the currently-focused enemy.
+
+**The hook: `MapInfoPacket`, before `reset()`.** Every instance ends the same
+way the tracker learns about it starting: a `MapInfoPacket`. `ingest()` calls
+`retainInstanceIfQualifying()` on the *about-to-end* instance's still-live
+state, **then** `reset()` wipes it, **then** `currentInstanceName` is set from
+the new packet's `displayName` (`MapInfoPacketData.displayName` — the
+human-readable name, e.g. `"Oryx's Sanctuary"`, matching the bridge's
+`dungeonIcons` table keys; `name` is a machine id and unrelated), passed
+through `resolveInstanceDisplayName()` first. `displayName` is the raw
+localization *key* — the real client resolves it client-side through its own
+string table, which RealmShark never sees — so for a map with no dungeon-style
+name of its own (the open-world Realm) it arrives unresolved, literally
+`"{s.rotmg}"`. `resolveInstanceDisplayName` maps that known key to `"The
+Realm"` and, for any other unrecognized `{...}`-shaped key, falls back to a
+generic `"Unknown Realm"` rather than leaking the raw key into the DPS summary
+panel.
+
+**Log-gating.** `retainInstanceIfQualifying` skips instances with no real
+fight: it requires either some enemy's total damage (`totalDamage`, summed
+across `players`) to reach `HISTORY_LOG_MIN_DAMAGE` (a tunable constant, a
+proxy for "a boss-scale enemy was fought"), or a quest objective to have been
+engaged at all (`lockedBossId !== null` **or** a chain already resolved into
+`resolvedBossEncounters`) even if the fight was cut short. Nexus/vault/realm
+hops/rushed-empty rooms fall under both and are silently skipped — no history
+entry, no user-visible signal.
+
+**Boss-phase merging — one merged entry per *encounter*, not per instance.**
+`buildHistoryEnemies()` builds the ranked enemy list for a history entry
+from three sources: `resolvedBossEncounters` (finished chains — see below),
+the flat non-boss enemies in `bridgeEnemies`, and one merged entry for the
+still-open chain (`lockedBossId`, if any). Without this split, a boss whose
+`objectId` changed across phases would appear as several split entries — one
+per raw id, each showing only that phase's damage — **or**, if two *different*
+bosses were merged together, one boss's damage would be mislabeled onto the
+other (see the "Boss-phase damage carryover" discrepancy this fixes, §5).
+`bossPhaseIds` (populated by `ingestQuestObjectId` alongside `bossCarry`'s
+carry-forward and `resolveBossChain`'s bake-out — see §5) tracks every phase
+id *any* boss chain has ever used this instance, live or finished; those ids
+are excluded from the flat per-enemy loop since each is already accounted for
+in `resolvedBossEncounters` or the still-open chain's merged entry.
+
+`resolveBossChain()` is what keeps distinct encounters from bleeding into
+each other: the moment `ingestQuestObjectId` sees a new objective for a boss
+that already despawned (not a phase of the one that just ended), it bakes the
+finished chain's `bossSnapshot()` into its own `resolvedBossEncounters` entry
+*before* the new chain starts accumulating — so a Realm's next quest boss
+starts from zero rather than inheriting the damage of the one the player just
+killed. Both the finished-chain bake-out and the live merged entry for the
+still-open chain reuse `bossSnapshot()` (the same carry-forward merge the
+*live* panel uses for a phase-changing boss — §5's "Boss-phase damage
+carryover"). This is also why the merge is **not** the bridge's
+`bossPhaseDamage` field: per the discrepancy note in `dps-engine.md`, that
+field only flags three specific counter-damage mechanics and does not
+aggregate a boss's damage across
+phase/objectId changes — the renderer has always been the one place that does,
+and history reuses that same mechanism rather than duplicating it.
+
+**Frozen cosmetics, not a live `EntityRegistry` lookup.** A history entry must
+still render correctly long after the instance ended, but `EntityRegistry`
+(§4) clears itself on every `MapInfoPacket` — by the time a user opens an old
+entry, its players' `objectId`s may resolve to nothing, or worse, to a
+different instance's different player. So `DpsTracker` keeps its own
+`playerCosmetics` map (objectId → skin/equipment/clothingDye/accessoryDye),
+merged from `UpdatePacket` the same way `EntityRegistry` does but kept
+independent, and a history entry's `DpsHistoryEnemy.cosmetics` is a **snapshot
+copy** taken at retention time. `DpsSummaryPanel.tsx`'s `FrozenCharacterSprite`
+renders directly from that frozen record (`<Sprite objectType clothingDye
+accessoryDye>`), never through `CharacterSprite`/`useEntityRegistry`.
+
+**Shape.** `getHistory(): DpsHistoryEntry[]` returns the retained list, newest
+first, capped at `HISTORY_MAX_INSTANCES` (oldest dropped). Each
+`DpsHistoryEntry` is `{ id, instanceName, endedAt, localPlayerId, enemies:
+DpsHistoryEnemy[] }`; each `DpsHistoryEnemy` is `{ id, name, objectType,
+players: PlayerDps[], cosmetics: Map<objectId, PlayerCosmetics> }`, sorted
+descending by total damage. `objectType` (the enemy's own, from `objectTypes`)
+feeds the master-list icon fallback chain (§3): dungeon-icon map
+(`useSprites().dungeonIcon(instanceName)`) → the top-ranked enemy's
+`objectType` (the "main-boss sprite") → a generic placeholder chip.
+
+**A separate tracker instance, not the live panel's.** The summary panel's
+`useDpsHistory()` hook (`dps/useDpsHistory.ts`) constructs its **own**
+`DpsTracker`, independent from `DpsPanel`'s (via `useDpsTracker()`) — both
+ingest the identical packet stream (`window.overlay.onPacketBatch`)
+independently, so history-tracking never perturbs the live glance panel and
+vice versa. `<PanelCanvas/>` being always mounted (§1, "Interactive mode")
+keeps every panel *in the layout* alive across interactive toggles, but a
+panel only mounts its `Content` component at all once `PanelCanvas` renders
+its `<PanelFrame/>` — which it does for every entry in `panels`, visible or
+not (`PanelFrame.tsx`'s `display: visible ? undefined : 'none'` hides it
+without unmounting). Since `dpsSummary` is in `defaultLayout()`, its tracker
+keeps ingesting (and retaining) for the app's whole session even while the
+panel itself is hidden — the "session-scoped" part of the retention contract
+depends on this always-in-layout property, not on the user having the panel
+open.
 
 ### Which DPS numbers the UI renders — the two paths reconciled
 
@@ -438,8 +630,9 @@ enemy does it fall back to the locally-computed rolling window
 
 Two things the renderer **always** owns regardless of source:
 
-- **The focus target** is chosen locally (from `EnemyHitPacket`/local
-  `DamagePacket`); the bridge snapshot is only *looked up* by that id.
+- **The focus target** is chosen locally (sticky quest-objective lock, falling
+  back to `EnemyHitPacket`/local `DamagePacket` last-hit — see above); the
+  bridge snapshot is only *looked up* by that id.
 - **Player row names** are overridden with the renderer's `entityNames`
   (`NAME_STAT`) map: `this.entityNames.get(p.id) ?? p.name`
   (`DpsTracker.ts:176-181`), because the bridge falls back to a class name
@@ -460,8 +653,10 @@ The React wrapper: one `DpsTracker` per hook instance (`useState(() => new
 DpsTracker())`), a mount effect that pipes `onPacketBatch` into `tracker.ingest`
 and immediately re-snapshots whenever a batch contains a `dps` envelope
 (`useDpsTracker.ts:17-26`) — the bridge pushes one within ~50 ms of any damage
-packet (coalesced) plus a 250 ms heartbeat (see `bridge-server.md`), so the
-panel is effectively event-driven, not polled — `onOverlayDetach` into
+packet (coalesced) plus a 250 ms heartbeat (see `bridge-server.md`) — or a
+`QuestObjectIdPacket` envelope, so a boss lock/phase transition renders
+immediately rather than waiting for the 1 s fallback tick below. This keeps the
+panel effectively event-driven, not polled — `onOverlayDetach` into
 `tracker.reset()` + empty snapshot, and a slow **1000 ms** `FALLBACK_INTERVAL_MS`
 `setInterval` recomputing `snapshot(Date.now())` (`useDpsTracker.ts:31-34`) that
 exists only so the client-side rolling-window fallback (used when the bridge
@@ -489,21 +684,60 @@ for how these settings are applied.
 **`DpsList.tsx`** — pure presentation for a `DpsSnapshot`, now also takes the
 panel's `size` (`sm`/`md`/`lg`) so rows can scale down. Renders "No target
 attacked yet" when `targetId === null`, an optional header with the target sprite
-(`<Sprite objectType={entities.objectType(targetId)} />`) + name, then up to
-`maxRows` rows. Each row is `<CharacterSprite objectId={row.objectId}>` (the
-attacker's dyed skin/class sprite, same path `CharacterPanel` uses) + that
-player's 4 equip-slot icons (`entities.equipment(row.objectId)`, empty slots as
-bordered chips, hidden entirely at `sm` — `ROW_SLOT_SIZE.sm = 0` — the one
-"reduced detail" concession for the smallest panel size) + the truncating name +
-`{dps} dps ({damage})`. Numbers are formatted **compact** (`formatCompact`:
-`12.3k`, `1.2m`) rather than `toLocaleString()`, so the dps/total figures stay
-narrow enough to survive next to a sprite + 4 gear icons in a ~180-320px-wide
-panel (`DpsList.tsx`). It reads `useEntityRegistry()` for the target sprite and,
-per row, `objectType`/`skin`/dyes (via `CharacterSprite`) and `equipment` — all
-keyed by `row.objectId`, which is already the *owning player's* id even for
-pet/minion damage (the bridge's `DpsEngine.minionOwnerMap` and the local-estimate
-fallback's `minionOwners` map both attribute to the owner before the row is ever
-built — see `dps-engine.md`), so a summoned entity never gets its own row.
+(`<Sprite objectType={entities.objectType(targetId)} />`) + name, then always
+exactly `maxRows` fixed-height slots — real rows ranked by **cumulative damage
+on the focused target** (both the bridge `dps` path and the local-estimate
+fallback sort `rows` descending by `damage` — `DpsTracker.ts` — so the two
+paths agree on ranking even though the fallback still tracks a rolling `dps`
+figure too), with any unfilled slots rendered as blank placeholder rows
+(`selectVisibleRows()`) so the list's total rendered height never changes as
+players enter/leave the rolling damage window.
+
+Each row is `<CharacterSprite objectId={row.objectId}>` (the attacker's dyed
+skin/class sprite, same path `CharacterPanel` uses) + that player's 4
+equip-slot icons (`entities.equipment(row.objectId)`, empty slots as bordered
+chips, hidden entirely at `sm` — `ROW_SLOT_SIZE.sm = 0` — the one "reduced
+detail" concession for the smallest panel size) + the truncating name + the
+damage total as the primary figure, with rolling `dps` demoted to a smaller
+secondary figure beside it. Numbers are formatted **compact**
+(`formatCompact`: `12.3k`, `1.2m`) rather than `toLocaleString()`, so the
+total/dps figures stay narrow enough to survive next to a sprite + 4 gear
+icons in a ~180-320px-wide panel (`DpsList.tsx`).
+
+**Damage bar + self row.** Each row renders a proportional bar as a **row
+background fill** (an absolutely-positioned `div` sized `damage / topDamage`,
+painted behind a `relative z-10` wrapper holding the sprite/gear/name/numbers)
+so it never competes with them for horizontal space, and stays meaningful even
+at `sm` where the gear icons are hidden. The row is clipped
+(`overflow-hidden rounded-sm`) so the fill can never overflow the row or panel.
+Every row, real or placeholder, gets an explicit fixed height (`rowHeight`,
+`DpsList.tsx`) so the list's total rendered height is constant regardless of
+how many rows are real vs. blank.
+
+The local player's row (`row.objectId === entities.localPlayerId()`) gets an
+accent ring (`ring-sky-400/70`), a tinted fill, and a `#rank` badge ahead of
+its name giving its true position in the full (unsliced) ranking. Two layers
+keep that row always present: `ensureLocalRow()` synthesizes a 0-damage row
+for the local player if they haven't hit the focused target at all yet (the
+bridge/local-estimate `rows` only ever contain attackers who've actually
+landed damage, so absence otherwise means "no row"), then `selectVisibleRows()`
+decides where it renders. The local player's row stays in its natural ranked
+position, in order with everyone else's, whenever that position already falls
+within the visible `maxRows` window — it is **not** pulled out of the ranked
+list unconditionally. Only when their true rank would otherwise fall *outside*
+`maxRows` does it get pinned into the list's last slot (displacing the
+lowest-ranked other row), so the player can still always find themselves even
+at 0 damage or well outside the top N. Either way the `#rank` badge shows
+their true position in the full ranking, which only differs from their
+rendered position in that pinned-out-of-range case.
+
+It reads `useEntityRegistry()` for the target sprite, the local player's id
+(`localPlayerId()`), and, per row, `objectType`/`skin`/dyes (via
+`CharacterSprite`) and `equipment` — all keyed by `row.objectId`, which is
+already the *owning player's* id even for pet/minion damage (the bridge's
+`DpsEngine.minionOwnerMap` and the local-estimate fallback's `minionOwners` map
+both attribute to the owner before the row is ever built — see
+`dps-engine.md`), so a summoned entity never gets its own row.
 
 **`consoleLog.ts`** — a module-level ring buffer (max 2000 entries,
 `consoleLog.ts:10`) with a listener set. `installConsoleCapture()`

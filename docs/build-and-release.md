@@ -250,7 +250,7 @@ unsigned prereleases with custom tags and no `latest.yml` — `updater.ts:7-16`)
 
 **What the code actually does:**
 
-- **Target repo:** `hotmalehotmail/RealmShark` (`updater.ts:18`).
+- **Target repo:** `white-bag/thessal` (`updater.ts:18`).
 - **Polling:** first check ~10s after launch, then every 6h
   (`INITIAL_DELAY_MS` / `POLL_INTERVAL_MS`, `:19-20`). `startUpdatePolling` is a
   **no-op in dev** — it early-returns unless `app.isPackaged` (`:185`).
@@ -304,7 +304,7 @@ When (and only when) asked, the flow is:
 VERSION=$(node -p "require('./overlay/package.json').version")   # e.g. 0.9.23-alpha
 TAG="v$VERSION"
 git tag "$TAG" <commit> && git push origin "$TAG"
-gh release create "$TAG" --repo hotmalehotmail/RealmShark --prerelease \
+gh release create "$TAG" --repo white-bag/thessal --prerelease \
   --title "Overlay $TAG — ..." --notes "..." \
   overlay/dist/*-setup.exe#RealmShark-Overlay-Setup.exe build/libs/bridge.jar
 ```

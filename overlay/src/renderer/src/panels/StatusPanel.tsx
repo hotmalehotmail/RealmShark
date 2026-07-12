@@ -44,7 +44,10 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
       setPacketCount((n) => n + packets.length)
       if (packets.length > 0) setLastPacket(packets[packets.length - 1])
     })
-    const offUpdate = window.overlay.onUpdateAvailable(setUpdate)
+    const offUpdate = window.overlay.onUpdateAvailable((info) => {
+      setUpdate(info)
+      setCheckMsg('')
+    })
     const offProgress = window.overlay.onUpdateProgress(({ received, total }) =>
       setDownloadPct(total > 0 ? Math.round((received / total) * 100) : 0)
     )
@@ -117,7 +120,7 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
 
       {size !== 'sm' && (
         <div className="mt-3 border-t border-white/10 pt-2">
-          {update ? (
+          {update && (
             <div className="flex items-center justify-between gap-2">
               <span className="truncate text-xs text-emerald-400">
                 Update available → v{update.version}
@@ -133,14 +136,15 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
                 <span className="shrink-0 text-xs text-white/60">Downloading {downloadPct}%…</span>
               )}
             </div>
-          ) : (
-            <div className="flex items-center justify-between gap-2">
+          )}
+          {downloadPct == null && (
+            <div className={`flex items-center justify-between gap-2 ${update ? 'mt-1' : ''}`}>
               <button
                 onClick={checkUpdates}
                 disabled={checking}
                 className="shrink-0 rounded bg-white/10 px-2 py-0.5 text-xs hover:bg-white/20 disabled:opacity-50"
               >
-                {checking ? 'Checking…' : 'Check for updates'}
+                {checking ? 'Checking…' : update ? 'Check again' : 'Check for updates'}
               </button>
               {checkMsg && <span className="text-xs text-white/40">{checkMsg}</span>}
             </div>

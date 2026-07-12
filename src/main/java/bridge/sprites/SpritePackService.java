@@ -2,6 +2,7 @@ package bridge.sprites;
 
 import assets.IdToAsset;
 import assets.SpriteFlatBuffer;
+import bridge.dps.enums.CharacterStatistics;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
@@ -167,9 +168,16 @@ public class SpritePackService {
         // animDyeTable: dyeId -> [type, speed, pivotX, pivotY] for animated cloths.
         JsonObject animDyeTable = buildAnimDyeTable(sfb);
         root.add("animDyeTable", animDyeTable);
+        // dungeonIcons: dungeon display name -> spriteId (the dungeon's own icon
+        // objectType), from CharacterStatistics' curated DUNGEON_NAMES/DUNGEONS
+        // enum table - lets the overlay resolve a MapInfoPacket instance name to
+        // an icon without any per-dungeon bridge traffic.
+        JsonObject dungeonIcons = buildDungeonIcons();
+        root.add("dungeonIcons", dungeonIcons);
         System.out.println("[sprite-pack] built " + v + ": table=" + table.size()
             + " maskTable=" + maskTable.size() + " dyeTable=" + dyeTable.size()
-            + " animDyeTable=" + animDyeTable.size() + " animTable=" + animTable.size());
+            + " animDyeTable=" + animDyeTable.size() + " animTable=" + animTable.size()
+            + " dungeonIcons=" + dungeonIcons.size());
 
         cachedVersion = v;
         cachedPackJson = gson.toJson(root);
@@ -178,6 +186,27 @@ public class SpritePackService {
 
     private JsonObject cachedDyeTable;
     private JsonObject cachedAnimDyeTable;
+    private JsonObject cachedDungeonIcons;
+
+    /**
+     * Builds {@code dungeon display name -> spriteId} from
+     * {@link CharacterStatistics}' parallel {@code DUNGEON_NAMES}/{@code DUNGEONS}
+     * lists (populated for every enum entry that carries a real spriteId, i.e.
+     * every dungeon - the non-dungeon stat entries have {@code spriteId == -1}
+     * and are excluded there already). Static data, so cached once.
+     */
+    private synchronized JsonObject buildDungeonIcons() {
+        if (cachedDungeonIcons != null) return cachedDungeonIcons;
+        JsonObject dungeonIcons = new JsonObject();
+        for (int i = 0; i < CharacterStatistics.DUNGEON_NAMES.size(); i++) {
+            dungeonIcons.addProperty(
+                CharacterStatistics.DUNGEON_NAMES.get(i),
+                CharacterStatistics.DUNGEONS.get(i)
+            );
+        }
+        cachedDungeonIcons = dungeonIcons;
+        return dungeonIcons;
+    }
 
     /** Parses an integer attribute {@code name="123"} out of an XML tag body, or {@code def}. */
     private static int intAttr(String tagBody, String name, int def) {
