@@ -140,16 +140,35 @@ includes behavioral tests, on both `staging` and `bridge`.
 ## 5 · Independent review
 
 **Drives.** `.github/workflows/review.yml` runs `on: pull_request: [opened, synchronize,
-reopened]` for base `staging`/`bridge`. It invokes `anthropics/claude-code-action@v1`
-(Opus 4.8, `CLAUDE_CODE_OAUTH_TOKEN`, tools scoped to `Bash(gh:*),Bash(git:*),Write,Read,Grep,Glob`),
-reads the diff, and posts a review (summary + inline comments) via
-`POST /repos/{repo}/pulls/{n}/reviews`.
+reopened]` for base `staging`/`bridge`, in three deterministic phases (the **judge /
+scribe split**, audit H2/H3):
+1. **stage** — plain bash (`github.token`, read-only `gh`) writes the diff + the linked
+   issue to files, and computes the verdict facts that must NOT be left to the model:
+   is this a `claude/*` agent branch, does it touch `.github/`, does it declare a
+   `Closes #N`.
+2. **judge** — `anthropics/claude-code-action@v1` (Opus 4.8, `CLAUDE_CODE_OAUTH_TOKEN`)
+   with **`--allowedTools Read,Grep,Glob,Write` — no Bash, no gh**. It reads the staged
+   inputs + the repo and WRITES its findings to `review-inputs/verdict.json`. With no
+   shell it physically cannot post a review or a status, so untrusted diff content has
+   **no path to the gate** (this replaces the old design where the reviewer posted its
+   own verdict via `Bash(gh:*)` — the credential-holding-judge risk in audit H2).
+3. **scribe** — plain bash. Computes the verdict as a deterministic function of the
+   judge's findings + the stage facts (any `high`/`critical` finding, an agent PR
+   touching `.github/`, an agent PR with no issue link, or unmet acceptance criteria
+   ⇒ fail), posts the review (`POST /pulls/{n}/reviews`, with a single-comment 422
+   fallback), and posts the `review-verdict` status.
 
-**Enforces.** `claude-code-action`'s **workflow-validation guard**: it runs only if
-the executing `review.yml` is **byte-identical to the copy on the default branch
-(`bridge`)**. This is the anti-prompt-injection defense — a PR can't rewrite the
-reviewer to rubber-stamp itself. (This is also why a stale `review.yml` on `staging`
-silently skipped reviews until the branches were synced.)
+**Enforces.** Two layers. (1) `claude-code-action`'s **workflow-validation guard**: the
+judge runs only if the executing `review.yml` is **byte-identical to the copy on the
+default branch (`bridge`)** — a PR can't rewrite the reviewer to rubber-stamp itself.
+(This is also why a stale `review.yml` on `staging` silently skipped reviews until the
+branches were synced, and why a change to `review.yml` is admin-merged to `bridge`
+first.) (2) The **judge/scribe split**: because the model that reads untrusted content
+has no shell and no gate credential, a prompt injection can at most produce wrong
+*findings* (model misjudgment), never a forged pass — the pass/fail is derived
+deterministically from those findings by the scribe, and the security gates (the
+`.github/` tripwire, the issue-link requirement) are computed from the diff, not the
+model.
 
 **Status.** 🟢 Built (verified live on PR #22: `review-verdict = success`). Both
 gaps that made this Partial are now closed:
