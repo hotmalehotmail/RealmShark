@@ -31,8 +31,11 @@ permissions:
   pull-requests: write # list/merge candidates; rebase-refire posts marker comments
   issues: write # soak check; rebase-refire escalation label
 
+# Shares conflict-watch's group: both read the rebase-refire marker comments before
+# posting new ones, so a sweep cron overlapping an event-driven run could otherwise
+# double-fire the same in-flight rebase (marker read/post is not atomic).
 concurrency:
-  group: sweep
+  group: conflict-watch
   cancel-in-progress: false
 
 jobs:

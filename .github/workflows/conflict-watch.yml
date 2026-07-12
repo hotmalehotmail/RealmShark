@@ -90,7 +90,9 @@ jobs:
             fi
             while read -r NUM HEAD; do
               [ -z "$NUM" ] && continue
-              NUM="$NUM" HEAD="$HEAD" DEDUP=1 bash .github/scripts/rebase-refire.sh </dev/null
+              # `|| true`: a single failed /fire must not abort the scan and silently
+              # skip the remaining conflicted siblings (mirrors sweep's DIRTY branch).
+              NUM="$NUM" HEAD="$HEAD" DEDUP=1 bash .github/scripts/rebase-refire.sh </dev/null || true
             done <<< "$PRS"
           else
             # PR-mode. `synchronize` = a fresh head push, i.e. the previous rebase

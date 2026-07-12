@@ -9,9 +9,13 @@
 # `<!-- conflictwatch:refire ... -->` markers), deliberately separate from the
 # review-fix loop's MAX_FIX_ROUNDS (`<!-- fixloop:refire -->`): with N parallel
 # agent PRs, every sibling merge legitimately re-rebases the others, and that
-# churn must not eat the review-failure budget or freeze an innocent PR. The
-# escalation guarantee is preserved: a conflict that won't converge still ends
-# in `agent:needs-human`.
+# churn must not eat the review-failure budget or freeze an innocent PR. For the
+# same reason the budget counts only attempts onto the CURRENT staging head —
+# each successful rebase leaves one marker for an old base behind, and a PR that
+# keeps converging must never accumulate its way into a freeze; the cap measures
+# non-convergence (repeated failures against one staging state). The escalation
+# guarantee is preserved: a conflict that won't converge still ends in
+# `agent:needs-human`.
 #
 # Dedupe: each marker embeds the staging head SHA the re-fire rebased onto
 # (`base=<sha>`). With DEDUP=1 (opened/push/sweep) an existing marker for the
@@ -83,17 +87,17 @@ BASE_SHA="$(gh api "repos/$REPO/git/ref/heads/staging" -q '.object.sha')"
 COMMENTS="$(gh api --paginate "repos/$REPO/issues/$NUM/comments" \
               -q ".[] | select(.user.login==\"github-actions[bot]\" and (.body|contains(\"$MARKER_PREFIX\"))) | [.created_at, .body] | @base64" \
               2>/dev/null || true)"
+# PRIOR counts only markers for the CURRENT staging head (see the budget note in
+# the header): attempts onto superseded bases were legitimate churn, not failures.
 PRIOR=0
 SAME_BASE_AT=""
 for ROW in $COMMENTS; do
   DECODED="$(printf '%s' "$ROW" | base64 -d)"
-  PRIOR=$((PRIOR + 1))
   if printf '%s' "$DECODED" | grep -q "base=$BASE_SHA"; then
+    PRIOR=$((PRIOR + 1))
     SAME_BASE_AT="$(printf '%s' "$DECODED" | jq -r '.[0]' 2>/dev/null || true)"
   fi
 done
-# The @base64 row is a JSON array; re-parse cleanly for the timestamp above.
-# (PRIOR counts every conflictwatch marker regardless of base.)
 
 if [ "${DEDUP:-1}" = "1" ] && [ -n "$SAME_BASE_AT" ]; then
   AGE_MIN=$(( ( $(date -u +%s) - $(date -u -d "$SAME_BASE_AT" +%s 2>/dev/null || date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$SAME_BASE_AT" +%s) ) / 60 ))
@@ -106,12 +110,12 @@ fi
 
 ATTEMPT=$((PRIOR + 1))
 if [ "$PRIOR" -ge "$MAX_REBASE_ROUNDS" ]; then
-  echo "#$NUM: still conflicted after $PRIOR rebase attempt(s) — escalating."
+  echo "#$NUM: still conflicted after $PRIOR rebase attempt(s) onto staging@${BASE_SHA:0:9} — escalating."
   gh label create "agent:needs-human" --repo "$REPO" --color "B60205" \
     --description "Agent loop stalled — needs a maintainer" --force >/dev/null 2>&1 || true
   gh pr edit "$NUM" --repo "$REPO" --add-label "agent:needs-human" >/dev/null 2>&1 || true
   MENTION=""; [ -n "${MAINTAINER:-}" ] && MENTION="@$MAINTAINER "
-  gh pr comment "$NUM" --repo "$REPO" --body "${MENTION}🛑 **Merge conflict couldn't be auto-resolved** in $MAX_REBASE_ROUNDS rebase attempt(s) (a budget separate from review-fix rounds). This PR needs a manual rebase (\`git merge origin/staging\`, resolve, push), then remove \`agent:needs-human\` (or apply \`agent:retry\` for a fresh budget)."
+  gh pr comment "$NUM" --repo "$REPO" --body "${MENTION}🛑 **Merge conflict couldn't be auto-resolved** in $MAX_REBASE_ROUNDS rebase attempt(s) onto the current \`staging\` head (a budget separate from review-fix rounds; it resets when \`staging\` moves). This PR needs a manual rebase (\`git merge origin/staging\`, resolve, push), then remove \`agent:needs-human\` (or apply \`agent:retry\` for a fresh budget)."
   exit 0
 fi
 

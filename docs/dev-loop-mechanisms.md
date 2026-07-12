@@ -435,11 +435,16 @@ run on the resolved tree → a fresh verdict, exactly like a normal fix round.
 
 **Separate budget (deliberate).** Rebase attempts are marked
 `<!-- conflictwatch:refire base=<staging-sha> -->` and capped by
-**`MAX_REBASE_ROUNDS` (5)** — *not* the fix loop's `MAX_FIX_ROUNDS`. With N parallel
-agent PRs, every sibling merge legitimately re-rebases the others; on a shared budget
-that churn could freeze an innocent PR that never failed review. The escalation
-guarantee is unchanged: a conflict that outlives its own budget freezes the PR with
-`agent:needs-human` + a maintainer @-mention. The embedded staging SHA also dedupes:
+**`MAX_REBASE_ROUNDS` (5) per staging head** — *not* the fix loop's
+`MAX_FIX_ROUNDS`, and *not* a lifetime count. With N parallel agent PRs, every
+sibling merge legitimately re-rebases the others; on a shared or lifetime budget
+that churn could freeze an innocent PR that never failed to converge. Counting only
+markers whose `base=` is the *current* staging head makes the cap measure
+non-convergence (repeated failures against one staging state) — a successful rebase
+leaves its marker behind on a superseded base, and the budget naturally resets when
+`staging` moves. The escalation guarantee is unchanged: a conflict that outlives its
+budget on one staging head freezes the PR with `agent:needs-human` + a maintainer
+@-mention. The embedded staging SHA also dedupes:
 an `opened`/`push`/sweep event won't re-fire while an agent is already rebasing onto
 the current staging head (a same-base marker older than ~2 h is considered a dead
 agent and re-fired; a `synchronize` event — a fresh head push, i.e. the previous
@@ -448,7 +453,9 @@ deferred (their budgets aren't churned by soak-fix merges; sweep re-fires any
 still-DIRTY PR after the thaw).
 
 **Backstops.** `sweep.yml`'s DIRTY branch calls the same script on its ~30-min cron
-(dropped events self-heal), and `resume.yml`'s `agent:retry` resets **both** budgets
+(dropped events self-heal; sweep shares conflict-watch's concurrency group so an
+overlapping cron can't double-fire an in-flight rebase — the marker read/post isn't
+atomic), and `resume.yml`'s `agent:retry` resets **both** budgets
 (it too runs on `pull_request_target`, so it works on the conflicted PRs it exists to
 rescue). The gatekeeper does nothing on `DIRTY` — arming is impossible there and the
 re-fire is no longer its job.
