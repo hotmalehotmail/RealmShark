@@ -5,6 +5,7 @@ import java.io.File;
 import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Id to asset class. Used to convert incoming realm IDs to the corresponding asset.
@@ -21,8 +22,26 @@ public class IdToAsset {
     private Projectile[] projectiles = null;
     private final String texture;
     private Texture[] textures = null;
+    /**
+     * Parsed {@code <BagType>} value (a 0-9 enum; 6 = white bag, 8 = orange/ST
+     * bag - see docs/asset-pipeline.md), or -1 when the object carries none.
+     * On an item, this is which color bag it drops in; on a Bag-class object
+     * (the ground bag entity itself), this is which color bag it is.
+     */
+    private final int bagType;
+    /** Raw {@code <Tier>} value (e.g. "UT", "1".."15"), or "" if none. */
+    private final String tier;
+    /** Raw, semicolon/newline-sanitized {@code <Description>} value, or "" if none. */
+    private final String description;
     private static final HashMap<Integer, IdToAsset> objectID = new HashMap<>();
     private static final HashMap<Integer, IdToAsset> tileID = new HashMap<>();
+    /**
+     * Entries registered via {@link #registerFake} (the {@code --fake} bridge
+     * mode, no game installed) - kept separately and re-applied after every
+     * {@link #reloadAssets()} so a background asset (re)load can never race
+     * away a synthetic entry regardless of call order.
+     */
+    private static final HashMap<Integer, IdToAsset> fakeEntries = new HashMap<>();
 
     /**
      * Constructor for the object resources.
@@ -36,8 +55,11 @@ public class IdToAsset {
      * @param texture     Texture name and index used to f
      * @param label       Label of the resource
      * @param group       Group of the resource
+     * @param bagType     Raw {@code <BagType>} value, or "" if none
+     * @param tier        Raw {@code <Tier>} value, or "" if none
+     * @param description Sanitized {@code <Description>} value, or "" if none
      */
-    public IdToAsset(String l, int id, String idName, String display, String clazz, Projectile[] projectiles, String texture, String label, String group) {
+    public IdToAsset(String l, int id, String idName, String display, String clazz, Projectile[] projectiles, String texture, String label, String group, String bagType, String tier, String description) {
         this.l = l;
         this.id = id;
         this.idName = idName;
@@ -47,6 +69,9 @@ public class IdToAsset {
         this.texture = texture;
         this.label = label;
         this.group = group;
+        this.bagType = parseBagType(bagType);
+        this.tier = tier == null ? "" : tier;
+        this.description = description == null ? "" : description;
     }
 
     /**
@@ -69,6 +94,9 @@ public class IdToAsset {
         clazz = "";
         group = "";
         label = "";
+        bagType = -1;
+        tier = "";
+        description = "";
     }
 
     /*
@@ -80,13 +108,63 @@ public class IdToAsset {
     }
 
     /**
-     * Reloads assets from files.
+     * Reloads assets from files. Synthetic entries registered via
+     * {@link #registerFake} are re-applied afterward, so they survive a
+     * reload regardless of whether it ran before or after registration.
      */
     public static void reloadAssets() {
         objectID.clear();
         tileID.clear();
         readObjectList();
         readTileList();
+        objectID.putAll(fakeEntries);
+    }
+
+    /**
+     * Registers a synthetic object entry directly, bypassing ObjectID.list -
+     * used only by the {@code --fake} bridge mode to demonstrate asset-derived
+     * features (e.g. loot-bag categorization) with no game installed. Never
+     * used by the real extraction path.
+     *
+     * @param id      Synthetic object id (must not collide with a real one).
+     * @param clazz   Class of the fake object (e.g. "Bag" for a ground-bag entity).
+     * @param bagType BagType to report for this id.
+     */
+    public static void registerFake(int id, String clazz, int bagType) {
+        registerFake(id, clazz, bagType, "", "", "");
+    }
+
+    /**
+     * Like {@link #registerFake(int, String, int)}, additionally seeding the
+     * item-info fields (issue #109) so the {@code --fake} bridge mode can
+     * demonstrate the item tooltip end-to-end with no game installed.
+     *
+     * @param id          Synthetic object id (must not collide with a real one).
+     * @param clazz       Class of the fake object (e.g. "Equipment").
+     * @param bagType     BagType to report for this id.
+     * @param tier        Fake {@code <Tier>} value, or "" for none.
+     * @param display     Fake display name, or "" to fall back to "Fake&lt;id&gt;".
+     * @param description Fake description, or "" for none.
+     */
+    public static void registerFake(
+        int id, String clazz, int bagType, String tier, String display, String description
+    ) {
+        IdToAsset entry = new IdToAsset(
+            "", id, "Fake" + id, display == null ? "" : display, clazz, null, "", "", "",
+            String.valueOf(bagType), tier == null ? "" : tier, description == null ? "" : description
+        );
+        fakeEntries.put(id, entry);
+        objectID.put(id, entry);
+    }
+
+    /** Parses a raw {@code <BagType>} string (decimal or 0x-hex) to an int, or -1 if blank/unparseable. */
+    private static int parseBagType(String raw) {
+        if (raw == null || raw.isEmpty()) return -1;
+        try {
+            return raw.startsWith("0x") ? Integer.decode(raw) : Integer.parseInt(raw.trim());
+        } catch (Exception e) {
+            return -1;
+        }
     }
 
     /**
@@ -112,7 +190,12 @@ public class IdToAsset {
                 String texture = l[5];
                 String label = l[6];
                 String idName = l[7];
-                objectID.put(id, new IdToAsset(line, id, idName, display, clazz, projectiles, texture, label, group));
+                // bagType/tier/description are newer columns - default "" for an
+                // older ObjectID.list written before they existed.
+                String bagType = l.length > 8 ? l[8] : "";
+                String tier = l.length > 9 ? l[9] : "";
+                String description = l.length > 10 ? l[10] : "";
+                objectID.put(id, new IdToAsset(line, id, idName, display, clazz, projectiles, texture, label, group, bagType, tier, description));
             }
             br.close();
         } catch (Exception e) {
@@ -120,7 +203,7 @@ public class IdToAsset {
             e.printStackTrace();
         }
 
-        objectID.put(-1, new IdToAsset("", -1, "Unloaded", "Unloaded", "", null, "", "", "Unloaded"));
+        objectID.put(-1, new IdToAsset("", -1, "Unloaded", "Unloaded", "", null, "", "", "Unloaded", "", "", ""));
     }
 
     /**
@@ -271,6 +354,84 @@ public class IdToAsset {
     }
 
     /**
+     * BagType of the object (a 0-9 enum; 6 = white bag, 8 = orange/ST bag -
+     * see docs/asset-pipeline.md). On an item this is which color bag it
+     * drops in; on a Bag-class object this is which color bag entity it is.
+     *
+     * @param id Id of the object.
+     * @return BagType, or -1 if unknown/not set.
+     */
+    public static int getBagType(int id) {
+        IdToAsset i = objectID.get(id);
+        if (i == null) return -1;
+        return i.bagType;
+    }
+
+    /**
+     * Tier of the object (e.g. "UT", "1".."15"), from its {@code <Tier>} tag.
+     *
+     * @param id Id of the object.
+     * @return Tier string, or "" if unknown/not set.
+     */
+    public static String getTier(int id) {
+        IdToAsset i = objectID.get(id);
+        if (i == null) return "";
+        return i.tier;
+    }
+
+    /**
+     * Flavor-text description of the object, from its {@code <Description>}
+     * tag (issue #109 - item tooltips). Not every object carries one.
+     *
+     * @param id Id of the object.
+     * @return Description string, or "" if unknown/not set.
+     */
+    public static String getDescription(int id) {
+        IdToAsset i = objectID.get(id);
+        if (i == null) return "";
+        return i.description;
+    }
+
+    /**
+     * Known ground-bag entity object ids for the two tracked BagTypes,
+     * verified against the live game the same way upstream Tomato's {@code
+     * LootBags} enum is (WHITE=1292, ORANGE=1295 - see {@code
+     * upstream/tomato:src/main/java/tomato/realmshark/enums/LootBags.java}).
+     * Used only as a fallback in {@link #findBagIconObjectType} when the
+     * XML-derived scan below finds nothing: soak testing against the real
+     * client (issue soak #113) showed the ground-bag entity's own {@code
+     * Object} XML entry does not reliably carry a matching {@code
+     * Class=Bag}+{@code BagType} pair, unlike an item's BagType (which does
+     * resolve correctly) - so the scan alone silently left {@code
+     * lootBagIcons} empty and the Loot panel's category header rendered no
+     * sprite at all.
+     */
+    private static final Map<Integer, Integer> KNOWN_BAG_ICON_IDS = Map.of(6, 1292, 8, 1295);
+
+    /**
+     * Finds the ground-bag entity ({@code <Class>Bag</Class>}) that
+     * self-identifies as the given BagType, e.g. the white/orange bag sprite
+     * the Loot panel uses as a category header. Prefers asset-derived data
+     * (real or {@code --fake}-registered); falls back to {@link
+     * #KNOWN_BAG_ICON_IDS} - and only when that id is actually a loaded
+     * object, so a minimal/synthetic asset set can't return a dangling id -
+     * when the scan finds no match.
+     *
+     * @param bagType BagType to find the bag entity for.
+     * @return that bag entity's object id, or null if none is loaded.
+     */
+    public static Integer findBagIconObjectType(int bagType) {
+        for (IdToAsset i : objectID.values()) {
+            if (i.id > 0 && "Bag".equals(i.clazz) && i.bagType == bagType) {
+                return i.id;
+            }
+        }
+        Integer known = KNOWN_BAG_ICON_IDS.get(bagType);
+        if (known != null && objectID.containsKey(known)) return known;
+        return null;
+    }
+
+    /**
      * Parses the projectile string to the number of projectiles the entity can shoot.
      *
      * @return List of parsed projectiles
@@ -337,7 +498,9 @@ public class IdToAsset {
      */
     public static int getIdProjectileMinDmg(int id, int projectileId) {
         IdToAsset i = objectID.get(id);
-        if (i == null) return -1;
+        if (i == null || i.projectiles == null || projectileId < 0 || projectileId >= i.projectiles.length) {
+            return -1;
+        }
         return i.projectiles[projectileId].min;
     }
 
@@ -350,7 +513,9 @@ public class IdToAsset {
      */
     public static int getIdProjectileMaxDmg(int id, int projectileId) {
         IdToAsset i = objectID.get(id);
-        if (i == null) return -1;
+        if (i == null || i.projectiles == null || projectileId < 0 || projectileId >= i.projectiles.length) {
+            return -1;
+        }
         return i.projectiles[projectileId].max;
     }
 
@@ -363,7 +528,9 @@ public class IdToAsset {
      */
     public static boolean getIdProjectileArmorPierces(int id, int projectileId) {
         IdToAsset i = objectID.get(id);
-        if (i == null) return false;
+        if (i == null || i.projectiles == null || projectileId < 0 || projectileId >= i.projectiles.length) {
+            return false;
+        }
         return i.projectiles[projectileId].ap;
     }
 
@@ -375,8 +542,20 @@ public class IdToAsset {
      */
     public static int getIdProjectileSlotType(int id) {
         IdToAsset i = objectID.get(id);
-        if (i == null) return 0;
+        if (i == null || i.projectiles == null || i.projectiles.length == 0) return 0;
         return i.projectiles[0].slotType;
+    }
+
+    /**
+     * Number of projectiles the object has data for (0 for a non-weapon).
+     *
+     * @param id Id of the object.
+     * @return Projectile count.
+     */
+    public static int getIdProjectileCount(int id) {
+        IdToAsset i = objectID.get(id);
+        if (i == null || i.projectiles == null) return 0;
+        return i.projectiles.length;
     }
 
     /**

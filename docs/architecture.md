@@ -16,6 +16,9 @@ the wire.
 | `src/main/java/bridge/PacketSerializer.java` | Packet → `{type,direction,time,data}` JSON envelope (Gson). |
 | `src/main/java/bridge/ObjectNames.java` | Synthetic `objectNames` envelope (enemy id → display name). |
 | `src/main/java/bridge/DpsBroadcaster.java` | Synthetic `dps` snapshot envelope (bridge-computed damage). |
+| `src/main/java/bridge/LootBagTypes.java` | Synthetic `lootBagTypes` envelope (item id → BagType, bag-entity ids incl. boosted, bag-color icon ids). |
+| `src/main/java/bridge/ItemInfo.java` | Synthetic `itemInfo` envelope (item id → name/tier/class/description/damage, for the item tooltip - issue #109). |
+| `src/main/java/bridge/EnchantNames.java` | Synthetic `enchantNames` envelope (enchant id → name, for the item tooltip). |
 | `src/main/java/bridge/sprites/SpritePackService.java` | `spritePack` request/response + one-shot broadcast. |
 | `src/main/java/bridge/FakePacketSource.java` | `--fake` synthetic packet source (same `Register` pipeline). |
 | `src/main/java/packets/packetcapture/PacketProcessor.java` | Sniffer → decode → `Register` (pre-existing upstream). |
@@ -113,7 +116,9 @@ Tracing one incoming packet (say a `DamagePacket`) from wire to render:
  flush(): drainTo(list) → join into {"batch":[ … ]} → server.send(...)
    │                                                  PacketBridge.java:197
    ▼   (a 50 ms-polling timer also enqueues a `dps` snapshot when dpsDirty,
-   ▼    else on a 250 ms heartbeat — see bridge-server.md)
+   ▼    else on a 250 ms heartbeat; a 2 s poll also (re-)enqueues `lootBagTypes`
+   ▼    / `itemInfo` once IdToAsset is loaded, and `enchantNames` unconditionally
+   ▼    — see bridge-server.md)
  BridgeServer.broadcast(json)  ──►  WebSocket 127.0.0.1:47474
  ── TIER 3: Electron main process ───────────────────────────────────────────
    ▼
@@ -127,8 +132,10 @@ Tracing one incoming packet (say a `DamagePacket`) from wire to render:
    ▼
  DpsTracker.ingest(batch)   switch(env.type){ … }     DpsTracker.ts:82
  EntityRegistry              switch(env.type){ … }     EntityRegistry.tsx:129
+ LootTracker.ingest(batch)   switch(env.type){ … }     LootTracker.ts
+ ItemInfoProvider            switch(env.type){ … }     ItemInfoProvider.tsx
    ▼
- panels re-render (DPS list, character sprites, …)
+ panels re-render (DPS list, character sprites, loot log, …)
 ```
 
 Three facts that trip people up:
@@ -136,10 +143,11 @@ Three facts that trip people up:
 - **Serialization runs on the capture thread; sending runs on a timer thread.**
   The queue between them means a slow/dead client can never stall capture; on
   overflow the *oldest* message is dropped, not the newest (`PacketBridge.java:189`).
-- **A batch mixes envelope kinds.** The `objectNames` and `dps` envelopes are
-  enqueued into the *same* queue as packet envelopes, so they arrive **inside**
-  the `{"batch":[…]}` array, interleaved with real packets. Renderer consumers
-  branch on each envelope's `type` string (`DpsTracker.ts:85`).
+- **A batch mixes envelope kinds.** The `objectNames`, `dps`, `lootBagTypes`,
+  `itemInfo`, and `enchantNames` envelopes are enqueued into the *same* queue
+  as packet envelopes, so they arrive **inside** the `{"batch":[…]}` array,
+  interleaved with real packets. Renderer consumers branch on each envelope's
+  `type` string (`DpsTracker.ts:85`, `LootTracker.ts`, `ItemInfoProvider.tsx`).
 - **The hello and `spritePack` messages are NOT batched** — they are sent
   directly (`conn.send` / `server.send`) and appear as top-level messages the
   client dispatches before it ever looks at `msg.batch`.
@@ -174,7 +182,7 @@ client validates hello.service == "realmshark-bridge"   bridgeClient.ts:67
    ├─ mismatch → close (some other process is squatting the port)
    └─ match    → status "connected"; fire onConnected(send)
                     onConnected → requestSpritePack(send)   index.ts:252
-       thereafter: server broadcasts batches / dps / objectNames continuously;
+       thereafter: server broadcasts batches / dps / objectNames / lootBagTypes continuously;
                    client may send spritePackRequest at will
 client drops ──► reconnect after 2000 ms   bridgeClient.ts:97
 ```
@@ -201,7 +209,7 @@ only on a breaking envelope/handshake change.
 
 The **only** framing for the packet stream. `flush()` drains the queue and joins
 already-serialized envelope strings into one array (`PacketBridge.java:202-209`). An
-empty tick sends nothing. Each element is one of the three envelope shapes below.
+empty tick sends nothing. Each element is one of the envelope shapes below.
 The client reads `msg.batch` (`bridgeClient.ts:89`) and forwards the raw array to
 the renderer as `IPC.packetBatch`.
 
@@ -294,7 +302,128 @@ damage is already folded into the owning player by the engine. `null` is returne
 `DpsBroadcaster.java:130-153` are the protocol; consumed at `DpsTracker.ts:101`.
 The engine internals are [dps-engine.md](dps-engine.md).
 
-### 4f. Sprite pack — request/response + one-shot broadcast (NOT batched)
+### 4f. `lootBagTypes` envelope (inside a batch) — synthetic, re-sent periodically
+
+Resolves which item ids are BagType 6 (white bag) / 8 (orange/ST bag) — the
+Loot panel's session log (issue #105) — from the same extracted asset data
+`ObjectNames` reads, independent of the sprite pack's atlas-readiness gate
+(this data needs no atlas, only `IdToAsset`; see `asset-pipeline.md`):
+
+```json
+{
+  "type": "lootBagTypes",
+  "direction": "internal",
+  "time": 1720000000000,
+  "data": {
+    "bagTypeTable": { "<itemObjectType>": 6 },
+    "lootBagIcons": { "6": <bagObjectType>, "8": <bagObjectType> },
+    "lootBagObjectTypes": { "<bagObjectType>": 6, "<bagObjectType>": 8 },
+    "itemNames": { "<itemObjectType>": "<display name>" }
+  }
+}
+```
+
+`bagTypeTable` maps a **string** item objectType to its BagType (only 6/8
+entries — untracked BagTypes are omitted, and the ground-bag entities
+themselves, `Class=Bag`, are excluded so they can't be mistaken for
+pickupable items). `lootBagObjectTypes` is the complement: every `Class=Bag`
+**entity** objectType for the tracked colors (regular *and* boosted variants),
+mapped to its BagType — the set the Loot panel's drop tracker watches for in
+`UpdatePacket.newObjects` to read a dropped bag's contents (its
+`INVENTORY_0..7` items + `UNIQUE_DATA_STRING` enchants). `lootBagIcons` is a
+single representative bag entity per color — the sprite the Loot panel renders
+as a category header, resolved through the same `objectType → atlas rect` path
+as any other sprite (`sprites/Sprite.tsx`, no special-casing). `itemNames` is
+`IdToAsset.objectName` for the tracked items (the always-visible inline label).
+Built by `LootBagTypes.envelopeJson()` (`bridge/LootBagTypes.java`).
+
+**Unlike the sprite pack (one-shot broadcast), this is re-sent on every 2 s
+readiness poll** once `IdToAsset.loadedObjectCount() > 1`
+(`PacketBridge.maybeBroadcastLootBagTypes`) rather than latched to a single
+broadcast — the payload is tiny (two small id maps), and re-sending is the
+simplest way to guarantee a client that connects *after* the first broadcast
+still receives it, with no separate request/response message needed (unlike
+`spritePackRequest` below). Consumed at `LootTracker.ingest`
+(`overlay/src/renderer/src/loot/LootTracker.ts`).
+
+### 4g. `itemInfo` envelope (inside a batch) — synthetic, re-sent periodically
+
+Item metadata for the overlay's item hover tooltip (`ItemSprite` - issue
+#109): display name, tier, class, description, and weapon damage range per
+objectType, from the same extracted asset data `LootBagTypes` reads (see
+`asset-pipeline.md`'s "Item info" section for the new `<Tier>`/`<Description>`
+extraction):
+
+```json
+{
+  "type": "itemInfo",
+  "direction": "internal",
+  "time": 1720000000000,
+  "data": {
+    "names": { "<objectType>": "<display name>" },
+    "tiers": { "<objectType>": "<tier>" },
+    "classes": { "<objectType>": "<asset Class>" },
+    "descriptions": { "<objectType>": "<description>" },
+    "minDamage": { "<objectType>": 10 },
+    "maxDamage": { "<objectType>": 20 }
+  }
+}
+```
+
+Every table is keyed by **string** objectType and only contains ids that have
+a non-empty value for that field - a missing key means "unresolved", not
+"empty string"/"zero". `minDamage`/`maxDamage` are present only for objectTypes
+with projectile data at all (weapons), read from `IdToAsset`'s existing
+projectile getters, slot 0. Built by `ItemInfo.envelopeJson()`
+(`bridge/ItemInfo.java`), cached the same way as `lootBagTypes` and re-sent on
+the same 2 s readiness poll once `IdToAsset.loadedObjectCount() > 1`
+(`PacketBridge.maybeBroadcastItemInfo`) - same "tiny payload, simplest way to
+reach a late-connecting client" rationale as `lootBagTypes` (4f). Consumed by
+`ItemInfoProvider` (`overlay/src/renderer/src/items/ItemInfoProvider.tsx`).
+
+### 4h. `enchantNames` envelope (inside a batch) — synthetic, re-sent periodically
+
+Enchant id → display name, for the item tooltip's enchantment list on an
+equipped item (issue #109):
+
+```json
+{
+  "type": "enchantNames",
+  "direction": "internal",
+  "time": 1720000000000,
+  "data": {
+    "names": { "<enchantId>": "<display name>" }
+  }
+}
+```
+
+Reflects `bridge.dps.ParseEnchants.ENCHANTS` (loaded from
+`assets/xml/enchantments.xml` - see [dps-engine.md](dps-engine.md)), built by
+`EnchantNames.envelopeJson()` (`bridge/EnchantNames.java`). Unlike every other
+synthetic envelope here, there's no explicit `ready()` check gating it - but
+that does **not** mean the map is final by construction. `ParseEnchants`'s
+static initializer reads its XML file synchronously the first time the class
+is referenced, which on a real (non-`--fake`) machine can be this envelope's
+own first broadcast (2s after bridge startup), well before `ObjectNames`'s
+background extraction thread has finished writing that file - the same race
+`CharacterClass.reload()` already guards against for `players.xml`. `bridge.dps.ParseEnchants#reload`
+(called from `ObjectNames.init` once extraction completes) re-reads the file,
+and `EnchantNames.envelopeJson()` tracks `ENCHANTS.size()` (like `itemInfo`/
+`lootBagTypes` track `loadedObjectCount()`) to rebuild its cached envelope
+when a reload changes it, both under `ParseEnchants.class`'s lock so a reload
+can't race the envelope build's read of the map. Still re-sent on the same
+2 s poll as `itemInfo`/`lootBagTypes` (no separate request/response). Consumed
+by `ItemInfoProvider`, same as `itemInfo`.
+
+The *item's* enchant data itself is not a separate envelope - `UNIQUE_DATA_STRING`
+(StatType 80) already crosses the wire as an ordinary stat on every player's
+`UpdatePacket`/`NewTickPacket` (`PacketSerializer`'s blanket Gson reflection,
+no allowlist), so the overlay decodes it client-side
+(`overlay/src/renderer/src/items/enchantDecode.ts`, a TypeScript port of
+`bridge.dps.ParseEnchants#extractEnchantIds` - the six-bit/base64url decode
+needs no XML) rather than the bridge re-shipping already-available data.
+
+### 4i. Sprite pack — request/response + one-shot broadcast (NOT batched)
 
 The only **client → server** message today:
 
@@ -346,6 +475,9 @@ re-asking. The client handles a top-level `spritePack` message
 | packet envelope | S→C | inside `batch` | `PacketSerializer` |
 | `objectNames` | S→C | inside `batch` | `ObjectNames` |
 | `dps` | S→C | inside `batch` | `DpsBroadcaster` |
+| `lootBagTypes` | S→C | inside `batch`, re-sent every 2s poll | `LootBagTypes` |
+| `itemInfo` | S→C | inside `batch`, re-sent every 2s poll | `ItemInfo` |
+| `enchantNames` | S→C | inside `batch`, re-sent every 2s poll | `EnchantNames` |
 | `spritePackRequest` | C→S | top-level | `spritePack.ts` |
 | `spritePack` | S→C | top-level (reply or broadcast) | `SpritePackService` |
 

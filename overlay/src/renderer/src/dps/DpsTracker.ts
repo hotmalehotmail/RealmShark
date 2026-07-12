@@ -1,4 +1,5 @@
 import type { PacketEnvelope } from '../../../shared/ipc'
+import { equipmentRarityFromUniqueDataString } from '../sprites/enchantRarity'
 import {
   MAX_HP_STAT_TYPE_NUM,
   NAME_STAT_TYPE_NUM,
@@ -49,6 +50,7 @@ const SKIN_ID_STAT_TYPE_NUM = 25
 const INVENTORY_0_STAT_TYPE_NUM = 8
 const CLOTHING_DYE_STAT_TYPE_NUM = 32
 const ACCESSORY_DYE_STAT_TYPE_NUM = 33
+const UNIQUE_DATA_STRING_STAT_TYPE_NUM = 80 // per-slot encoded enchant data - see sprites/enchantRarity.ts
 
 /** A player's cosmetic loadout, frozen into history at the moment their instance ends. */
 export interface PlayerCosmetics {
@@ -56,6 +58,10 @@ export interface PlayerCosmetics {
   skin?: number
   /** 4 equipped slots (INVENTORY_0..3). Empty slots are `<= 0`. */
   equipment?: number[]
+  /** Rarity-border tier (0-4) per equipped slot, decoded from UNIQUE_DATA_STRING - see sprites/enchantRarity.ts. */
+  equipmentRarity?: number[]
+  /** 4 equipped slots' raw encoded enchant strings (UNIQUE_DATA_STRING), same order as `equipment` - frozen so a retained history entry's gear tooltip still shows enchantments after the live EntityRegistry has moved on to a later instance. */
+  enchantSlots?: string[]
   clothingDye?: number
   accessoryDye?: number
 }
@@ -338,7 +344,7 @@ export class DpsTracker {
   private mergeCosmetics(
     objectId: number,
     objectType: number,
-    stats?: { statTypeNum: number; statValue?: number }[]
+    stats?: { statTypeNum: number; statValue?: number; stringStatValue?: string }[]
   ): void {
     if (!stats || stats.length === 0) return
     let rec = this.playerCosmetics.get(objectId)
@@ -354,6 +360,10 @@ export class DpsTracker {
         rec = rec ?? { objectType }
         if (!rec.equipment) rec.equipment = [-1, -1, -1, -1]
         rec.equipment[s.statTypeNum - INVENTORY_0_STAT_TYPE_NUM] = s.statValue
+      } else if (s.statTypeNum === UNIQUE_DATA_STRING_STAT_TYPE_NUM && s.stringStatValue) {
+        rec = rec ?? { objectType }
+        rec.equipmentRarity = equipmentRarityFromUniqueDataString(s.stringStatValue)
+        rec.enchantSlots = s.stringStatValue.split(',')
       } else if (s.statTypeNum === CLOTHING_DYE_STAT_TYPE_NUM && s.statValue !== undefined) {
         rec = rec ?? { objectType }
         rec.clothingDye = s.statValue
@@ -937,7 +947,13 @@ export class DpsTracker {
     const cosmetics = new Map<number, PlayerCosmetics>()
     for (const row of rows) {
       const rec = this.playerCosmetics.get(row.objectId)
-      if (rec) cosmetics.set(row.objectId, { ...rec, equipment: rec.equipment?.slice() })
+      if (rec)
+        cosmetics.set(row.objectId, {
+          ...rec,
+          equipment: rec.equipment?.slice(),
+          equipmentRarity: rec.equipmentRarity?.slice(),
+          enchantSlots: rec.enchantSlots?.slice()
+        })
     }
     return cosmetics
   }

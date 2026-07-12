@@ -1,0 +1,104 @@
+name: conflict-watch
+
+# Event-driven conflict recovery (mechanisms §6.5). A conflicted agent PR emits NO
+# pull_request workflow runs (GitHub can't build the merge ref, so ci/review never
+# start, so the workflow_run-triggered gatekeeper never hears about it) — the loop's
+# original conflict handling was parked behind events a conflicted PR can never
+# produce. This workflow listens on the two events a conflict DOES produce, and
+# re-fires the ORIGINATING build agent in FIX MODE with a rebase instruction
+# (`.github/scripts/rebase-refire.sh` — the one owner of the rebase budget):
+#
+#   1. `pull_request_target` — fires even for a conflicted PR because it runs in
+#      the BASE branch's context (no merge ref needed). Catches a PR that is
+#      born conflicted (opened after a sibling merged), the case where every
+#      pull_request-triggered workflow is silently skipped.
+#   2. `push` to staging — the moment a sibling merge CREATES a conflict on the
+#      other open agent PRs (their own events never fire; the base moved, not
+#      their head). Scans every open same-repo claude/* PR.
+#
+# sweep.yml re-uses the same script as the level-triggered backstop (dropped
+# events), and resume.yml's `agent:retry` resets this budget too.
+#
+# SECURITY — this uses `pull_request_target`, which runs with secrets even for
+# fork-opened PRs, so two hard rules apply (do not weaken them in review):
+#   - The job `if` excludes fork PRs up front (same-repo claude/* heads only —
+#     the same boundary gatekeeper/sweep use; pushing a claude/* branch in this
+#     repo already requires write access).
+#   - NOTHING from the PR head is ever checked out or executed. The checkout
+#     below is the BASE branch (pull_request_target's default), taken only for
+#     this script; the job otherwise reads PR metadata via the API and POSTs
+#     the routine /fire endpoint.
+# review.yml stays `on: pull_request` (fork PRs get no secrets there) — that
+# invariant is what keeps fork PRs unmergeable; nothing here changes it.
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+  push:
+    branches: [staging]
+
+permissions:
+  contents: read
+  issues: write # escalation label + soak lookup
+  pull-requests: write # re-fire marker comments
+
+# One global gate: a push-mode scan and a PR-mode run reading/writing the same
+# markers must not interleave (both count the budget before posting to it).
+concurrency:
+  group: conflict-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    # push-mode always runs; PR-mode only for same-repo claude/* PRs into staging.
+    if: >
+      github.event_name == 'push' ||
+      (
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        startsWith(github.event.pull_request.head.ref, 'claude/') &&
+        github.event.pull_request.base.ref == 'staging'
+      )
+    steps:
+      # Base-branch checkout (pull_request_target default; the pushed staging ref in
+      # push mode) — ONLY to obtain the trusted copy of the re-fire script.
+      - uses: actions/checkout@v4
+
+      - name: Re-fire rebase FIX MODE on conflicted agent PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          FIRE_URL: ${{ secrets.ROUTINE_FIRE_URL }}
+          FIRE_TOKEN: ${{ secrets.ROUTINE_FIRE_TOKEN }}
+          MAINTAINER: ${{ vars.MAINTAINER_HANDLE }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_HEAD: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "push" ]; then
+            # A merge just moved staging: every open agent PR may have gone DIRTY.
+            PRS="$(gh pr list --repo "$REPO" --base staging --state open \
+              --json number,headRefName,isCrossRepository \
+              -q '.[] | select(.isCrossRepository == false)
+                      | select(.headRefName | startswith("claude/"))
+                      | "\(.number) \(.headRefName)"' 2>/dev/null || true)"
+            if [ -z "$PRS" ]; then
+              echo "No open agent PRs to scan."
+              exit 0
+            fi
+            while read -r NUM HEAD; do
+              [ -z "$NUM" ] && continue
+              # `|| true`: a single failed /fire must not abort the scan and silently
+              # skip the remaining conflicted siblings (mirrors sweep's DIRTY branch).
+              NUM="$NUM" HEAD="$HEAD" DEDUP=1 bash .github/scripts/rebase-refire.sh </dev/null || true
+            done <<< "$PRS"
+          else
+            # PR-mode. `synchronize` = a fresh head push, i.e. the previous rebase
+            # attempt (if any) has concluded — skip the same-base dedupe so a failed
+            # resolution retries (budgeted). opened/reopened dedupe normally.
+            DEDUP=1
+            [ "$EVENT_ACTION" = "synchronize" ] && DEDUP=0
+            NUM="$PR_NUM" HEAD="$PR_HEAD" DEDUP="$DEDUP" bash .github/scripts/rebase-refire.sh
+          fi

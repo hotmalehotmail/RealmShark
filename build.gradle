@@ -57,6 +57,18 @@ task runBridge(type: JavaExec) {
     }
 }
 
+// Diagnostic-only entry point: reports whether the enchant pip/per-enchantment
+// icon art is reachable in the extraction pipeline, for the follow-up sprite
+// feature issue #107 informs. Never starts the bridge server.
+//   ./gradlew probeAssets > probe-report.txt
+task probeAssets(type: JavaExec) {
+    group = 'application'
+    description = 'Reports Texture2D/spritesheet/enchantments.xml asset names for enchant pip/icon extraction feasibility (bridge.PacketBridge --probe-assets).'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'bridge.PacketBridge'
+    args '--probe-assets'
+}
+
 // Self-contained fat jar for just the bridge, so the overlay app can bundle
 // and spawn it without the user needing a separate RealmShark build.
 //   ./gradlew bridgeJar

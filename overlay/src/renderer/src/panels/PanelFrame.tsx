@@ -1,5 +1,6 @@
 import { useRef } from 'react'
 import type { PanelInstance, PanelSize } from '../../../shared/panels'
+import { Button } from '../ui/Button'
 import { anchorFromPointer, panelStyle, type SizePx } from './anchor'
 import type { PanelSpec } from './registry'
 
@@ -42,19 +43,38 @@ function PanelFrame({
     const grabOffsetX = e.clientX - rect.left
     const grabOffsetY = e.clientY - rect.top
 
+    // Drag imperatively: write the moved panel's position straight to the DOM on
+    // each mousemove rather than round-tripping through React state. A state
+    // update per pointer event would re-render PanelCanvas and every panel's
+    // (sprite-rendering) content ~60-125x/sec, which is what made dragging lag.
+    // The position is committed to state once, on drop (handleUp) - that
+    // persists the move and triggers PanelCanvas's debounced layout save. During
+    // the move phase PanelCanvas never re-renders, so these direct writes are
+    // safe from being clobbered by a reconcile.
+    let last = { x: panel.anchor.x, y: panel.anchor.y }
     const handleMove = (moveEvent: MouseEvent): void => {
-      if (!draggingRef.current) return
-      const { x, y } = anchorFromPointer(
+      const el = frameRef.current
+      if (!draggingRef.current || !el) return
+      last = anchorFromPointer(
         moveEvent.clientX - grabOffsetX,
         moveEvent.clientY - grabOffsetY,
         canvasSize
       )
-      onDrag(panel.id, x, y)
+      const s = panelStyle(
+        { ...panel.anchor, x: last.x, y: last.y },
+        spec.sizes[panel.size],
+        canvasSize
+      )
+      el.style.left = String(s.left)
+      el.style.top = String(s.top)
+      el.style.width = typeof s.width === 'number' ? `${s.width}px` : String(s.width ?? '')
+      el.style.height = typeof s.height === 'number' ? `${s.height}px` : String(s.height ?? '')
     }
     const handleUp = (): void => {
       draggingRef.current = false
       window.removeEventListener('mousemove', handleMove)
       window.removeEventListener('mouseup', handleUp)
+      onDrag(panel.id, last.x, last.y)
     }
 
     window.addEventListener('mousemove', handleMove)
@@ -70,7 +90,7 @@ function PanelFrame({
   return (
     <div
       ref={frameRef}
-      className={`flex flex-col overflow-hidden rounded-lg border border-white/10 bg-black/70 shadow-lg backdrop-blur-sm ${
+      className={`flex flex-col overflow-hidden rounded-lg border border-edge bg-panel shadow-lg backdrop-blur-sm ${
         interactive ? '' : 'pointer-events-none'
       }`}
       style={{
@@ -81,20 +101,19 @@ function PanelFrame({
       onMouseDown={interactive ? () => onBringToTop(panel.id) : undefined}
     >
       <div
-        className={`flex shrink-0 items-center justify-between bg-white/5 px-2 py-1 ${
+        className={`flex shrink-0 items-center justify-between bg-surface px-2 py-1 ${
           interactive ? 'cursor-move' : ''
         }`}
         onMouseDown={interactive ? startDrag : undefined}
       >
-        <span className="truncate text-xs font-medium text-white/70">{spec.title}</span>
+        <span className="truncate text-xs font-medium text-fg-muted">{spec.title}</span>
         {interactive ? (
           <div className="ml-2 flex shrink-0 items-center gap-1">
-            <button
-              className={`rounded px-1 text-[10px] uppercase ${
-                panel.pinned
-                  ? 'text-emerald-400 hover:text-emerald-300'
-                  : 'text-white/40 hover:text-white/80'
-              }`}
+            <Button
+              variant="ghost"
+              size="xs"
+              active={panel.pinned}
+              className="uppercase"
               onMouseDown={(e) => e.stopPropagation()}
               onClick={() => onTogglePin(panel.id)}
               title={
@@ -104,25 +123,29 @@ function PanelFrame({
               }
             >
               {panel.pinned ? '★ pin' : 'pin'}
-            </button>
-            <button
-              className="rounded px-1 text-[10px] uppercase text-white/40 hover:text-white/80"
+            </Button>
+            <Button
+              variant="ghost"
+              size="xs"
+              className="uppercase"
               onMouseDown={(e) => e.stopPropagation()}
               onClick={() => onCycleSize(panel.id)}
               title="Cycle panel size"
             >
               {panel.size}
-            </button>
+            </Button>
           </div>
         ) : (
           panel.pinned && (
-            <span className="ml-2 shrink-0 text-[10px] text-emerald-400/60" title="Pinned">
+            <span className="ml-2 shrink-0 text-2xs text-success/60" title="Pinned">
               ★
             </span>
           )
         )}
       </div>
-      <div className="min-h-0 flex-1 overflow-auto p-2">
+      {/* Base typography for every panel body lives here (with ConfigWindow's
+          root, the only two places it's set) — panels must not re-declare it. */}
+      <div className="min-h-0 flex-1 overflow-auto p-2 text-sm text-fg">
         <Content size={panel.size} />
       </div>
     </div>

@@ -10,10 +10,21 @@ import {
   type DyeMotion,
   type DyeRoleInput
 } from './dyeBake'
+import { LruCache } from './lruCache'
 
 // animTable stores this many ints per animation frame:
 // [x, y, w, h, spriteAtlasId, maskX, maskY, maskW, maskH].
 const FRAME_STRIDE = 9
+
+// Cache caps. The crop/dye caches key on a combinatorial space (objectType ×
+// size × dye × enchant × animation frame), so an unbounded Map grew monotonically
+// with every distinct player loadout seen - the renderer heap's dominant leak
+// over a long session. LRU eviction bounds them; the working set of on-screen +
+// retained-history sprites sits well under these caps, so eviction only reclaims
+// loadouts that have left view. Bakes hold ImageData (far heavier per entry than a
+// data-URL string) and are rarer (animated-textile dyes only), hence the tighter cap.
+const CROP_CACHE_MAX = 2048
+const BAKE_CACHE_MAX = 256
 
 // Animated-cloth motion, driven by a dye's <AnimatedDye type speed …> (see
 // animDyeTable). `type` picks the motion; the sign of `speed` its direction:
@@ -34,11 +45,11 @@ const FRAME_STRIDE = 9
 export function SpriteProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
   const [pack, setPack] = useState<SpritePack>({ ready: false })
   const atlasesRef = useRef<Record<string, ImageBitmap | HTMLImageElement>>({})
-  const cacheRef = useRef<Map<string, string>>(new Map())
+  const cacheRef = useRef<LruCache<string, string>>(new LruCache(CROP_CACHE_MAX))
   // Baked static composite + per-region motion masks for animated-textile
   // dyes, keyed on everything that affects the bake (NOT the continuous
   // scroll/rotate phase - that's applied live, per frame, by the renderer).
-  const bakeCacheRef = useRef<Map<string, DyeBake>>(new Map())
+  const bakeCacheRef = useRef<LruCache<string, DyeBake>>(new LruCache(BAKE_CACHE_MAX))
   // Bumped when an atlas finishes decoding so consumers re-request (a sprite
   // that returned null because its atlas wasn't loaded yet can now be cropped).
   const [, setGen] = useState(0)
@@ -104,6 +115,21 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       off()
     }
   }, [applyPack])
+
+  // The game closed (overlay detach): drop the crop/bake caches so a play
+  // session's accumulated sprites don't stay resident until the next atlas
+  // reload. Already-rendered data-URLs are self-contained strings, so clearing
+  // the memo only forces re-derivation on next render (the overlay hides on
+  // detach anyway); atlasesRef is asset data, kept for the next attach.
+  useEffect(() => {
+    const off = window.overlay.onOverlayDetach(() => {
+      cacheRef.current.clear()
+      bakeCacheRef.current.clear()
+    })
+    return () => {
+      off()
+    }
+  }, [])
 
   // ---- Animation frame helpers (base character sprites) --------------------
   // A base objectType's frames live in animTable (9 ints/frame); static sprites

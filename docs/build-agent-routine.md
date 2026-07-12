@@ -59,6 +59,8 @@ Follow it.
 FIRST, pick your mode from the input:
 - If the input begins with `FIX MODE`, follow "FIX MODE" below — you are iterating on
   an EXISTING PR branch, not starting fresh.
+- If the input begins with `TRIAGE MODE`, follow "TRIAGE MODE" below — a review PASSED
+  but left medium/low findings for you to fix or decline on an EXISTING PR branch.
 - Otherwise the input is a new issue (a maintainer labeled it `agent:build` for a
   feature or `agent:fix` for a bug) — follow "BUILD MODE" below.
 
@@ -101,7 +103,27 @@ new branch and do NOT open a new PR.
 
 Success = your fixes pushed to the existing branch, with CI + review re-running.
 
-## Guardrails (BOTH modes)
+## TRIAGE MODE — decide the non-blocking findings on a passing review (never open a new PR)
+The review PASSED (no blocking issues) but left medium/low findings. The input names the
+existing PR, its head branch, and the findings. Do NOT create a new branch or a new PR.
+1. Fetch and check out the named existing head branch; read the full PR conversation.
+2. For EACH finding, make a deliberate call — **your judgment is final**:
+   - **Fix** it if it is worthwhile: edit + commit.
+   - **Decline** it if it is not: REPLY to that review comment with a brief reason. Do not
+     silently ignore any finding.
+3. Verify what you can locally (overlay typecheck/lint; bridge compile).
+4. Finish based on what you did:
+   - If you **pushed fixes**: just push to the same branch. The re-review re-evaluates the
+     new head — do NOT post the marker below. Never open a new PR.
+   - If you made **no code changes** (declined everything remaining): post a PR comment whose
+     body ends with the EXACT marker `<!-- session-triaged: <HEAD_SHA> -->`, where `<HEAD_SHA>`
+     is `git rev-parse HEAD`. That marker is what tells the gatekeeper triage is complete and
+     lets the merge proceed.
+
+Success = every finding fixed or explicitly declined, and either your fixes pushed OR the
+`session-triaged` marker posted.
+
+## Guardrails (ALL modes)
 Never touch `bridge` directly, never publish a release, never edit
 `.github/workflows/`.
 ```
@@ -127,5 +149,13 @@ Never touch `bridge` directly, never publish a release, never edit
   we scope the review agent to pipeline PRs.
 - **Watchability:** the `/fire` response includes a session URL; `implement.yml`
   posts it on the issue so you can watch or steer the run.
+- **Session interlock (`SessionEnd` hook).** The gatekeeper won't auto-merge a PR until the
+  authoring session has *ended*, proven by a `session-done/<head-sha>` marker branch the
+  committed `.claude/hooks/session-done-marker.sh` hook pushes on `SessionEnd` (see
+  `docs/dev-loop-mechanisms.md §7.2`). It closes the PR #115 race where a still-running fix
+  agent's late push was stranded after auto-merge. **The hook registers at session start, so it
+  only takes effect once `.claude/settings.json` is present on the branch the Routine checks out
+  first** (the repo default) — i.e. it goes live for the Routine once the interlock change
+  reaches `bridge`, not merely `staging`.
 - **Limits:** during the research preview, routine runs draw down your subscription
   and have a daily run cap; GitHub/API triggers have hourly caps.

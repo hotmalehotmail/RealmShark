@@ -1,5 +1,7 @@
 package bridge;
 
+import assets.AssetExtractor;
+import assets.resextractor.AssetProbe;
 import bridge.sprites.SpritePackService;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -28,9 +30,12 @@ import java.util.concurrent.TimeUnit;
  * during dungeon bursts and aligns naturally with a UI render frame.
  *
  * <pre>
- * Usage: java bridge.PacketBridge [--port &lt;n&gt;] [--fake]
- *   --port &lt;n&gt;  port to listen on (default 47474)
- *   --fake      emit synthetic packets instead of sniffing (no game/Npcap needed)
+ * Usage: java bridge.PacketBridge [--port &lt;n&gt;] [--fake] [--probe-assets]
+ *   --port &lt;n&gt;      port to listen on (default 47474)
+ *   --fake          emit synthetic packets instead of sniffing (no game/Npcap needed)
+ *   --probe-assets  print the enchant pip/icon extraction feasibility report
+ *                    (see assets.resextractor.AssetProbe / docs/asset-pipeline.md)
+ *                    and exit - does not start the bridge server.
  * </pre>
  */
 public class PacketBridge {
@@ -46,6 +51,9 @@ public class PacketBridge {
     private final ObjectNames objectNames = new ObjectNames();
     private final DpsBroadcaster dps = new DpsBroadcaster();
     private final SpritePackService sprites = new SpritePackService();
+    private final LootBagTypes lootBagTypes = new LootBagTypes();
+    private final ItemInfo itemInfo = new ItemInfo();
+    private final EnchantNames enchantNames = new EnchantNames();
     private final BlockingQueue<String> queue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
     // Set on the sniffer thread when a damage packet lands, so the DPS scheduler
     // pushes a fresh snapshot within DPS_COALESCE_MS instead of waiting a full tick.
@@ -80,6 +88,7 @@ public class PacketBridge {
     public static void main(String[] args) {
         int port = DEFAULT_PORT;
         boolean fake = false;
+        boolean probeAssets = false;
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "--port":
@@ -88,9 +97,16 @@ public class PacketBridge {
                 case "--fake":
                     fake = true;
                     break;
+                case "--probe-assets":
+                    probeAssets = true;
+                    break;
                 default:
                     System.err.println("[bridge] unknown argument: " + args[i]);
             }
+        }
+        if (probeAssets) {
+            AssetProbe.run(AssetExtractor.assetFile(), System.out);
+            return;
         }
         new PacketBridge(port).start(fake);
     }
@@ -154,6 +170,25 @@ public class PacketBridge {
         flusher.scheduleAtFixedRate(
             this::maybeBroadcastSpritePack, 2000, 2000, TimeUnit.MILLISECONDS);
 
+        // Same readiness-poll pattern as the sprite pack above, but for the
+        // loot BagType metadata specifically - it needs only IdToAsset (no
+        // atlas PNG), so it can become ready and broadcast well before (or
+        // without) the full sprite pack ever does.
+        flusher.scheduleAtFixedRate(
+            this::maybeBroadcastLootBagTypes, 2000, 2000, TimeUnit.MILLISECONDS);
+
+        // Same readiness-poll pattern, for the item-info table (name/tier/class/
+        // description/damage per objectType) the item tooltip (issue #109) reads.
+        flusher.scheduleAtFixedRate(
+            this::maybeBroadcastItemInfo, 2000, 2000, TimeUnit.MILLISECONDS);
+
+        // Enchant id -> name table for the item tooltip's enchantment list. No
+        // readiness gate needed (see EnchantNames' docstring) - just re-sent
+        // periodically like the tables above, so a late-connecting client still
+        // gets it with no separate request message.
+        flusher.scheduleAtFixedRate(
+            () -> enqueue(enchantNames.envelopeJson()), 2000, 2000, TimeUnit.MILLISECONDS);
+
         // 4. Start the packet source.
         if (fake) {
             System.out.println("[bridge] running in FAKE mode (no sniffing)");
@@ -183,6 +218,43 @@ public class PacketBridge {
             spriteNotReadyLogs++;
             System.out.println("[bridge] sprite pack not ready yet (" + sprites.diagnostic() + ")");
         }
+    }
+
+    private boolean lootBagTypesLogged = false;
+
+    /**
+     * Once object assets finish loading, broadcast the loot BagType table.
+     * Unlike the one-shot sprite pack (which has an on-demand request/response
+     * fallback for a late-connecting client), this keeps re-broadcasting on
+     * every poll - the payload is tiny (two small id maps), and it's the
+     * simplest way to guarantee a client that connects after the first
+     * broadcast still gets it, with no separate request message needed.
+     */
+    private void maybeBroadcastLootBagTypes() {
+        if (!lootBagTypes.ready()) return;
+        if (!lootBagTypesLogged) {
+            lootBagTypesLogged = true;
+            System.out.println("[bridge] loot bag types ready - broadcasting to clients");
+        }
+        enqueue(lootBagTypes.envelopeJson());
+    }
+
+    private boolean itemInfoLogged = false;
+
+    /**
+     * Once object assets finish loading, broadcast the item-info table (name/
+     * tier/class/description/damage per objectType) the item tooltip (issue
+     * #109) reads. Same re-broadcast-forever rationale as
+     * {@link #maybeBroadcastLootBagTypes()} - simplest way to guarantee a late
+     * client still gets it, and the payload stays small.
+     */
+    private void maybeBroadcastItemInfo() {
+        if (!itemInfo.ready()) return;
+        if (!itemInfoLogged) {
+            itemInfoLogged = true;
+            System.out.println("[bridge] item info ready - broadcasting to clients");
+        }
+        enqueue(itemInfo.envelopeJson());
     }
 
     /** Enqueue a JSON message, dropping the oldest if the queue is full so capture never blocks. */

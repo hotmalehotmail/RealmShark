@@ -36,7 +36,8 @@ moving parts, each with its own doc below.
 - **[bridge-server.md](bridge-server.md)** — the WebSocket bridge: `PacketBridge`
   (entry point + flush/broadcast loop), `BridgeServer`, `PacketSerializer` (the
   Gson wire-format contract and its gotchas), `DpsBroadcaster`, `ObjectNames`,
-  and `FakePacketSource` (`--fake` dev mode).
+  `LootBagTypes` (BagType 6/8 loot categorization), and `FakePacketSource`
+  (`--fake` dev mode).
 - **[dps-engine.md](dps-engine.md)** — the real DPS engine ported from `tomato`
   (`bridge/dps/**`): how per-player damage is reconstructed from the packet
   stream, weapon/ability/crucible/enchant scaling, character-stat decoding, and
@@ -54,7 +55,12 @@ moving parts, each with its own doc below.
   `shared/` contracts.
 - **[overlay-renderer.md](overlay-renderer.md)** — the React renderer: the
   draggable/resizable panel system, the individual panels, the sprite-rendering
-  subsystem, and the framework-agnostic `DpsTracker`.
+  subsystem, and the framework-agnostic `DpsTracker`/`LootTracker`.
+- **[overlay-ui-style.md](overlay-ui-style.md)** — how the renderer's UI stays
+  visually consistent: the semantic design tokens (Tailwind v4 `@theme`), the
+  shared `ui/` primitives (`Button`, `MeterRow`, `GearRow`, …), the type
+  scale, and the conventions the PR review agent enforces. **Read before
+  writing any panel UI.**
 
 ## Build, run & release
 

@@ -101,10 +101,26 @@ export interface EntityContextValue {
    * for a live objectId. Empty slots are `<= 0`. Returns null if the id is unknown.
    */
   equipment: (objectId: number | null | undefined) => number[] | null
+  /**
+   * Rarity-border tier (0=common/no border..4=divine) per equipped slot,
+   * decoded from UNIQUE_DATA_STRING - see `sprites/enchantRarity.ts`. Parallel
+   * to `equipment`. Returns null if the id is unknown.
+   */
+  equipmentRarity: (objectId: number | null | undefined) => number[] | null
   /** The clothing dye (Tex1) objectType for a live objectId, or null. */
   clothingDye: (objectId: number | null | undefined) => number | null
   /** The accessory dye (Tex2) objectType for a live objectId, or null. */
   accessoryDye: (objectId: number | null | undefined) => number | null
+  /**
+   * The 4 equipped slots' raw encoded enchant strings (UNIQUE_DATA_STRING,
+   * weapon/ability/armor/ring - matches the `equipment` slot order), or null
+   * if this entity has never sent the stat at all (most enemies/NPCs, and any
+   * player the server hasn't sent enchant data for). A present-but-empty
+   * string at a given index means "known, no enchantments" - distinct from
+   * the whole array being null ("unknown"). Decode with
+   * `items/enchantDecode.ts#decodeEnchantIds`.
+   */
+  enchantSlots: (objectId: number | null | undefined) => string[] | null
   /** The NAME_STAT username for a live objectId, or null if unknown. */
   name: (objectId: number | null | undefined) => string | null
   /**
@@ -128,8 +144,10 @@ export const EntityContext = createContext<EntityContextValue>({
   objectType: () => null,
   skin: () => null,
   equipment: () => null,
+  equipmentRarity: () => null,
   clothingDye: () => null,
   accessoryDye: () => null,
+  enchantSlots: () => null,
   name: () => null,
   characters: () => [],
   localPlayerId: () => null,

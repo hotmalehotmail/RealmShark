@@ -16,31 +16,52 @@ name: sweep
 #     ON review.yml staying `on: pull_request` (never `pull_request_target`, which would hand
 #     secrets to fork PRs and break this reasoning).
 #   - Respects the §9.5 soak freeze and the `agent:needs-human` escalation, same as the gatekeeper.
+#
+# It is also the level-triggered backstop for conflict-watch.yml (§6.5): a DIRTY candidate
+# is re-fired through the same `.github/scripts/rebase-refire.sh` (same separate rebase
+# budget, same dedupe) instead of skipped — so a dropped pull_request_target/push event
+# self-heals within a sweep cycle too.
 on:
   schedule:
     - cron: "*/30 * * * *" # every ~30 min (GitHub may delay/throttle scheduled runs; it's a net)
   workflow_dispatch: {} # manual reconcile / testing
 
 permissions:
-  contents: read
-  pull-requests: read # list candidates + read mergeability (the merge itself uses MERGE_PAT)
-  issues: read # check for an open soak (freeze)
+  contents: write # GC deletes orphan session-done/* marker branches (git refs)
+  pull-requests: write # list/merge candidates; rebase-refire posts marker comments
+  issues: write # soak check; rebase-refire escalation label
 
+# Shares conflict-watch's group: both read the rebase-refire marker comments before
+# posting new ones, so a sweep cron overlapping an event-driven run could otherwise
+# double-fire the same in-flight rebase (marker read/post is not atomic).
 concurrency:
-  group: sweep
+  group: conflict-watch
   cancel-in-progress: false
 
 jobs:
   sweep:
     runs-on: ubuntu-latest
     steps:
+      # Only to obtain .github/scripts/rebase-refire.sh for the DIRTY branch below.
+      - uses: actions/checkout@v4
+
       - name: Merge stranded agent PRs (no soak, green, same-repo)
         env:
           GH_TOKEN: ${{ github.token }}
           MERGE_PAT: ${{ secrets.MERGE_PAT }}
           REPO: ${{ github.repository }}
+          FIRE_URL: ${{ secrets.ROUTINE_FIRE_URL }}
+          FIRE_TOKEN: ${{ secrets.ROUTINE_FIRE_TOKEN }}
+          MAINTAINER: ${{ vars.MAINTAINER_HANDLE }}
         run: |
           set -euo pipefail
+
+          # Interlock (docs §session-interlock): sweep honors the SAME session-done marker gate
+          # as the gatekeeper — it must not merge a head whose authoring session is still running.
+          # The ONE exception is the crash backstop: SessionEnd doesn't fire on SIGKILL, so a green
+          # PR left marker-less and idle past CRASH_MIN minutes is merged anyway (rather than
+          # stranded forever) with a loud note. This is the only place the marker gate is bypassed.
+          CRASH_MIN=45
 
           # 1) Respect the §9.5 soak freeze: during a soak only soak-fixes may move staging, and
           #    the gatekeeper owns those. If any soak is open, do nothing.
@@ -53,14 +74,14 @@ jobs:
           #    armed, not frozen for a human. The same-repo filter + branch protection (step 4)
           #    are the security boundary — the `claude/` name is not.
           CANDIDATES="$(gh pr list --repo "$REPO" --base staging --state open \
-            --json number,headRefName,isCrossRepository,isDraft,autoMergeRequest,labels \
+            --json number,headRefName,headRefOid,isCrossRepository,isDraft,autoMergeRequest,labels \
             -q '.[]
                  | select(.isCrossRepository == false)
                  | select(.isDraft == false)
                  | select(.headRefName | startswith("claude/"))
                  | select(.autoMergeRequest == null)
                  | select([.labels[].name] | index("agent:needs-human") | not)
-                 | .number' 2>/dev/null || true)"
+                 | "\(.number) \(.headRefName) \(.headRefOid)"' 2>/dev/null || true)"
           if [ -z "$CANDIDATES" ]; then
             echo "No stranded agent PRs to sweep."
             exit 0
@@ -81,7 +102,8 @@ jobs:
 
           # 4) Merge each CLEAN candidate. Poll mergeStateStatus first: right after staging moved,
           #    GitHub recomputes it (UNKNOWN) — the exact race that stranded these PRs.
-          for P in $CANDIDATES; do
+          while read -r P PHEAD POID; do
+            [ -z "$P" ] && continue
             STATE="UNKNOWN"
             for _ in 1 2 3 4 5 6; do
               STATE="$(gh pr view "$P" --repo "$REPO" --json mergeStateStatus -q '.mergeStateStatus' 2>/dev/null || echo UNKNOWN)"
@@ -91,19 +113,86 @@ jobs:
             case "$STATE" in
               CLEAN)
                 # Green + mergeable + up to date -> all required checks (ci + review-verdict) have
-                # passed. Merge via the PAT with NO --admin, so branch protection still governs.
-                if GH_TOKEN="$MERGE_PAT" gh pr merge "$P" --repo "$REPO" --squash 2>/tmp/merge_err; then
-                  echo "Swept: merged stranded green PR #$P."
-                else
-                  echo "::warning::#$P is CLEAN but the merge failed: $(tr '\n' ' ' </tmp/merge_err)"
+                # passed. Sweep is a SECOND merge path, so it must be exactly as restrictive as the
+                # gatekeeper: honor BOTH the interlock gate (§7.2, session-done marker) AND the
+                # triage gate (§7.3, session-triaged marker when the passing review left findings).
+                # Each gate shares the SAME crash backstop: if the head has been idle past CRASH_MIN
+                # the awaited marker's producer (the SessionEnd hook / the triage agent) likely
+                # died, so merge anyway rather than strand the PR forever.
+                HEAD_AGE_MIN=0
+                CDATE="$(gh api "repos/$REPO/commits/$POID" -q '.commit.committer.date' 2>/dev/null || true)"
+                if [ -n "$CDATE" ]; then
+                  NOWS="$(date -u +%s)"; CS="$(date -u -d "$CDATE" +%s 2>/dev/null || echo "$NOWS")"
+                  HEAD_AGE_MIN=$(( (NOWS - CS) / 60 ))
+                fi
+                GATED_OK=1; REASON="gates satisfied"
+                # (a) Interlock: the authoring session has ended.
+                if ! gh api "repos/$REPO/git/ref/heads/session-done/$POID" >/dev/null 2>&1; then
+                  if [ "$HEAD_AGE_MIN" -ge "$CRASH_MIN" ]; then
+                    REASON="crash backstop: no session-done marker, head idle ${HEAD_AGE_MIN}m"
+                    echo "::warning::#$P has no session-done marker but its head is ${HEAD_AGE_MIN}m idle — merging as the interlock crash backstop."
+                  else
+                    GATED_OK=0
+                    echo "#$P is CLEAN but has no session-done marker (head ${HEAD_AGE_MIN}m old) — authoring session may still be running; skipping."
+                  fi
+                fi
+                # (b) Triage: a passing review's medium/low findings were decided (only if (a) passed).
+                if [ "$GATED_OK" = 1 ]; then
+                  FINDINGS="$(gh api --paginate "repos/$REPO/pulls/$P/comments" \
+                                -q ".[] | select(.user.login==\"github-actions[bot]\" and .commit_id==\"$POID\") | .id" 2>/dev/null | wc -l | tr -d ' ')"
+                  if [ "${FINDINGS:-0}" -gt 0 ] \
+                     && ! gh api --paginate "repos/$REPO/issues/$P/comments" \
+                            -q ".[] | select(.body | contains(\"<!-- session-triaged: $POID -->\")) | .id" 2>/dev/null | grep -q .; then
+                    if [ "$HEAD_AGE_MIN" -ge "$CRASH_MIN" ]; then
+                      REASON="crash backstop: $FINDINGS untriaged finding(s), head idle ${HEAD_AGE_MIN}m"
+                      echo "::warning::#$P has $FINDINGS untriaged finding(s) but its head is ${HEAD_AGE_MIN}m idle — accepting as the triage crash backstop (covers a dead triage agent)."
+                    else
+                      GATED_OK=0
+                      echo "#$P is CLEAN but has $FINDINGS unaddressed review finding(s) and no session-triaged marker — holding for the triage pass."
+                    fi
+                  fi
+                fi
+                if [ "$GATED_OK" = 1 ]; then
+                  # Merge via the PAT with NO --admin, so branch protection still governs.
+                  if GH_TOKEN="$MERGE_PAT" gh pr merge "$P" --repo "$REPO" --squash 2>/tmp/merge_err; then
+                    echo "Swept: merged stranded green PR #$P ($REASON)."
+                  else
+                    echo "::warning::#$P is CLEAN but the merge failed: $(tr '\n' ' ' </tmp/merge_err)"
+                  fi
                 fi
                 ;;
               DIRTY)
-                echo "#$P conflicts with staging — needs a rebase (the gatekeeper's §6.5 job); skipping." ;;
+                # Level-triggered §6.5 backstop: re-fire the rebase FIX MODE (dedupes on the
+                # current staging head, so an in-flight rebase agent isn't double-fired).
+                echo "#$P conflicts with staging — invoking the rebase re-fire backstop."
+                NUM="$P" HEAD="$PHEAD" DEDUP=1 bash .github/scripts/rebase-refire.sh </dev/null || true ;;
               BEHIND|BLOCKED)
                 echo "#$P not ready ('$STATE' — behind base, or checks not all green); skipping." ;;
               *)
                 echo "#$P mergeability unresolved ('$STATE') — will retry next sweep." ;;
             esac
-          done
+          done <<< "$CANDIDATES"
           echo "Sweep complete."
+
+      # Runs regardless of the merge step's early exits (no candidates / soak open), so
+      # markers are reaped even on an idle sweep.
+      - name: GC orphan session-done marker branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Delete any session-done/<sha> whose sha is not the CURRENT head of an open PR
+          # (merged, closed, or a superseded head). Bounds marker-branch clutter. Best-effort.
+          OPEN_HEADS="$(gh pr list --repo "$REPO" --state open --json headRefOid -q '.[].headRefOid' 2>/dev/null || true)"
+          gh api --paginate "repos/$REPO/git/matching-refs/heads/session-done/" -q '.[].ref' 2>/dev/null \
+            | while read -r REF; do
+                [ -z "$REF" ] && continue
+                MSHA="${REF#refs/heads/session-done/}"
+                if ! printf '%s\n' "$OPEN_HEADS" | grep -qx "$MSHA"; then
+                  if gh api --method DELETE "repos/$REPO/git/refs/heads/session-done/$MSHA" >/dev/null 2>&1; then
+                    echo "GC: deleted orphan marker session-done/$MSHA"
+                  fi
+                fi
+              done || true
+          echo "Marker GC complete."

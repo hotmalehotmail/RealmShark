@@ -1,3 +1,4 @@
+import { Swatch } from '../ui/Swatch'
 import { useEntityRegistry } from './context'
 import { Sprite } from './Sprite'
 
@@ -27,12 +28,7 @@ export function CharacterSprite({
   // registry hasn't seen an UpdatePacket for). Same bordered-box placeholder
   // as an unresolved equipment slot, rather than rendering nothing.
   if (base == null) {
-    return (
-      <span
-        className={`rounded-sm border border-white/15 bg-white/5 ${className ?? ''}`}
-        style={{ width: size, height: size, flexShrink: 0 }}
-      />
-    )
+    return <Swatch size={size} className={className} />
   }
 
   return (

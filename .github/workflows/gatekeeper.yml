@@ -1,7 +1,6 @@
 name: gatekeeper
 
-# Auto-merge agent PRs into staging once ci + review are green (full-spec §02, §7),
-# and drive the merge-conflict rebase path (§6.5).
+# Auto-merge agent PRs into staging once ci + review are green (full-spec §02, §7).
 #
 # Triggers on the COMPLETION of the ci/review workflows. workflow_run fires
 # regardless of which token produced the checks (unlike pull_request_review, which
@@ -9,20 +8,41 @@ name: gatekeeper
 # no GATEKEEPER_TOKEN / PAT is needed; the built-in token suffices.
 #
 # For a green, mergeable PR it ARMS GitHub native auto-merge and lets branch
-# protection do the final "wait for green, then merge". For an otherwise-green PR
-# that CONFLICTS with staging (§6.5) it can't merge, so instead it re-fires the build
-# agent in FIX MODE with a rebase instruction — shared with the fix loop's re-fire
-# marker and MAX_FIX_ROUNDS budget (§6.1/§6.2), so a conflict that can't be resolved
-# escalates to a human rather than looping.
+# protection do the final "wait for green, then merge". A PR that CONFLICTS with
+# staging is NOT this workflow's problem anymore: a conflicted PR emits no ci/review
+# runs at all (GitHub can't build its merge ref), so a workflow_run trigger
+# structurally cannot drive conflict recovery — conflict-watch.yml owns the rebase
+# FIX-MODE re-fire (§6.5), on the events a conflict actually produces, with its own
+# MAX_REBASE_ROUNDS budget separate from the fix loop's review rounds.
+# INTERLOCK (docs/dev-loop-mechanisms.md §session-interlock): the gatekeeper also refuses
+# to arm until the authoring agent session has TERMINATED, proven by a `session-done/<head-sha>`
+# marker branch a SessionEnd hook pushes (.claude/hooks/session-done-marker.sh). This closes
+# the PR #115 race where auto-merge fired while the fix agent was still running and later
+# pushed a correction to the merged branch. Two extra triggers below serve it: `push` to
+# session-done/** wakes arming the moment a session ends (even after review already passed —
+# the exact #115 timing), and `pull_request: synchronize` DISARMS when the head moves to a
+# not-yet-marked commit, so native auto-merge (which, once armed, merges any future green
+# head) can never merge a head whose authoring session is still running.
 on:
   workflow_run:
     workflows: [ci, review]
     types: [completed]
+  push:
+    branches: ['session-done/**'] # a SessionEnd marker landing -> (re)evaluate arming
+  pull_request:
+    types: [synchronize] # head moved -> disarm until the new head has a marker
+  issue_comment:
+    types: [created] # a session-triaged marker comment -> (re)evaluate arming (triage gate, §7.3)
 
-# Serialize with the fix loop / resume on the same head branch: all three re-fire the
-# agent and read the same marker count, so they must not run concurrently on one PR.
+# Serialize with the fix loop / resume, which re-fire the agent and read the same marker
+# count and so must not run concurrently on one PR. Group key falls back across the four
+# triggers: workflow_run -> reviewed branch; pull_request -> PR head ref; issue_comment ->
+# PR number; push(marker) -> the marker ref name. The workflow_run and pull_request paths
+# key on the head branch (matching fixloop.yml / resume.yml). The issue_comment and push
+# paths only ARM native auto-merge (never re-fire an agent) and arming is idempotent, so
+# keying them differently is harmless — they intentionally do not serialize with re-fires.
 concurrency:
-  group: fixloop-${{ github.event.workflow_run.head_branch }}
+  group: fixloop-${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref || github.event.issue.number || github.ref_name }}
   cancel-in-progress: false
 
 permissions:
@@ -34,26 +54,85 @@ permissions:
 jobs:
   gate:
     runs-on: ubuntu-latest
-    # Only PR-triggered ci/review runs, and only same-repo agent branches.
+    # Only same-repo agent branches, across the three triggers. Fork PRs are excluded
+    # (same-repo checks); a fork's pull_request run gets a read-only token anyway.
     if: >
-      github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.head_repository.full_name == github.repository &&
-      startsWith(github.event.workflow_run.head_branch, 'claude/')
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'pull_request' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       startsWith(github.event.workflow_run.head_branch, 'claude/')) ||
+      (github.event_name == 'push' &&
+       startsWith(github.ref, 'refs/heads/session-done/')) ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       startsWith(github.event.pull_request.head.ref, 'claude/')) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request != null &&
+       contains(github.event.comment.body, '<!-- session-triaged:'))
     steps:
       - name: Arm auto-merge, or drive the rebase FIX MODE on a conflict
         env:
           GH_TOKEN: ${{ github.token }}
           MERGE_PAT: ${{ secrets.MERGE_PAT }}
           REPO: ${{ github.repository }}
-          HEAD: ${{ github.event.workflow_run.head_branch }}
-          SHA: ${{ github.event.workflow_run.head_sha }}
-          EVENT_WF: ${{ github.event.workflow_run.name }}
-          FIRE_URL: ${{ secrets.ROUTINE_FIRE_URL }}
-          FIRE_TOKEN: ${{ secrets.ROUTINE_FIRE_TOKEN }}
           MAINTAINER: ${{ vars.MAINTAINER_HANDLE }}
+          # Raw per-trigger fields; the script resolves HEAD/SHA from whichever fired.
+          EVT: ${{ github.event_name }}
+          WR_HEAD: ${{ github.event.workflow_run.head_branch }}
+          WR_SHA: ${{ github.event.workflow_run.head_sha }}
+          PUSH_REF: ${{ github.ref }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ISSUE_NUM: ${{ github.event.issue.number }}
         run: |
           set -euo pipefail
-          MAX_FIX_ROUNDS=3 # keep in sync with fixloop.yml / resume.yml
+
+          # ---- Resolve which PR/head this run concerns, across the three triggers. ----
+          case "$EVT" in
+            workflow_run) HEAD="$WR_HEAD"; SHA="$WR_SHA" ;;
+            pull_request) HEAD="$PR_HEAD_REF"; SHA="$PR_HEAD_SHA" ;;
+            issue_comment)
+              # A session-triaged marker comment landed. Resolve the PR it's on.
+              HEAD="$(gh pr view "$ISSUE_NUM" --repo "$REPO" --json headRefName -q '.headRefName' 2>/dev/null || true)"
+              SHA="$(gh pr view "$ISSUE_NUM" --repo "$REPO" --json headRefOid -q '.headRefOid' 2>/dev/null || true)"
+              if [ -z "$HEAD" ] || ! printf '%s' "$HEAD" | grep -q '^claude/'; then
+                echo "session-triaged comment is not on a claude/* PR; nothing to do."
+                exit 0
+              fi ;;
+            push)
+              # refs/heads/session-done/<sha> -> the sha; act only if it is some open PR's
+              # CURRENT head (a stale marker for a since-superseded head matches nothing).
+              SHA="${PUSH_REF#refs/heads/session-done/}"
+              HEAD="$(gh pr list --repo "$REPO" --base staging --state open \
+                        --json headRefName,headRefOid \
+                        -q ".[] | select(.headRefOid==\"$SHA\") | .headRefName" 2>/dev/null | head -n1 || true)"
+              if [ -z "$HEAD" ]; then
+                echo "session-done marker $SHA is not any open claude/* -> staging PR's current head; nothing to arm (orphan marker; sweep GCs it)."
+                exit 0
+              fi ;;
+          esac
+
+          # ---- pull_request synchronize: the head just moved. Preserve the interlock
+          #      invariant "auto-merge is armed only while the current head has a marker":
+          #      if the PR is armed and the new head has no session-done marker yet (its
+          #      authoring session hasn't ended), DISARM. Re-arming happens when the marker
+          #      lands (push trigger) or ci/review completes (workflow_run). This closes the
+          #      window native auto-merge's persistent arming would otherwise leave open. ----
+          if [ "$EVT" = "pull_request" ]; then
+            SNUM="$(gh pr list --repo "$REPO" --head "$HEAD" --base staging --state open --json number -q '.[0].number' 2>/dev/null || true)"
+            if [ -z "$SNUM" ] || [ "$SNUM" = "null" ]; then
+              echo "No open claude/* -> staging PR for $HEAD; nothing to do."
+              exit 0
+            fi
+            ARMED="$(gh pr view "$SNUM" --repo "$REPO" --json autoMergeRequest -q '.autoMergeRequest // "null"' 2>/dev/null || echo null)"
+            if [ "$ARMED" != "null" ] && ! gh api "repos/$REPO/git/ref/heads/session-done/$SHA" >/dev/null 2>&1; then
+              echo "PR #$SNUM head moved to $SHA with no session-done marker — disabling auto-merge until the session ends."
+              gh pr merge "$SNUM" --repo "$REPO" --disable-auto >/dev/null 2>&1 || true
+            else
+              echo "PR #$SNUM synchronize: no disarm needed (armed=$ARMED)."
+            fi
+            exit 0
+          fi
 
           # The open agent PR for this head branch, targeting staging, plus its mergeability.
           PR="$(gh pr list --repo "$REPO" --head "$HEAD" --base staging --state open \
@@ -138,6 +217,49 @@ jobs:
               echo "PR #$NUM already has auto-merge armed; nothing to do."
               exit 0
             fi
+            # ---- Interlock gate (docs §session-interlock, PR #115). Do NOT arm until the
+            #      authoring session has TERMINATED, evidenced by a session-done marker for
+            #      the PR's CURRENT head. Native auto-merge, once armed, merges any future
+            #      green head, so arming a head whose session is still running is exactly the
+            #      race we close. No marker -> hold; the marker's own push re-triggers arming,
+            #      and a since-moved head is disarmed by the synchronize path above. (For the
+            #      push trigger the marker existence is already implied — we matched it to the
+            #      head — but re-checking the CURRENT head is correct and cheap.) ----
+            PR_HEAD_OID="$(gh pr view "$NUM" --repo "$REPO" --json headRefOid -q '.headRefOid' 2>/dev/null || true)"
+            if [ -z "$PR_HEAD_OID" ] || ! gh api "repos/$REPO/git/ref/heads/session-done/$PR_HEAD_OID" >/dev/null 2>&1; then
+              echo "PR #$NUM: no session-done marker for current head ${PR_HEAD_OID:-unknown} — authoring session not finished; holding (the marker push will re-trigger arming)."
+              exit 0
+            fi
+            echo "PR #$NUM: session-done marker present for head $PR_HEAD_OID — session finished."
+            # ---- Triage gate (docs §7.3; Q2 = the agent's call is final). A PASSING review
+            #      can still carry medium/low findings, which never fail the verdict and so were
+            #      historically never acted on. Require, when the current head has such findings,
+            #      that they were triaged — the agent fixed the worthwhile ones or replied to
+            #      decline the rest, then posted a `session-triaged: <head>` marker comment (or
+            #      the fix loop auto-accepted once its triage budget was spent). First ensure the
+            #      current head's review is COMPLETE (verdict=success on THIS sha) so the finding
+            #      count is stable, not mid-flight. ----
+            RV="$(gh api "repos/$REPO/commits/$PR_HEAD_OID/status" -q '.statuses[] | select(.context=="review-verdict") | .state' 2>/dev/null | head -n1 || true)"
+            if [ "$RV" != "success" ]; then
+              echo "PR #$NUM: review-verdict for current head $PR_HEAD_OID is '${RV:-absent}' — review not complete/passed for this sha; holding until it is."
+              exit 0
+            fi
+            # Inline review comments the reviewer left on THIS head = its unaddressed findings.
+            # (File-level findings with no line anchor live only in the review body — a known,
+            # rare gap; they don't get a triage pass. Count with the ...| .id | wc -l idiom, not
+            # `-q length`, which miscounts under --paginate.)
+            FINDINGS="$(gh api --paginate "repos/$REPO/pulls/$NUM/comments" \
+                          -q ".[] | select(.user.login==\"github-actions[bot]\" and .commit_id==\"$PR_HEAD_OID\") | .id" 2>/dev/null | wc -l | tr -d ' ')"
+            if [ "${FINDINGS:-0}" -gt 0 ]; then
+              if gh api --paginate "repos/$REPO/issues/$NUM/comments" \
+                   -q ".[] | select(.body | contains(\"<!-- session-triaged: $PR_HEAD_OID -->\")) | .id" 2>/dev/null | grep -q .; then
+                echo "PR #$NUM: $FINDINGS finding(s) on head $PR_HEAD_OID, session-triaged marker present — proceeding to arm."
+              else
+                echo "PR #$NUM: $FINDINGS unaddressed review finding(s) on head $PR_HEAD_OID and no session-triaged marker — holding for the triage pass (its marker comment re-triggers arming)."
+                exit 0
+              fi
+            fi
+            echo "PR #$NUM: gates satisfied — proceeding to arm."
             # --- MERGE_PAT preflight (LOUD). Arm with the PAT (a member identity) so the eventual
             #     merge fires pull_request:closed -> post-merge recut-alpha. A GITHUB_TOKEN merge is
             #     swallowed by the recursion guard, so a silent fallback to it would re-break the
@@ -160,66 +282,11 @@ jobs:
             exit 0
           fi
 
-          # ---- Conflicted (§6.5). ----
-          # This job fires on BOTH `ci` and `review` completion (to arm auto-merge on
-          # either). But the rebase re-fire must happen ONCE per PR state, so gate it to
-          # the `review` completion only — otherwise one push would fire two rebases.
-          # (Arming above is idempotent, so it's fine on both.)
-          if [ "$EVENT_WF" != "review" ]; then
-            echo "PR #$NUM conflicts with staging; deferring the rebase to the review-completion run."
-            exit 0
-          fi
-
-          # Only act when the PR is OTHERWISE green; a failing review is the fix loop's
-          # job (it'll re-fire, and the agent's push may resolve the conflict
-          # incidentally). Re-firing a rebase on top of a failing review would double-fire
-          # and race the shared budget.
-          VERDICT="$(gh api "repos/$REPO/commits/$SHA/status" \
-                       -q '.statuses[] | select(.context=="review-verdict") | .state' 2>/dev/null | head -n1 || true)"
-          if [ "$VERDICT" != "success" ]; then
-            echo "PR #$NUM conflicts with staging but review-verdict is '${VERDICT:-absent}' — the fix loop owns it; not rebasing."
-            exit 0
-          fi
-
-          # Shared budget: count the fix loop's own re-fire markers (§6.1) — rebase attempts
-          # carry the same marker, so review-fix and rebase rounds share MAX_FIX_ROUNDS.
-          PRIOR_REFIRES="$(gh api --paginate "repos/$REPO/issues/$NUM/comments" \
-                             -q '.[] | select(.user.login=="github-actions[bot]" and (.body|contains("<!-- fixloop:refire -->"))) | .id' \
-                             2>/dev/null | wc -l | tr -d ' ')"
-          ATTEMPT=$((PRIOR_REFIRES + 1))
-
-          if [ "$PRIOR_REFIRES" -ge "$MAX_FIX_ROUNDS" ]; then
-            # Budget spent on an unresolved conflict — freeze for a human (a conflict-specific,
-            # lighter escalation than §6.2: auto-merge is already off on a DIRTY PR, and there
-            # is no reviewer summary to quote).
-            echo "PR #$NUM still conflicts after $PRIOR_REFIRES attempt(s) — escalating."
-            gh label create "agent:needs-human" --repo "$REPO" --color "B60205" --description "Agent loop stalled — needs a maintainer" --force >/dev/null 2>&1 || true
-            gh pr edit "$NUM" --repo "$REPO" --add-label "agent:needs-human" >/dev/null 2>&1 || true
-            MENTION=""; [ -n "${MAINTAINER:-}" ] && MENTION="@$MAINTAINER "
-            gh pr comment "$NUM" --repo "$REPO" --body "${MENTION}🛑 **Merge conflict couldn't be auto-resolved** in $MAX_FIX_ROUNDS attempt(s). This PR conflicts with \`staging\` and now needs a manual rebase (\`git merge origin/staging\`, resolve, push), then remove \`agent:needs-human\` (or apply \`agent:retry\`)."
-            exit 0
-          fi
-
-          # Under budget: re-fire the agent in FIX MODE with a rebase instruction (§6.5).
-          if [ -z "${FIRE_URL:-}" ] || [ -z "${FIRE_TOKEN:-}" ]; then
-            echo "::warning::PR #$NUM conflicts but ROUTINE_FIRE_* secrets are unset — cannot auto-rebase."
-            gh pr comment "$NUM" --repo "$REPO" --body "⚙️ This PR conflicts with \`staging\`, but the fix loop can't re-fire the agent to rebase (missing ROUTINE_FIRE_* secrets). Rebase manually."
-            exit 0
-          fi
-          TEXT="$(printf 'FIX MODE. Repository %s. PR #%s, head branch `%s`, base `staging`.\nThis PR CONFLICTS with `staging`. Check out `%s`, merge `origin/staging` into it, resolve the conflicts, and PUSH to `%s` — do NOT open a new PR. Do not change anything beyond what the conflict resolution requires.' \
-            "$REPO" "$NUM" "$HEAD" "$HEAD" "$HEAD")"
-          jq -nc --arg t "$TEXT" '{text: $t}' > /tmp/fire.json
-          RESP="$(curl -sS -X POST "$FIRE_URL" \
-            -H "Authorization: Bearer $FIRE_TOKEN" \
-            -H "anthropic-version: 2023-06-01" \
-            -H "anthropic-beta: experimental-cc-routine-2026-04-01" \
-            -H "Content-Type: application/json" \
-            --data @/tmp/fire.json || true)"
-          URL="$(printf '%s' "$RESP" | jq -r '.claude_code_session_url // empty' 2>/dev/null || true)"
-          if [ -n "$URL" ]; then
-            # Same marker as fixloop => this counts against the shared MAX_FIX_ROUNDS budget.
-            gh pr comment "$NUM" --repo "$REPO" --body "🔀 Conflicts with \`staging\` — re-fired the agent in **FIX MODE** to rebase (attempt $ATTEMPT/$MAX_FIX_ROUNDS). [Watch the session]($URL). <!-- fixloop:refire -->"
-          else
-            gh pr comment "$NUM" --repo "$REPO" --body "$(printf '⚠️ Tried to auto-rebase the conflict but the FIX MODE re-fire failed. Routine response:\n```\n%s\n```' "$RESP")"
-            exit 1
-          fi
+          # ---- Conflicted (§6.5): conflict-watch.yml's job, not ours. It fires on the
+          #      events a conflicted PR actually emits (pull_request_target + staging
+          #      pushes; this workflow_run trigger never fires for a born-DIRTY PR at
+          #      all), re-fires the builder's rebase FIX MODE, and owns the separate
+          #      MAX_REBASE_ROUNDS budget. Arming is impossible on a DIRTY PR, so
+          #      there is nothing for the gatekeeper to do here. ----
+          echo "PR #$NUM conflicts with staging — conflict-watch owns the rebase re-fire; nothing to arm."
+          exit 0

@@ -6,6 +6,11 @@ import type { PlayerDps } from '../dps/types'
 import { formatDps } from '../formatDps'
 import { Sprite } from '../sprites/Sprite'
 import { useSprites } from '../sprites/context'
+import { Button } from '../ui/Button'
+import { EmptyState } from '../ui/EmptyState'
+import { GearRow } from '../ui/GearRow'
+import { MeterRow } from '../ui/MeterRow'
+import { Swatch } from '../ui/Swatch'
 import type { PanelContentProps } from './registry'
 
 /** How many master-list rows / detail enemies to show before "show all". */
@@ -34,12 +39,7 @@ function FrozenCharacterSprite({
       : cosmetics.objectType
     : null
   if (base == null) {
-    return (
-      <span
-        className="rounded-sm border border-white/15 bg-white/5"
-        style={{ width: size, height: size, flexShrink: 0 }}
-      />
-    )
+    return <Swatch size={size} />
   }
   return (
     <Sprite
@@ -48,25 +48,6 @@ function FrozenCharacterSprite({
       clothingDye={cosmetics?.clothingDye}
       accessoryDye={cosmetics?.accessoryDye}
     />
-  )
-}
-
-function GearRow({ equipment }: { equipment: number[] | undefined }): React.JSX.Element {
-  const slots = equipment ?? [-1, -1, -1, -1]
-  return (
-    <div className="flex shrink-0 items-center gap-0.5">
-      {slots.map((itemType, i) =>
-        itemType > 0 ? (
-          <Sprite key={i} objectType={itemType} size={GEAR_SLOT_SIZE} />
-        ) : (
-          <span
-            key={i}
-            className="rounded-sm border border-white/10 bg-white/5"
-            style={{ width: GEAR_SLOT_SIZE, height: GEAR_SLOT_SIZE, flexShrink: 0 }}
-          />
-        )
-      )}
-    </div>
   )
 }
 
@@ -81,12 +62,7 @@ function InstanceIcon({
   const { dungeonIcon } = useSprites()
   const spriteId = dungeonIcon(entry.instanceName) ?? entry.enemies[0]?.objectType ?? null
   if (spriteId == null) {
-    return (
-      <span
-        className="shrink-0 rounded-sm border border-white/15 bg-white/5"
-        style={{ width: size, height: size }}
-      />
-    )
+    return <Swatch size={size} />
   }
   return <Sprite objectType={spriteId} size={size} />
 }
@@ -109,23 +85,23 @@ interface MasterListProps {
 
 function MasterList({ history, size, onSelect }: MasterListProps): React.JSX.Element {
   if (history.length === 0) {
-    return <div className="text-xs text-white/40">No instances logged yet this session</div>
+    return <EmptyState>No instances logged yet this session</EmptyState>
   }
   const iconSize = DUNGEON_ICON_SIZE[size]
   return (
-    <div className="flex h-full w-full flex-col gap-1 overflow-y-auto pr-1 text-white">
+    <div className="flex h-full w-full flex-col gap-1 overflow-y-auto pr-1">
       {history.map((entry) => {
         const headline = localHeadline(entry)
         return (
           <button
             key={entry.id}
-            className="flex items-center gap-2 rounded-sm px-1 py-1 text-left hover:bg-white/10"
+            className="flex items-center gap-2 rounded-sm px-1 py-1 text-left hover:bg-surface-2"
             onClick={() => onSelect(entry.id)}
           >
             <InstanceIcon entry={entry} size={iconSize} />
             <div className="flex min-w-0 flex-1 flex-col">
               <span className="truncate text-xs font-semibold">{entry.instanceName}</span>
-              {headline && <span className="truncate text-[10px] text-sky-300/70">{headline}</span>}
+              {headline && <span className="truncate text-2xs text-accent/70">{headline}</span>}
             </div>
           </button>
         )
@@ -151,24 +127,18 @@ function EnemyRow({
 }: EnemyRowProps): React.JSX.Element {
   const rows = [...enemy.players].sort((a, b) => b.damage - a.damage)
   const enemyTotal = totalDamage(rows)
-  const fillPct = topDamage > 0 ? Math.min(100, (enemyTotal / topDamage) * 100) : 0
+  const fillPct = topDamage > 0 ? (enemyTotal / topDamage) * 100 : 0
 
   return (
-    <div className="rounded-sm bg-white/5">
-      <button
-        className="relative flex w-full items-center gap-1.5 overflow-hidden rounded-sm px-1 py-1 text-left text-xs"
-        onClick={onToggle}
-      >
-        <div className="absolute inset-y-0 left-0 bg-white/10" style={{ width: `${fillPct}%` }} />
-        <div className="relative z-10 flex w-full min-w-0 items-center gap-1.5">
-          <span className="w-3 shrink-0 text-white/40">{expanded ? '▾' : '▸'}</span>
-          {enemy.objectType != null && (
-            <Sprite objectType={enemy.objectType} size={ENEMY_ICON_SIZE} />
-          )}
-          <span className="min-w-0 flex-1 truncate text-white/85">{enemy.name}</span>
-          <span className="shrink-0 font-mono text-white/90">{formatDps(enemyTotal)}</span>
-        </div>
-      </button>
+    <div className="rounded-sm bg-surface">
+      <MeterRow fillPct={fillPct} className="px-1 py-1" onClick={onToggle}>
+        <span className="w-3 shrink-0 text-fg-faint">{expanded ? '▾' : '▸'}</span>
+        {enemy.objectType != null && (
+          <Sprite objectType={enemy.objectType} size={ENEMY_ICON_SIZE} />
+        )}
+        <span className="min-w-0 flex-1 truncate text-fg-muted">{enemy.name}</span>
+        <span className="shrink-0 font-mono tabular-nums text-fg">{formatDps(enemyTotal)}</span>
+      </MeterRow>
       {expanded && (
         <div className="space-y-1 px-1 pb-1.5">
           {rows.map((row) => {
@@ -176,21 +146,22 @@ function EnemyRow({
             const isLocal = row.objectId === localPlayerId
             const pct = enemyTotal > 0 ? Math.round((row.damage / enemyTotal) * 100) : 0
             return (
-              <div
-                key={row.objectId}
-                className={`flex items-center gap-1.5 rounded-sm px-1 py-0.5 text-xs ${
-                  isLocal ? 'ring-1 ring-inset ring-sky-400/70' : ''
-                }`}
-              >
+              <MeterRow key={row.objectId} fillPct={0} highlight={isLocal} className="px-1 py-0.5">
                 <FrozenCharacterSprite cosmetics={cosmetics} size={PLAYER_SPRITE_SIZE} />
-                <GearRow equipment={cosmetics?.equipment} />
-                <span className="min-w-0 flex-1 truncate text-white/80">{row.name}</span>
-                <span className="shrink-0 text-right font-mono">
-                  <span className="text-white/90">{formatDps(row.damage)}</span>
-                  <span className="ml-1 text-[10px] text-white/40">{pct}%</span>
-                  <span className="ml-1 text-[10px] text-white/40">{formatDps(row.dps)} dps</span>
+                <GearRow
+                  equipment={cosmetics?.equipment}
+                  rarity={cosmetics?.equipmentRarity}
+                  slotSize={GEAR_SLOT_SIZE}
+                  ownerObjectId={row.objectId}
+                  enchantSlots={cosmetics?.enchantSlots}
+                />
+                <span className="min-w-0 flex-1 truncate text-fg-muted">{row.name}</span>
+                <span className="shrink-0 text-right font-mono tabular-nums">
+                  <span className="text-fg">{formatDps(row.damage)}</span>
+                  <span className="ml-1 text-2xs text-fg-faint">{pct}%</span>
+                  <span className="ml-1 text-2xs text-fg-faint">{formatDps(row.dps)} dps</span>
                 </span>
-              </div>
+              </MeterRow>
             )
           })}
         </div>
@@ -214,16 +185,18 @@ function InstanceDetail({ entry, size, onBack }: InstanceDetailProps): React.JSX
   const topDamage = totalDamage(entry.enemies[0]?.players ?? [])
 
   return (
-    <div className="flex h-full w-full flex-col gap-1 text-white">
-      <button
-        className="flex shrink-0 items-center gap-1 text-left text-[10px] text-white/50 hover:text-white/80"
+    <div className="flex h-full w-full flex-col gap-1">
+      <Button
+        variant="ghost"
+        size="xs"
+        className="flex shrink-0 items-center gap-1 text-left"
         onClick={onBack}
       >
         <span>◂</span>
         <span className="truncate">{entry.instanceName}</span>
-      </button>
+      </Button>
       {entry.enemies.length === 0 ? (
-        <div className="text-xs text-white/40">No damage recorded</div>
+        <EmptyState>No damage recorded</EmptyState>
       ) : (
         <div className="flex-1 space-y-1 overflow-y-auto pr-1">
           {visibleEnemies.map((enemy) => (
@@ -237,12 +210,14 @@ function InstanceDetail({ entry, size, onBack }: InstanceDetailProps): React.JSX
             />
           ))}
           {entry.enemies.length > defaultVisible && (
-            <button
-              className="w-full py-0.5 text-center text-[10px] text-white/40 hover:text-white/70"
+            <Button
+              variant="ghost"
+              size="xs"
+              className="w-full py-0.5 text-center"
               onClick={() => setShowAll((v) => !v)}
             >
               {showAll ? 'Show less' : `Show all (${entry.enemies.length})`}
-            </button>
+            </Button>
           )}
         </div>
       )}

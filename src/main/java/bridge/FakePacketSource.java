@@ -1,5 +1,7 @@
 package bridge;
 
+import assets.IdToAsset;
+import bridge.dps.ParseEnchants;
 import packets.data.GroundTileData;
 import packets.data.ObjectData;
 import packets.data.ObjectStatusData;
@@ -13,7 +15,9 @@ import packets.incoming.NewTickPacket;
 import packets.incoming.QuestObjectIdPacket;
 import packets.incoming.ServerPlayerShootPacket;
 import packets.incoming.UpdatePacket;
+import packets.data.SlotObjectData;
 import packets.outgoing.EnemyHitPacket;
+import packets.outgoing.InvSwapPacket;
 import packets.outgoing.PlayerShootPacket;
 import packets.packetcapture.register.Register;
 
@@ -68,6 +72,29 @@ import java.util.Random;
  * encounter was already damaged), and the fight ends with the final phase
  * despawning with no new objective (proving focus falls back to last-hit
  * afterward).
+ * <p>
+ * Also registers synthetic {@link IdToAsset} entries (BagType 6/white and
+ * 8/orange item ids, their ground-bag entities including a boosted white-bag
+ * variant, and an off-tier filler item) and periodically drops loot-bag
+ * entities into view via {@link #lootBagDrop} - an {@link UpdatePacket} whose
+ * newObject is a bag carrying items in INVENTORY_0..7 plus per-slot enchant
+ * codes in UNIQUE_DATA_STRING - so the Loot panel's drop detection, BagType
+ * categorization, and per-item enchant/rarity display are demonstrable and
+ * regression-testable with no game installed (issue #105).
+ * <p>
+ * Every roster member's UNIQUE_DATA_STRING stat also carries synthetic
+ * per-slot enchant data ({@link #ROSTER_ENCHANTS}, encoded via
+ * {@link ParseEnchants#encodeEnchantSlot}), covering all four enchant-count
+ * rarity tiers (1-4 filled slots) plus unenchanted (0) gear across the roster
+ * - so the overlay's rarity-border rendering (issue #107) is demonstrable and
+ * regression-testable with no game installed.
+ * <p>
+ * Also runs a periodic equip/unequip round-trip on the local player's ability
+ * slot ({@link #localSelfSwap} + {@link #localPlayerSlotDeltas}, an
+ * {@link InvSwapPacket} naming the local player on both ends immediately
+ * followed by the correlated {@link NewTickPacket} slot deltas - the same
+ * shape a real client sends), exercising the Character/Instance panels
+ * re-rendering a live equip/unequip.
  */
 public class FakePacketSource {
 
@@ -116,6 +143,21 @@ public class FakePacketSource {
         {4003, 4103, 4203, 4303}       // Dave
     };
 
+    // Per-roster-member filled-enchant-slot counts (weapon/ability/armor/ring),
+    // 0-4 each - the rarity derivation issue #107 uses (0=common/no border,
+    // 1=uncommon, 2=rare, 3=legendary, 4=divine), and the same encoded slots
+    // feed the item tooltip's enchant-id list (issue #109; ids resolve to the
+    // bare-id fallback headless). Alice covers all four tiers in one row; Bob
+    // is fully unenchanted (known-empty slots - the tooltip's "No
+    // enchantments" state); Carol mixes tiers; Dave (null) sends no
+    // UNIQUE_DATA_STRING stat at all (tooltip shows no enchant section).
+    private static final int[][] ROSTER_ENCHANTS = {
+        {1, 2, 3, 4}, // Alice (local): one of each tier
+        {0, 0, 0, 0}, // Bob: fully unenchanted
+        {4, 0, 2, 0}, // Carol: mixed
+        null          // Dave: no enchant stat at all
+    };
+
     // A non-local player whose weapon we periodically swap, to prove OTHER players'
     // equipment updates render (not just the local player's) - the merge/render path
     // is identical for every objectId. Cycling the weapon objectType changes the
@@ -128,6 +170,49 @@ public class FakePacketSource {
     private static final int TRANSIENT_ID = 5;
     private static final String TRANSIENT_NAME = "Eve,7f2c";
     private static final int[] TRANSIENT_EQUIPMENT = {4005, 4105, 4205, 4305};
+    private static final int[] TRANSIENT_ENCHANTS = {2, 0, 4, 1};
+
+    // Loot panel demo (issue #105): the ground-bag ENTITIES the drop tracker
+    // watches for - one per tracked color (6 = white, 8 = orange/ST - see
+    // docs/asset-pipeline.md), plus a boosted white-bag variant proving the
+    // bridge's lootBagObjectTypes covers more than one entity per color and the
+    // tracker detects them all. Registered directly with IdToAsset (bypassing
+    // real extraction, which needs a game install) via IdToAsset.registerFake()
+    // below - the same "arbitrary plausible objectTypes" convention as
+    // WEAPON_ID/LOCAL_SKIN_ID above, extended with the Class=Bag + BagType
+    // metadata the loot pipeline reads.
+    private static final int WHITE_BAG_ICON_TYPE = 9000;
+    private static final int ORANGE_BAG_ICON_TYPE = 9001;
+    private static final int BOOSTED_WHITE_BAG_ICON_TYPE = 9002;
+    // Item objectTypes seeded with a BagType: 9100 white + 9200 orange (both
+    // tracked), and 9300 BagType 3 (NOT tracked - a filler item sharing a bag,
+    // which must never appear in the Loot panel, proving per-item filtering).
+    private static final int WHITE_ITEM_TYPE = 9100;
+    private static final int ORANGE_ITEM_TYPE = 9200;
+    private static final int FILLER_ITEM_TYPE = 9300;
+    // Fresh objectId per simulated bag drop, safely above every fixed entity id
+    // (roster/pet <= 50, enemies/boss in the 100_000s).
+    private static final int LOOT_BAG_ID_BASE = 200_000;
+
+    // Equip/unequip demo (issue #122): the local player's ability slot
+    // (INVENTORY_1_STAT) round-trips into bag slot 6 (INVENTORY_6_STAT) and
+    // back - see the class doc comment. Ticks chosen out of phase with the
+    // 40-tick map-reset/24-tick transient/16-tick loot-drop schedules above,
+    // purely so the three demos don't visually overlap.
+    private static final int EQUIP_SWAP_ABILITY_ITEM = ROSTER_EQUIPMENT[0][1];
+    private static final int EQUIP_SWAP_BAG_SLOT_ID = 6;
+    private static final int EQUIP_SWAP_CYCLE_TICKS = 48;
+
+    // Item tooltip demo (issue #109): seeds a couple of the ids above with
+    // IdToAsset.registerFake's item-info fields (tier/display name/description),
+    // so the hover tooltip mechanism is exercisable end-to-end even with no
+    // game installed - one equipped item (WEAPON_ID, hovered via GearRow) and
+    // one loot item (WHITE_ITEM_TYPE, hovered via the Loot panel). Every other
+    // fake objectType deliberately stays unregistered, exercising the tooltip's
+    // "no resolvable data" fallback (shows just the objectType).
+    // Ticks between simulated bag drops - long enough that each is a distinct,
+    // legible event rather than a flicker.
+    private static final int LOOT_CYCLE_TICKS = 16;
 
     // Set FAKE_NO_CREATE_SUCCESS to simulate a mid-session attach: the engine
     // never sees CreateSuccessPacket and must fall back to EnemyHitPacket.mainID
@@ -140,6 +225,25 @@ public class FakePacketSource {
 
     /** Start emitting fake packets on a background daemon thread. */
     public void start() {
+        // Registered synchronously (not on the loop thread) so they're present
+        // as early as possible; IdToAsset.reloadAssets() re-applies these after
+        // any (real-mode-only, here always a no-op) background reload, so this
+        // can't race away regardless of ObjectNames.init's own asset-loader
+        // thread ordering.
+        IdToAsset.registerFake(WHITE_BAG_ICON_TYPE, "Bag", 6);
+        IdToAsset.registerFake(ORANGE_BAG_ICON_TYPE, "Bag", 8);
+        IdToAsset.registerFake(BOOSTED_WHITE_BAG_ICON_TYPE, "Bag", 6);
+        IdToAsset.registerFake(ORANGE_ITEM_TYPE, "Equipment", 8);
+        IdToAsset.registerFake(FILLER_ITEM_TYPE, "Equipment", 3);
+        IdToAsset.registerFake(
+            WEAPON_ID, "Equipment", -1, "UT",
+            "Fake Sword of Testing", "A synthetic weapon seeded by --fake mode for the item tooltip demo."
+        );
+        IdToAsset.registerFake(
+            WHITE_ITEM_TYPE, "Equipment", 6, "8",
+            "Fake Potion of Testing", "A synthetic loot item seeded by --fake mode for the item tooltip demo."
+        );
+
         Thread t = new Thread(this::loop, "fake-packet-source");
         t.setDaemon(true);
         t.start();
@@ -183,6 +287,22 @@ public class FakePacketSource {
             } else if (tick % 24 == 18) {
                 Register.INSTANCE.emitPacketLogs(transientLeave());
             }
+            // Equip/unequip round-trip demo (issue #122) - see class doc comment.
+            // The outgoing InvSwapPacket (naming the local player on both ends)
+            // is emitted first, then the correlated slot deltas ride along on
+            // this tick's NewTickPacket below (see equipSwapStatus) - matching a
+            // real client's ordering (the client requests the swap, the server
+            // then confirms it via the next tick's stat deltas).
+            int equipOffset = tick % EQUIP_SWAP_CYCLE_TICKS;
+            if (equipOffset == 10) {
+                // Unequip: ability slot -> bag slot. The bag slot's resulting
+                // empty->populated transition is exactly the false-positive
+                // LootTracker used to log as a pickup.
+                Register.INSTANCE.emitPacketLogs(localSelfSwap(1, EQUIP_SWAP_BAG_SLOT_ID));
+            } else if (equipOffset == 14) {
+                // Re-equip: bag slot -> ability slot, restoring steady state.
+                Register.INSTANCE.emitPacketLogs(localSelfSwap(EQUIP_SWAP_BAG_SLOT_ID, 1));
+            }
             // Fake boss encounter, scheduled against this map's 40-tick life (see the
             // tick%40==0 instance-reset block above): phase 1 locks in at offset 2,
             // transitions to phase 2 (new objectId) at offset 20 - dropping phase 1 and
@@ -209,15 +329,29 @@ public class FakePacketSource {
             } else if (bossOffset >= 21 && bossOffset < 38) {
                 Register.INSTANCE.emitPacketLogs(bossDamage(BOSS_PHASE_IDS[1]));
             }
+            // Every LOOT_CYCLE_TICKS a fresh loot bag drops into view (a real
+            // UpdatePacket.newObjects bag entity with items + enchants), so the
+            // Loot panel logs it as a DROP - no pickup required. See lootBagDrop().
+            if (tick > 0 && tick % LOOT_CYCLE_TICKS == 0) {
+                Register.INSTANCE.emitPacketLogs(lootBagDrop(tick / LOOT_CYCLE_TICKS));
+            }
             // A NewTickPacket every tick, like a real client. It carries the
             // server clock the DPS engine uses as its time base - without it the
             // engine can't measure fight duration, so every computed DPS is 0.
             // Every ~10 ticks it also carries a non-local player's weapon swap, so
             // the Instance panel shows OTHER players' equipment updating live (the
-            // merge/render path is identical for every objectId).
+            // merge/render path is identical for every objectId), and at the two
+            // equip-swap offsets above it carries that swap's correlated 2-slot
+            // delta (see equipSwapStatus()).
             NewTickPacket nt = newTick(tick);
+            java.util.List<ObjectStatusData> status = new java.util.ArrayList<>();
             if (tick > 0 && tick % 10 == 0) {
-                nt.status = new ObjectStatusData[]{weaponSwapStatus(tick)};
+                status.add(weaponSwapStatus(tick));
+            }
+            ObjectStatusData equipSwap = equipSwapStatus(equipOffset);
+            if (equipSwap != null) status.add(equipSwap);
+            if (!status.isEmpty()) {
+                nt.status = status.toArray(new ObjectStatusData[0]);
             }
             Register.INSTANCE.emitPacketLogs(nt);
             // The local player firing then landing a hit, every tick like a real
@@ -367,8 +501,8 @@ public class FakePacketSource {
             // Every player carries name + 4 equipped slots; the local player also
             // gets a skin + dyes, so both the Character and Instance panels render.
             status.stats = ROSTER_IDS[i] == LOCAL_PLAYER_ID
-                ? localPlayerStats(ROSTER_NAMES[i], ROSTER_EQUIPMENT[i])
-                : playerStats(ROSTER_NAMES[i], ROSTER_EQUIPMENT[i]);
+                ? localPlayerStats(ROSTER_NAMES[i], ROSTER_EQUIPMENT[i], ROSTER_ENCHANTS[i])
+                : playerStats(ROSTER_NAMES[i], ROSTER_EQUIPMENT[i], ROSTER_ENCHANTS[i]);
 
             ObjectData obj = new ObjectData();
             obj.objectType = 0x0300; // player class 768, matches the synthetic players.xml
@@ -393,6 +527,74 @@ public class FakePacketSource {
         return st;
     }
 
+    /**
+     * A loot bag dropping into view: an {@link UpdatePacket} whose single
+     * newObject is a loot-bag entity (a Class=Bag objectType) carrying its
+     * items in INVENTORY_0..7 plus a UNIQUE_DATA_STRING of per-slot enchant
+     * codes - exactly the shape a real client renders enchant pips from on
+     * hover, and what the overlay's LootTracker reads. Cycles white /
+     * orange / boosted-white, each with a fresh objectId, so the Loot panel
+     * accumulates distinct DROP entries (no pickup required): the white bag
+     * pairs an enchanted white item with an off-tier filler that must NOT be
+     * listed (proving per-item filtering), the orange bag carries a
+     * more-enchanted orange item, and the boosted bag proves both the boosted
+     * entity's detection and a zero-enchant item. The previous bag is despawned
+     * ({@link UpdatePacket}.drops) so bags don't pile up in view.
+     */
+    private UpdatePacket lootBagDrop(int cycle) {
+        int bagObjectType;
+        int[] items;
+        int[] enchantCounts;
+        int variant = cycle % 3;
+        if (variant == 1) {
+            bagObjectType = ORANGE_BAG_ICON_TYPE;
+            items = new int[]{ORANGE_ITEM_TYPE};
+            enchantCounts = new int[]{3};
+        } else if (variant == 2) {
+            bagObjectType = BOOSTED_WHITE_BAG_ICON_TYPE;
+            items = new int[]{WHITE_ITEM_TYPE};
+            enchantCounts = new int[]{0};
+        } else {
+            bagObjectType = WHITE_BAG_ICON_TYPE;
+            items = new int[]{WHITE_ITEM_TYPE, FILLER_ITEM_TYPE};
+            enchantCounts = new int[]{2, 0};
+        }
+
+        ObjectStatusData bag = new ObjectStatusData();
+        bag.objectId = LOOT_BAG_ID_BASE + cycle;
+        bag.pos = new WorldPosData();
+        java.util.List<StatData> stats = new java.util.ArrayList<>();
+        for (int i = 0; i < items.length; i++) {
+            stats.add(invStat(i, items[i]));
+        }
+        stats.add(stringStat(StatType.UNIQUE_DATA_STRING, enchantUniqueDataString(enchantCounts)));
+        bag.stats = stats.toArray(new StatData[0]);
+
+        ObjectData obj = new ObjectData();
+        obj.objectType = bagObjectType;
+        obj.status = bag;
+
+        UpdatePacket p = new UpdatePacket();
+        p.levelType = 0;
+        p.pos = new WorldPosData();
+        p.tiles = new GroundTileData[0];
+        p.newObjects = new ObjectData[]{obj};
+        // Despawn the previous bag (the first drop, cycle 1, has no predecessor).
+        p.drops = cycle > 1 ? new int[]{LOOT_BAG_ID_BASE + cycle - 1} : new int[0];
+        return p;
+    }
+
+    /** One loot-bag content slot (slotIndex 0-7 -> INVENTORY_0..7, statTypeNum 8-15). */
+    private static StatData invStat(int slotIndex, int value) {
+        int num = StatType.INVENTORY_0_STAT.get() + slotIndex;
+        StatData s = new StatData();
+        s.statTypeNum = num;
+        s.statType = StatType.byOrdinal(num);
+        s.statValue = value;
+        s.statValueTwo = -1;
+        return s;
+    }
+
     /** An UpdatePacket adding the transient player to the instance (a player joining). */
     private UpdatePacket transientJoin() {
         UpdatePacket p = new UpdatePacket();
@@ -404,7 +606,7 @@ public class FakePacketSource {
         ObjectStatusData status = new ObjectStatusData();
         status.objectId = TRANSIENT_ID;
         status.pos = new WorldPosData();
-        status.stats = playerStats(TRANSIENT_NAME, TRANSIENT_EQUIPMENT);
+        status.stats = playerStats(TRANSIENT_NAME, TRANSIENT_EQUIPMENT, TRANSIENT_ENCHANTS);
 
         ObjectData obj = new ObjectData();
         obj.objectType = 0x0300; // player class 768, matches the synthetic players.xml
@@ -424,6 +626,54 @@ public class FakePacketSource {
         return p;
     }
 
+    /**
+     * One InvSwapPacket moving an item between two of the local player's own
+     * slots (weapon=0/ability=1/armor=2/ring=3, bag=4..11 - see
+     * packets/data/SlotObjectData.java) - see the equip/unequip demo in the
+     * class doc comment.
+     */
+    private InvSwapPacket localSelfSwap(int fromSlotId, int toSlotId) {
+        InvSwapPacket p = new InvSwapPacket();
+        p.time = 0;
+        p.playerWorldPos = new WorldPosData();
+        p.slotFrom = new SlotObjectData();
+        p.slotFrom.objectId = LOCAL_PLAYER_ID;
+        p.slotFrom.slotId = fromSlotId;
+        p.slotTo = new SlotObjectData();
+        p.slotTo.objectId = LOCAL_PLAYER_ID;
+        p.slotTo.slotId = toSlotId;
+        return p;
+    }
+
+    /**
+     * The correlated 2-slot stat delta for the equip-swap demo's current tick
+     * offset (see {@link #localSelfSwap} and the class doc comment), or null
+     * on a tick with nothing to report. Both slots change in the SAME status
+     * update, like a real client's atomic swap confirmation.
+     */
+    private ObjectStatusData equipSwapStatus(int equipOffset) {
+        if (equipOffset == 10) {
+            return localPlayerSlotDeltas(
+                StatType.INVENTORY_1_STAT, -1,
+                StatType.INVENTORY_6_STAT, EQUIP_SWAP_ABILITY_ITEM);
+        }
+        if (equipOffset == 14) {
+            return localPlayerSlotDeltas(
+                StatType.INVENTORY_6_STAT, -1,
+                StatType.INVENTORY_1_STAT, EQUIP_SWAP_ABILITY_ITEM);
+        }
+        return null;
+    }
+
+    /** One local-player NewTickPacket status update carrying 2 correlated slot deltas - see {@link #localSelfSwap}. */
+    private ObjectStatusData localPlayerSlotDeltas(StatType typeA, int valueA, StatType typeB, int valueB) {
+        ObjectStatusData st = new ObjectStatusData();
+        st.objectId = LOCAL_PLAYER_ID;
+        st.pos = new WorldPosData();
+        st.stats = new StatData[]{stat(typeA, valueA), stat(typeB, valueB)};
+        return st;
+    }
+
     /** A numeric stat entry. */
     private static StatData stat(StatType type, int value) {
         StatData s = new StatData();
@@ -434,19 +684,50 @@ public class FakePacketSource {
         return s;
     }
 
+    /** A string stat entry (e.g. NAME_STAT, UNIQUE_DATA_STRING). */
+    private static StatData stringStat(StatType type, String value) {
+        StatData s = new StatData();
+        s.statTypeNum = type.get();
+        s.statType = type;
+        s.stringStatValue = value;
+        s.statValueTwo = -1;
+        return s;
+    }
+
+    /**
+     * Encodes 4 per-slot enchant counts (weapon/ability/armor/ring, 0-4 each)
+     * into UNIQUE_DATA_STRING's comma-separated 4-slot wire shape - see
+     * {@link ParseEnchants#getEnchantStrings}/{@link ParseEnchants#encodeEnchantSlot}.
+     */
+    private static String enchantUniqueDataString(int[] slotEnchantCounts) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < slotEnchantCounts.length; i++) {
+            if (i > 0) sb.append(',');
+            sb.append(ParseEnchants.encodeEnchantSlot(slotEnchantCounts[i]));
+        }
+        return sb.toString();
+    }
+
     /**
      * A realistic player stat block. The DPS engine reads the full base+boost
      * stat set (Entity.calculateBaseStats) plus ATTACK/CONDITION/exalt for the
      * damage multiplier, so a real client always sends all of these - the fake
      * source must too or the engine can't compute a maxed player's damage.
+     *
+     * @param enchantCounts filled-enchant-slot count per equipped slot (0-4 each,
+     *                      weapon/ability/armor/ring) - see {@link #ROSTER_ENCHANTS}.
+     *                      Null omits the UNIQUE_DATA_STRING stat entirely (this
+     *                      player reports no enchant data at all - the tooltip's
+     *                      no-enchant-section state).
      */
-    private StatData[] playerStats(String name, int[] equipment) {
+    private StatData[] playerStats(String name, int[] equipment, int[] enchantCounts) {
         StatData nameStat = new StatData();
         nameStat.statTypeNum = StatType.NAME_STAT.get();
         nameStat.statType = StatType.NAME_STAT;
         nameStat.stringStatValue = name;
         nameStat.statValueTwo = -1;
-        return new StatData[]{
+
+        StatData[] base = {
             nameStat,
             stat(StatType.INVENTORY_0_STAT, equipment[0]),
             stat(StatType.INVENTORY_1_STAT, equipment[1]),
@@ -464,6 +745,15 @@ public class FakePacketSource {
             stat(StatType.VITALITY_BOOST_STAT, 0), stat(StatType.WISDOM_BOOST_STAT, 0),
             stat(StatType.EXALTATION_BONUS_DAMAGE, 1000) // /1000 -> x1.0 multiplier
         };
+        if (enchantCounts == null) return base;
+
+        StatData[] all = new StatData[base.length + 1];
+        System.arraycopy(base, 0, all, 0, base.length);
+        all[base.length] = stringStat(
+            StatType.UNIQUE_DATA_STRING,
+            enchantUniqueDataString(enchantCounts)
+        );
+        return all;
     }
 
     /**
@@ -472,8 +762,8 @@ public class FakePacketSource {
      * so the overlay's Character panel renders the player's skinned, dyed sprite +
      * loadout. Same shape a real client sends.
      */
-    private StatData[] localPlayerStats(String name, int[] equipment) {
-        StatData[] base = playerStats(name, equipment);
+    private StatData[] localPlayerStats(String name, int[] equipment, int[] enchantCounts) {
+        StatData[] base = playerStats(name, equipment, enchantCounts);
         StatData[] extra = {
             stat(StatType.SKIN_ID, LOCAL_SKIN_ID),
             // Clothing (Tex1) / accessory (Tex2) dyes, as dye objectTypes, so the

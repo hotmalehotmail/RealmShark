@@ -539,6 +539,19 @@ public class AssetExtractor {
                 case "SlotType":
                     ao.slotType = value;
                     break;
+                case "BagType":
+                    ao.bagType = value;
+                    break;
+                case "Description":
+                    // ObjectID.list is ';'-delimited (see AssetObject#toString) and
+                    // read back line-by-line - unlike the other fields here,
+                    // free-text flavor text could plausibly contain either
+                    // character, so sanitize rather than let it corrupt column
+                    // alignment or truncate a line.
+                    ao.description = value == null
+                        ? ""
+                        : value.replace(";", ",").replace("\n", " ").replace("\r", "").trim();
+                    break;
                 case "Subattack":
                     addSubattack(n, ao);
                     break;
@@ -693,6 +706,18 @@ public class AssetExtractor {
         String labels = "";
         String tier = "";
         String slotType = "";
+        /**
+         * Raw {@code <BagType>} value (a 0-9 enum; 6 = white bag, 8 = orange/ST
+         * bag - see docs/asset-pipeline.md), or "" when the object has none.
+         * Categorizes which color bag an item drops in, and (on a Bag-class
+         * object) self-identifies which color bag entity it is.
+         */
+        String bagType = "";
+        /**
+         * Raw {@code <Description>} value, or "" when absent. Item tooltip flavor
+         * text (issue #109) - not every object carries one.
+         */
+        String description = "";
 
         ArrayList<AssetProjectile> projectiles;
         ArrayList<Integer> subattack = new ArrayList<>();
@@ -729,7 +754,7 @@ public class AssetExtractor {
             }
 
             return String.format(
-                "%s;%s;%s;%s;%s;%s;%s;%s",
+                "%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s",
                 id,
                 display,
                 clazz,
@@ -737,7 +762,10 @@ public class AssetExtractor {
                 projectileString,
                 textureString,
                 labels,
-                idName
+                idName,
+                bagType,
+                tier,
+                description
             );
         }
     }
