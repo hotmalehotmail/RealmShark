@@ -219,7 +219,7 @@ per-panel scale tables at the top of each file.
 | Panel | Title | Data source | Notes |
 | --- | --- | --- | --- |
 | `StatusPanel` | "RealmShark" | `window.overlay.*` directly | Connection dot, hotkey hint, packet count, JS heap MB, app version + **auto-update** UI. |
-| `DpsPanel` | "DPS" | `useDpsTracker()` → `<DpsList>` | Rows per attacker vs. the focused enemy (§5). `MAX_ROWS = {sm:3, md:6, lg:12}`. Each row also renders that attacker's dyed `CharacterSprite` + equip-slot icons (gear hidden at `sm`), resolved from `EntityRegistry` by `row.objectId`. |
+| `DpsPanel` | "DPS" | `useDpsTracker()` → `<DpsList>` | Rows per attacker vs. the focused enemy, ranked by cumulative damage (§5). `MAX_ROWS = {sm:3, md:6, lg:12}`. Each row also renders that attacker's dyed `CharacterSprite` + equip-slot icons (gear hidden at `sm`), resolved from `EntityRegistry` by `row.objectId`, plus a proportional damage bar and a highlight/rank badge on the local player's row (§6). |
 | `ConsolePanel` | "Console" | `consoleLog.ts` buffer | Live log with search (Ctrl/Cmd+F), level colours, clear. |
 | `CharacterPanel` | "Character" | `EntityRegistry` (local player) | Big dyed sprite + 4 equip icons + username. |
 | `InstancePanel` | "Instance" | `EntityRegistry.characters()` | Every named player in the instance, dyed sprites + gear. |
@@ -490,20 +490,43 @@ for how these settings are applied.
 panel's `size` (`sm`/`md`/`lg`) so rows can scale down. Renders "No target
 attacked yet" when `targetId === null`, an optional header with the target sprite
 (`<Sprite objectType={entities.objectType(targetId)} />`) + name, then up to
-`maxRows` rows. Each row is `<CharacterSprite objectId={row.objectId}>` (the
-attacker's dyed skin/class sprite, same path `CharacterPanel` uses) + that
-player's 4 equip-slot icons (`entities.equipment(row.objectId)`, empty slots as
-bordered chips, hidden entirely at `sm` — `ROW_SLOT_SIZE.sm = 0` — the one
-"reduced detail" concession for the smallest panel size) + the truncating name +
-`{dps} dps ({damage})`. Numbers are formatted **compact** (`formatCompact`:
-`12.3k`, `1.2m`) rather than `toLocaleString()`, so the dps/total figures stay
-narrow enough to survive next to a sprite + 4 gear icons in a ~180-320px-wide
-panel (`DpsList.tsx`). It reads `useEntityRegistry()` for the target sprite and,
-per row, `objectType`/`skin`/dyes (via `CharacterSprite`) and `equipment` — all
-keyed by `row.objectId`, which is already the *owning player's* id even for
-pet/minion damage (the bridge's `DpsEngine.minionOwnerMap` and the local-estimate
-fallback's `minionOwners` map both attribute to the owner before the row is ever
-built — see `dps-engine.md`), so a summoned entity never gets its own row.
+`maxRows` rows, ranked by **cumulative damage on the focused target** (both the
+bridge `dps` path and the local-estimate fallback sort `rows` descending by
+`damage` — `DpsTracker.ts` — so the two paths agree on ranking even though the
+fallback still tracks a rolling `dps` figure too).
+
+Each row is `<CharacterSprite objectId={row.objectId}>` (the attacker's dyed
+skin/class sprite, same path `CharacterPanel` uses) + that player's 4
+equip-slot icons (`entities.equipment(row.objectId)`, empty slots as bordered
+chips, hidden entirely at `sm` — `ROW_SLOT_SIZE.sm = 0` — the one "reduced
+detail" concession for the smallest panel size) + the truncating name + the
+damage total as the primary figure, with rolling `dps` demoted to a smaller
+secondary figure beside it. Numbers are formatted **compact**
+(`formatCompact`: `12.3k`, `1.2m`) rather than `toLocaleString()`, so the
+total/dps figures stay narrow enough to survive next to a sprite + 4 gear
+icons in a ~180-320px-wide panel (`DpsList.tsx`).
+
+**Damage bar + self row.** Each row renders a proportional bar as a **row
+background fill** (an absolutely-positioned `div` sized `damage / topDamage`,
+painted behind a `relative z-10` wrapper holding the sprite/gear/name/numbers)
+so it never competes with them for horizontal space, and stays meaningful even
+at `sm` where the gear icons are hidden. The row is clipped
+(`overflow-hidden rounded-sm`) so the fill can never overflow the row or panel.
+The local player's row (`row.objectId === entities.localPlayerId()`) gets an
+accent ring (`ring-sky-400/70`), a tinted fill, and a `#rank` badge ahead of
+its name giving its true position in the full (unsliced) ranking —
+`selectVisibleRows()` always keeps that row present, pinning it into the last
+visible slot (displacing the lowest-ranked row otherwise shown) when its true
+rank falls below `maxRows`, so the player can always find themselves even if
+they're not in the top N.
+
+It reads `useEntityRegistry()` for the target sprite, the local player's id
+(`localPlayerId()`), and, per row, `objectType`/`skin`/dyes (via
+`CharacterSprite`) and `equipment` — all keyed by `row.objectId`, which is
+already the *owning player's* id even for pet/minion damage (the bridge's
+`DpsEngine.minionOwnerMap` and the local-estimate fallback's `minionOwners` map
+both attribute to the owner before the row is ever built — see
+`dps-engine.md`), so a summoned entity never gets its own row.
 
 **`consoleLog.ts`** — a module-level ring buffer (max 2000 entries,
 `consoleLog.ts:10`) with a listener set. `installConsoleCapture()`

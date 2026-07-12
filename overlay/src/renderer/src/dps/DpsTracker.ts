@@ -334,7 +334,9 @@ export class DpsTracker {
       })
     }
 
-    rows.sort((a, b) => b.dps - a.dps)
+    // Sort by cumulative damage (not rolling dps) to match the bridge path
+    // above and the ranking the DPS panel displays.
+    rows.sort((a, b) => b.damage - a.damage)
 
     return { targetId: this.focusTargetId, targetName, rows }
   }
