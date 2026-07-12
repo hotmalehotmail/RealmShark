@@ -511,7 +511,11 @@ export class DpsTracker {
    * hit on the objective, at which point `onLocalHit` takes over. A phase
    * transition on an already-engaged encounter (`bossDamagedByLocal` true,
    * carried over below) does still snap focus straight to the new phase,
-   * since that's a continuation of a fight already in progress.
+   * since that's a continuation of a fight already in progress - but only
+   * if the previous lock is still alive; if it already died (`bossAlive`
+   * false), this is a genuinely new objective rather than a phase
+   * transition, so `bossDamagedByLocal` resets the same as a fresh
+   * encounter (see the `lockedBossId === null` branch below).
    */
   private ingestQuestObjectId(data: QuestObjectIdPacketData): void {
     const newId = data.objectId
@@ -519,6 +523,7 @@ export class DpsTracker {
     if (this.lockedBossId !== null) {
       this.carryForwardBossDamage(this.lockedBossId)
       this.bossPhaseIds.add(this.lockedBossId)
+      if (!this.bossAlive) this.bossDamagedByLocal = false
     } else {
       this.bossDamagedByLocal = false
     }

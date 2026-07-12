@@ -407,9 +407,13 @@ tracker reports DPS against *one* enemy (`focusTargetId`), chosen by:
    (`bossDamagedByLocal`, set the first time `onLocalHit`'s `targetId` equals
    `lockedBossId`); until then, focus keeps following last-hit as if no
    objective were active, so the panel doesn't jump to a boss the player
-   hasn't reached yet. A phase transition on an already-*damaged* encounter
-   (`bossDamagedByLocal` carried over — see point 3 below) does snap focus
-   straight to the new phase, since that's a continuation of an engaged fight.
+   hasn't reached yet. A phase transition on an already-*damaged*, still-*alive*
+   encounter (`bossDamagedByLocal` carried over — see point 3 below) does snap
+   focus straight to the new phase, since that's a continuation of an engaged
+   fight; but if the previous lock had already despawned (`bossAlive` false) by
+   the time the new objective arrives, `bossDamagedByLocal` resets instead —
+   that's a genuinely new objective, not a phase continuation, and should be
+   treated the same as a fresh, undamaged encounter (`ingestQuestObjectId`).
    Once damaged-and-alive, every last-hit signal on anything else
    (`onLocalHit`, called from both `ingestEnemyHit` and `ingestDamage`) is a
    no-op — AoEing adds cannot steal focus from the boss — **unless** overridden

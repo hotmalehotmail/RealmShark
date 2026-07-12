@@ -233,11 +233,15 @@ public class FakePacketSource {
             // hits) then reappears - a real client does this constantly in a
             // crowded room even for a stationary melee target. Reproduces issue
             // #48: the DPS panel's sprite going blank for a live focus target
-            // that's just momentarily out of view, not actually dead.
+            // that's just momentarily out of view, not actually dead. Phases 12/15
+            // are chosen to never land on a boss-target tick (see fightTarget) in
+            // either boss phase - dropping the actual locked boss here would
+            // trigger onBossDespawn and disarm the sticky lock mid-fight, which
+            // isn't what this churn simulation is testing.
             int churnPhase = tick % 20;
-            if (churnPhase == 8) {
+            if (churnPhase == 12) {
                 Register.INSTANCE.emitPacketLogs(enemyDrop(target));
-            } else if (churnPhase == 11) {
+            } else if (churnPhase == 15) {
                 Register.INSTANCE.emitPacketLogs(enemyUpdate());
             }
             Register.INSTANCE.emitPacketLogs(localPlayerShoot(bulletId));
@@ -260,20 +264,23 @@ public class FakePacketSource {
      * below, which simulate teammates' damage and must never affect focus.
      * While a boss phase is alive (`bossOffset` in its window), attacks default
      * to the boss itself - so the lock arms within a tick or two of it spawning -
-     * except for a 7-tick (~2.1s, just past DpsTracker.ts's SUSTAINED_ATTACK_MS =
-     * 2000ms) window mid-phase where they're redirected to one of the fake adds
-     * instead, to exercise the sustained-attack override reclaiming focus and
-     * then reverting the instant attacks return to the boss. Outside any boss
-     * phase, cycles between the two adds every 20 ticks, exercising plain
+     * except for an 8-tick window mid-phase (offsets 10-17 in phase 1, 28-35 in
+     * phase 2) where they're redirected to one of the fake adds instead: the
+     * first and last add-hit in that window are 7 ticks apart (2100ms, just past
+     * DpsTracker.ts's SUSTAINED_ATTACK_MS = 2000ms), so it actually crosses the
+     * threshold and exercises the sustained-attack override reclaiming focus -
+     * then the last two ticks before each phase despawns (18-19 / 36-37) return
+     * to the boss to exercise reclaiming focus with a direct hit. Outside any
+     * boss phase, cycles between the two adds every 20 ticks, exercising plain
      * last-hit focus switching.
      */
     private int fightTarget(int bossOffset, int tick) {
         if (bossOffset >= 2 && bossOffset < 20) {
-            boolean overrideWindow = bossOffset >= 10 && bossOffset < 17;
+            boolean overrideWindow = bossOffset >= 10 && bossOffset < 18;
             return overrideWindow ? ENEMY_IDS[0] : BOSS_PHASE_IDS[0];
         }
         if (bossOffset >= 21 && bossOffset < 38) {
-            boolean overrideWindow = bossOffset >= 28 && bossOffset < 35;
+            boolean overrideWindow = bossOffset >= 28 && bossOffset < 36;
             return overrideWindow ? ENEMY_IDS[1] : BOSS_PHASE_IDS[1];
         }
         return ENEMY_IDS[(tick / 20) % ENEMY_IDS.length];
