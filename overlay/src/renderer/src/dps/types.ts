@@ -42,6 +42,17 @@ export interface UpdatePacketData {
 }
 
 /**
+ * packets/incoming/MapInfoPacket.java: sent on every instance change. `name` is
+ * a machine id (e.g. "FakeRealm1"); `displayName` is the human-readable name
+ * (e.g. "Oryx's Sanctuary") that matches the bridge's dungeon-icon table
+ * (`CharacterStatistics.DUNGEON_NAMES` / the sprite pack's `dungeonIcons`).
+ */
+export interface MapInfoPacketData {
+  name: string
+  displayName: string
+}
+
+/**
  * packets/incoming/QuestObjectIdPacket.java: tells the client the objectId of
  * its current quest objective (in a dungeon, the main boss). `list` is the
  * full quest-object candidate list; the tracker only needs `objectId`.

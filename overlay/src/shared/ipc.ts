@@ -120,4 +120,12 @@ export interface SpritePack {
    * pivotX/pivotY offset the rotation center (0,0 = tile center).
    */
   animDyeTable?: Record<string, number[]>
+  /**
+   * Dungeon display name (matches `MapInfoPacket.displayName`) -> spriteId of
+   * the dungeon's own icon (the bridge's curated `CharacterStatistics`
+   * DUNGEON_NAMES/DUNGEONS table). Used to resolve an instance to an icon for
+   * the DPS summary panel's master list, without any per-dungeon bridge
+   * traffic.
+   */
+  dungeonIcons?: Record<string, number>
 }
