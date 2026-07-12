@@ -319,13 +319,18 @@ export class DpsTracker {
   }
 
   /**
-   * The locked boss target died/despawned (a kill on it, or it left view via
-   * UpdatePacket.drops). Only marks it no-longer-alive - it does NOT clear
+   * `id` died/despawned (a kill on it, or it left view via UpdatePacket.drops -
+   * this runs for every dropped id, not just the locked boss). Prunes its
+   * enemyMaxHp entry so a dead enemy's stale max HP can never block
+   * maybeSwitchFallbackFocus from switching to a smaller live target, and also
+   * keeps enemyMaxHp from growing unbounded for the whole instance. When `id`
+   * is the locked boss, this only marks it no-longer-alive - it does NOT clear
    * focusTargetId, so the panel keeps showing the final numbers until either a
    * new quest objective re-locks (phase transition) or the next hit elsewhere
    * moves focus via the last-hit fallback (see onLocalHit).
    */
   private onBossDespawn(id: number): void {
+    this.enemyMaxHp.delete(id)
     if (this.lockedBossId === id) {
       this.bossAlive = false
     }
