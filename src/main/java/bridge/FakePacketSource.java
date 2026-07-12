@@ -50,13 +50,24 @@ import java.util.Random;
  * <p>
  * Each ~40-tick map life also runs a fake boss encounter, to exercise the DPS
  * panel's sticky quest-objective lock (see {@code DpsTracker.ts}): a
- * {@link QuestObjectIdPacket} locks focus onto a fake boss while regular
- * {@link DamagePacket}s keep landing on the two "add" enemies above (proving
- * the panel doesn't flip away from the boss while AoEing them), a mid-fight
- * phase transition swaps the boss to a new objectId via {@link UpdatePacket}.drops
- * + a fresh {@code QuestObjectIdPacket} (proving the damage total carries over
- * instead of resetting), and the fight ends with the final phase despawning
- * with no new objective (proving focus falls back to last-hit afterward).
+ * {@link QuestObjectIdPacket} arms the lock on a fake boss, and the local
+ * player's own direct attack (the {@code EnemyHitPacket}/{@code PlayerShootPacket}
+ * pair below) immediately targets it too, so the lock actually engages
+ * (proving {@code bossDamagedByLocal} flips true - a not-yet-damaged
+ * objective must NOT steal focus). Meanwhile teammates keep landing random
+ * {@link DamagePacket}s on the two "add" enemies above the whole time
+ * (proving the panel doesn't flip away from an engaged boss just because
+ * other damage lands elsewhere). A scripted ~2.1s window mid-phase redirects
+ * the local player's OWN direct attack to one of those adds continuously -
+ * longer than {@code DpsTracker.ts}'s `SUSTAINED_ATTACK_MS` (2000ms) - proving
+ * the sustained-attack override reclaims focus, then reverts to the boss the
+ * instant attacks return to it (see {@code fightTarget}). A mid-fight phase
+ * transition swaps the boss to a new objectId via {@link UpdatePacket}.drops +
+ * a fresh {@code QuestObjectIdPacket} (proving the damage total carries over
+ * instead of resetting, and the new phase re-engages immediately since the
+ * encounter was already damaged), and the fight ends with the final phase
+ * despawning with no new objective (proving focus falls back to last-hit
+ * afterward).
  */
 public class FakePacketSource {
 
@@ -177,9 +188,11 @@ public class FakePacketSource {
             // transitions to phase 2 (new objectId) at offset 20 - dropping phase 1 and
             // carrying its damage forward - and phase 2 dies at offset 38 with no
             // further QuestObjectIdPacket, so focus falls back to last-hit for the rest
-            // of the map's life. Damage keeps landing on both fake "adds" (ENEMY_IDS)
-            // throughout via the existing localPlayerHit/randomDamage calls below, so a
-            // correct tracker must never flip focus to them while the boss is locked.
+            // of the map's life. Teammates' random damage (randomDamage(), below) keeps
+            // landing on both fake "adds" (ENEMY_IDS) throughout, so a correct tracker
+            // must never flip focus to them just from that while the boss is engaged -
+            // see fightTarget() for what the local player's OWN attack targets, which is
+            // what actually arms/holds/overrides the lock.
             int bossOffset = tick % 40;
             if (bossOffset == 2) {
                 Register.INSTANCE.emitPacketLogs(bossUpdate(0));
@@ -212,9 +225,9 @@ public class FakePacketSource {
             // projectile (its damage computed from the weapon + player stats), and
             // the matching EnemyHit (same bulletId) applies it. This is the actual
             // self-DPS path, and EnemyHitPacket.mainID also identifies the local
-            // player. Swap targets every ~20 ticks to exercise focus switching.
+            // player. See fightTarget() for what it targets and why.
             short bulletId = (short) (tick % 100);
-            int target = ENEMY_IDS[(tick / 20) % ENEMY_IDS.length];
+            int target = fightTarget(bossOffset, tick);
             // Simulate view-radius churn: the enemy currently being fought briefly
             // drops out of the visible-object list (still alive, still landing
             // hits) then reappears - a real client does this constantly in a
@@ -238,6 +251,32 @@ public class FakePacketSource {
                 return;
             }
         }
+    }
+
+    /**
+     * What the local player's own direct attack (localPlayerShoot/localPlayerHit)
+     * targets this tick - the signal that actually drives DpsTracker.ts's sticky
+     * boss lock (arm/hold/override), as opposed to bossDamage()/randomDamage()
+     * below, which simulate teammates' damage and must never affect focus.
+     * While a boss phase is alive (`bossOffset` in its window), attacks default
+     * to the boss itself - so the lock arms within a tick or two of it spawning -
+     * except for a 7-tick (~2.1s, just past DpsTracker.ts's SUSTAINED_ATTACK_MS =
+     * 2000ms) window mid-phase where they're redirected to one of the fake adds
+     * instead, to exercise the sustained-attack override reclaiming focus and
+     * then reverting the instant attacks return to the boss. Outside any boss
+     * phase, cycles between the two adds every 20 ticks, exercising plain
+     * last-hit focus switching.
+     */
+    private int fightTarget(int bossOffset, int tick) {
+        if (bossOffset >= 2 && bossOffset < 20) {
+            boolean overrideWindow = bossOffset >= 10 && bossOffset < 17;
+            return overrideWindow ? ENEMY_IDS[0] : BOSS_PHASE_IDS[0];
+        }
+        if (bossOffset >= 21 && bossOffset < 38) {
+            boolean overrideWindow = bossOffset >= 28 && bossOffset < 35;
+            return overrideWindow ? ENEMY_IDS[1] : BOSS_PHASE_IDS[1];
+        }
+        return ENEMY_IDS[(tick / 20) % ENEMY_IDS.length];
     }
 
     /** Assigns the local-player identity to the first roster member, same as a real CreateSuccessPacket. */
@@ -545,14 +584,23 @@ public class FakePacketSource {
         return p;
     }
 
-    /** A fake instance transition, to test that the DPS tracker resets on MapInfoPacket. */
+    /**
+     * A fake instance transition, to test that the DPS tracker resets on MapInfoPacket.
+     * Every third map simulates entering the open-world Realm instead of a dungeon: the
+     * real client sends displayName as the raw, unresolved localization key
+     * ("{s.rotmg}") for it - the client resolves the key itself via a string table
+     * RealmShark never sees - so this exercises DpsTracker.ts's
+     * resolveInstanceDisplayName() fallback in fake mode instead of only surfacing on
+     * live testing (see issue: DPS summary panel showing the raw key).
+     */
     private MapInfoPacket mapInfo() {
         mapNumber++;
+        boolean openRealm = mapNumber % 3 == 0;
         MapInfoPacket p = new MapInfoPacket();
         p.width = 64;
         p.height = 64;
-        p.name = "FakeRealm" + mapNumber;
-        p.displayName = "Fake Realm " + mapNumber;
+        p.name = openRealm ? "realm" : "FakeRealm" + mapNumber;
+        p.displayName = openRealm ? "{s.rotmg}" : "Fake Realm " + mapNumber;
         p.realmName = p.displayName;
         p.versionNumber = "0";
         return p;

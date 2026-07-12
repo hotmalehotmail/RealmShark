@@ -45,6 +45,29 @@ function selectVisibleRows(
   return [...rows.slice(0, Math.max(0, maxRows - 1)), rows[localIndex]]
 }
 
+/**
+ * The bridge/local-estimate rows only ever contain attackers who've actually
+ * hit the focused target, so the local player is simply absent (not a
+ * zero-damage row) whenever they haven't damaged it yet - e.g. right after
+ * focus locks onto a boss teammates are already fighting. Synthesizes a
+ * 0-damage row for them in that case so they're always pinned and visible
+ * (see `selectVisibleRows`), same as everyone else who's engaged the target.
+ * `rows` stays sorted descending since the synthetic row's damage is minimal.
+ */
+function ensureLocalRow(
+  rows: PlayerDps[],
+  localPlayerId: number | null,
+  localName: string | null
+): PlayerDps[] {
+  if (localPlayerId === null || rows.some((r) => r.objectId === localPlayerId)) {
+    return rows
+  }
+  return [
+    ...rows,
+    { objectId: localPlayerId, name: localName ?? `#${localPlayerId}`, damage: 0, dps: 0 }
+  ]
+}
+
 function DpsList({ snapshot, maxRows, showHeader, size }: DpsListProps): React.JSX.Element {
   const entities = useEntityRegistry()
   const spriteSize = ROW_SPRITE_SIZE[size]
@@ -55,8 +78,9 @@ function DpsList({ snapshot, maxRows, showHeader, size }: DpsListProps): React.J
   }
 
   const localPlayerId = entities.localPlayerId()
-  const topDamage = snapshot.rows[0]?.damage ?? 0
-  const visibleRows = selectVisibleRows(snapshot.rows, maxRows, localPlayerId)
+  const rows = ensureLocalRow(snapshot.rows, localPlayerId, entities.name(localPlayerId))
+  const topDamage = rows[0]?.damage ?? 0
+  const visibleRows = selectVisibleRows(rows, maxRows, localPlayerId)
 
   return (
     <div className="text-sm text-white">
@@ -66,7 +90,7 @@ function DpsList({ snapshot, maxRows, showHeader, size }: DpsListProps): React.J
           <span className="truncate">Target: {snapshot.targetName}</span>
         </div>
       )}
-      {snapshot.rows.length === 0 ? (
+      {rows.length === 0 ? (
         <div className="text-xs text-white/40">No recent damage</div>
       ) : (
         <div className="space-y-1">
@@ -77,7 +101,7 @@ function DpsList({ snapshot, maxRows, showHeader, size }: DpsListProps): React.J
             // in this row's visible list - only meaningful to surface when
             // it's the local player's row (a pinned self-row may sit well
             // past its numeric position in `visibleRows`).
-            const rank = snapshot.rows.indexOf(row) + 1
+            const rank = rows.indexOf(row) + 1
             const fillPct = topDamage > 0 ? Math.min(100, (row.damage / topDamage) * 100) : 0
             return (
               <div

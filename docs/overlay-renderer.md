@@ -399,27 +399,48 @@ than the task's summary implies:
 **Focus target — sticky quest-objective lock, falling back to last-hit.** The
 tracker reports DPS against *one* enemy (`focusTargetId`), chosen by:
 
-1. **Quest-objective lock** (`lockedBossId`, `bossAlive`) — set from
-   `QuestObjectIdPacket.objectId` (`ingestQuestObjectId`), the game's own boss/
-   objective marker (in a dungeon, the main boss). While locked and alive, every
-   last-hit signal (`onLocalHit`, called from both `ingestEnemyHit` and
-   `ingestDamage`) is a no-op — AoEing adds cannot steal focus from the boss.
-   The lock only moves when either (a) a *different*, non-zero objective id
-   arrives (a phase/form change re-points the objective at the next phase's
-   entity), or (b) the locked entity despawns (`onBossDespawn`, driven by
-   `EnemyHitPacket.kill` on it or its id appearing in `UpdatePacket.drops`) — at
-   which point `bossAlive` goes false and last-hit resumes until a new objective
-   re-locks. Despawning does **not** itself clear `focusTargetId`, so the panel
-   keeps showing the final numbers rather than blanking mid-transition.
+1. **Quest-objective lock** (`lockedBossId`, `bossAlive`, `bossDamagedByLocal`)
+   — armed from `QuestObjectIdPacket.objectId` (`ingestQuestObjectId`), the
+   game's own boss/objective marker (in a dungeon, the main boss), but the
+   lock does **not** actually take effect — and `focusTargetId` is **not**
+   forced onto it — until the local player lands a hit on it
+   (`bossDamagedByLocal`, set the first time `onLocalHit`'s `targetId` equals
+   `lockedBossId`); until then, focus keeps following last-hit as if no
+   objective were active, so the panel doesn't jump to a boss the player
+   hasn't reached yet. A phase transition on an already-*damaged* encounter
+   (`bossDamagedByLocal` carried over — see point 3 below) does snap focus
+   straight to the new phase, since that's a continuation of an engaged fight.
+   Once damaged-and-alive, every last-hit signal on anything else
+   (`onLocalHit`, called from both `ingestEnemyHit` and `ingestDamage`) is a
+   no-op — AoEing adds cannot steal focus from the boss — **unless** overridden
+   by a sustained-attack streak (point 3). The lock only moves when either
+   (a) a *different*, non-zero objective id arrives (a phase/form change
+   re-points the objective at the next phase's entity), or (b) the locked
+   entity despawns (`onBossDespawn`, driven by `EnemyHitPacket.kill` on it or
+   its id appearing in `UpdatePacket.drops`) — at which point `bossAlive` goes
+   false and last-hit resumes until a new objective re-locks. Despawning does
+   **not** itself clear `focusTargetId`, so the panel keeps showing the final
+   numbers rather than blanking mid-transition.
 2. **Last-hit fallback** (`maybeSwitchFallbackFocus`) — used whenever no quest
-   objective is locked (open world, or after the locked boss despawned with no
-   new objective yet). Ordinarily this is plain last-hit, same as before this
-   feature; the one refinement is that a hit on a new target does **not** steal
-   focus away from the current one when both entities' `MAX_HP_STAT` are known
-   (from `UpdatePacket`, no bridge dependency) and the current target's is
-   larger — so an AoE tick on a small add can't flip focus off a bigger enemy
-   already being fought. Falls straight through to plain last-hit whenever
-   either max-HP is unknown, which is the common case.
+   objective is locked-and-damaged (open world, a not-yet-damaged objective, or
+   after the locked boss despawned with no new objective yet). Ordinarily this
+   is plain last-hit, same as before this feature; the one refinement is that
+   a hit on a new target does **not** steal focus away from the current one
+   when both entities' `MAX_HP_STAT` are known (from `UpdatePacket`, no bridge
+   dependency) and the current target's is larger — so an AoE tick on a small
+   add can't flip focus off a bigger enemy already being fought. Falls
+   straight through to plain last-hit whenever either max-HP is unknown, which
+   is the common case.
+3. **Sustained-attack override** — even once damaged-and-locked, a hit on the
+   boss itself always reclaims focus immediately (the player isn't sustaining
+   anything else anymore). But if the player continuously hits one *other*
+   target for `SUSTAINED_ATTACK_MS` (2000ms) straight — tracked per-hit by
+   `updateLocalStreak`/`localStreakDurationMs`, reset the instant the hit
+   target changes — that streak overrides the lock and `focusTargetId` moves
+   to it, on the read that a deliberate, unbroken 2+ second switch away from
+   the objective is intentional, unlike a stray AoE tick. The streak (and
+   `bossDamagedByLocal`) persists across a phase transition, since that's the
+   same encounter continuing.
 
 **Boss-phase damage carryover.** A boss changing form gets a brand-new
 `objectId` server-side (a new `Entity` in the bridge's `DpsEngine`, damage
@@ -439,8 +460,10 @@ to its owner via `minionOwners`. `snapshot` trims each buffer to the last
 **`WINDOW_MS = 8000`** ms and computes `dps = windowDamage / 8`.
 
 **Reset.** `reset()` wipes names, minion map, targets, focus, local id, the
-boss lock (`lockedBossId`/`bossAlive`/`bossCarry`), `enemyMaxHp`, `objectTypes`,
-`playerCosmetics`, and `bossPhaseIds` — all *per-instance* state. It runs on
+boss lock (`lockedBossId`/`bossAlive`/`bossDamagedByLocal`/`bossCarry`), the
+local attack streak (`localStreakTargetId`/`localStreakStartedAt`),
+`enemyMaxHp`, `objectTypes`, `playerCosmetics`, and `bossPhaseIds` — all
+*per-instance* state. It runs on
 `MapInfoPacket` internally (after `retainInstanceIfQualifying()` — §5.1) and is
 also called from the hook on detach (which skips retention — see §5.1). Debug
 counters and the retained `history`/`historySeq`/`currentInstanceName` are
@@ -460,7 +483,15 @@ way the tracker learns about it starting: a `MapInfoPacket`. `ingest()` calls
 state, **then** `reset()` wipes it, **then** `currentInstanceName` is set from
 the new packet's `displayName` (`MapInfoPacketData.displayName` — the
 human-readable name, e.g. `"Oryx's Sanctuary"`, matching the bridge's
-`dungeonIcons` table keys; `name` is a machine id and unrelated).
+`dungeonIcons` table keys; `name` is a machine id and unrelated), passed
+through `resolveInstanceDisplayName()` first. `displayName` is the raw
+localization *key* — the real client resolves it client-side through its own
+string table, which RealmShark never sees — so for a map with no dungeon-style
+name of its own (the open-world Realm) it arrives unresolved, literally
+`"{s.rotmg}"`. `resolveInstanceDisplayName` maps that known key to `"The
+Realm"` and, for any other unrecognized `{...}`-shaped key, falls back to a
+generic `"Unknown Realm"` rather than leaking the raw key into the DPS summary
+panel.
 
 **Log-gating.** `retainInstanceIfQualifying` skips instances with no real
 fight: it requires either some enemy's total damage (`totalDamage`, summed
@@ -631,11 +662,15 @@ at `sm` where the gear icons are hidden. The row is clipped
 (`overflow-hidden rounded-sm`) so the fill can never overflow the row or panel.
 The local player's row (`row.objectId === entities.localPlayerId()`) gets an
 accent ring (`ring-sky-400/70`), a tinted fill, and a `#rank` badge ahead of
-its name giving its true position in the full (unsliced) ranking —
-`selectVisibleRows()` always keeps that row present, pinning it into the last
-visible slot (displacing the lowest-ranked row otherwise shown) when its true
-rank falls below `maxRows`, so the player can always find themselves even if
-they're not in the top N.
+its name giving its true position in the full (unsliced) ranking. Two layers
+keep that row always present: `ensureLocalRow()` synthesizes a 0-damage row
+for the local player if they haven't hit the focused target at all yet (the
+bridge/local-estimate `rows` only ever contain attackers who've actually
+landed damage, so absence otherwise means "no row"), then
+`selectVisibleRows()` pins whichever row that is into the last visible slot
+(displacing the lowest-ranked row otherwise shown) when its true rank falls
+below `maxRows` — so the player can always find themselves, even at 0 damage
+or well outside the top N.
 
 It reads `useEntityRegistry()` for the target sprite, the local player's id
 (`localPlayerId()`), and, per row, `objectType`/`skin`/dyes (via
