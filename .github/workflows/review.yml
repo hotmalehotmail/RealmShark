@@ -1,18 +1,39 @@
 name: review
 
-# Independent agent review (full-spec §02, net 2). Reviews every PR for BOTH
-# correctness and code quality, posts its findings directly onto the PR (inline
-# review comments + a summary), AND publishes a machine-readable `review-verdict`
-# commit status (success = APPROVE, failure = REQUEST_CHANGES) — the gate the
-# gatekeeper/fix-loop read. If the review skips (see the guard below) no status is
-# posted, so a required `review-verdict` check fails closed rather than reading green.
+# Independent agent review (full-spec §02, net 2). Reviews every PR for correctness,
+# code quality, and docs freshness, posts findings onto the PR (inline comments + a
+# summary), AND publishes the machine-readable `review-verdict` commit status (success
+# / failure) — the gate the gatekeeper/fix-loop read. If the review skips or the judge
+# errors, NO status is posted, so the required `review-verdict` check fails closed
+# rather than reading green.
 #
-# Auth: a Claude subscription OAuth token (CLAUDE_CODE_OAUTH_TOKEN, from
-# `claude setup-token`) + the Claude GitHub App. Needs id-token: write.
+# JUDGE / SCRIBE SPLIT (audit H2/H3). The review runs in three deterministic phases so
+# the model that reads untrusted PR content never holds the credential that writes the
+# gate:
+#   1. stage  — plain bash (github.token, read-only gh) fetches the diff + the linked
+#               issue into files, and computes the facts the verdict depends on that must
+#               NOT be left to the model: is this an agent (`claude/*`) branch, does it
+#               touch `.github/`, does it declare a `Closes #N`.
+#   2. judge  — claude-code-action with **Read/Grep/Glob/Write only — no Bash, no gh**.
+#               It reads the staged inputs + the repo, assesses, and WRITES its findings
+#               to review-inputs/verdict.json. With no shell it physically cannot post a
+#               review or a status, so a prompt injection in the diff has no path to the
+#               gate (this replaces the old design where the reviewer posted its own
+#               verdict via Bash(gh:*)).
+#   3. scribe — plain bash. Reads verdict.json, computes the pass/fail verdict as a
+#               deterministic function of the findings + the stage facts (any high/
+#               critical finding, an agent PR touching `.github/`, an agent PR with no
+#               issue link, or unmet acceptance criteria => fail), posts the review, and
+#               posts the `review-verdict` status. Fail-closed: no valid verdict.json =>
+#               no status posted.
 #
-# claude-code-action validates that this file is byte-identical to the copy on
-# the default branch before running (a prompt-injection guard), so it does NOT
-# review the PR that changes review.yml itself — only PRs opened after it merges.
+# Auth: a Claude subscription OAuth token (CLAUDE_CODE_OAUTH_TOKEN) + the Claude GitHub
+# App. Needs id-token: write.
+#
+# claude-code-action validates that this file is byte-identical to the copy on the
+# default branch before running (a prompt-injection guard), so it does NOT review the PR
+# that changes review.yml itself — that PR is admin-merged to the default branch, then
+# synced to staging.
 on:
   pull_request:
     types: [opened, synchronize, reopened]
@@ -20,8 +41,8 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
-  statuses: write # to publish the review-verdict commit status
+  pull-requests: write # scribe posts the review / fallback comment
+  statuses: write # scribe publishes the review-verdict commit status
   id-token: write # claude-code-action mints an OIDC token to get its GitHub App token
 
 jobs:
@@ -34,101 +55,214 @@ jobs:
     # (`review-verdict` is), so skipping it is safe; CI + parity still gate the merge.
     if: ${{ !(github.event.pull_request.head.ref == 'staging' && github.event.pull_request.base.ref == 'bridge') }}
     runs-on: ubuntu-latest
+    env:
+      REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      SHA: ${{ github.event.pull_request.head.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: anthropics/claude-code-action@v1
+
+      # 1. STAGE — deterministic, read-only. Prepare the judge's inputs and compute the
+      #    verdict facts that must not be left to the model (agent branch? touches
+      #    .github? has a Closes #N?). Untrusted PR text stays in files; nothing here
+      #    interpolates it into a mutating command.
+      - name: Stage review inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          IN="$GITHUB_WORKSPACE/review-inputs"
+          mkdir -p "$IN"
+          # Read-only gh: the diff, the changed-file list, and the PR title/body.
+          gh pr diff "$PR_NUMBER" --repo "$REPO" > "$IN/diff.txt" || true
+          gh pr diff "$PR_NUMBER" --repo "$REPO" --name-only > "$IN/files.txt" || true
+          gh pr view "$PR_NUMBER" --repo "$REPO" --json title,body,headRefName > "$IN/pr.json"
+
+          HEADREF="$(jq -r '.headRefName // ""' "$IN/pr.json")"
+          PRBODY="$(jq -r '.body // ""' "$IN/pr.json")"
+
+          # is-agent: only `claude/*` head branches are pipeline agent PRs. The .github
+          # tripwire + issue-link requirement apply ONLY to those — a human/maintenance
+          # PR (fix/*, docs/*, ci/*) touching .github or closing no issue is legitimate.
+          case "$HEADREF" in claude/*) IS_AGENT=1 ;; *) IS_AGENT=0 ;; esac
+          # touches-.github: computed from the diff itself, NOT trusted to the model.
+          if grep -qE '^\.github/' "$IN/files.txt" 2>/dev/null; then TOUCHES_GITHUB=1; else TOUCHES_GITHUB=0; fi
+          # closing keyword + issue number (first match). `|| true`: grep exits 1 on no match.
+          ISSNUM="$(printf '%s' "$PRBODY" \
+            | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+#[0-9]+' \
+            | grep -oE '[0-9]+' | head -n1 || true)"
+          if [ -n "$ISSNUM" ]; then
+            HAS_CLOSING=1
+            gh issue view "$ISSNUM" --repo "$REPO" --json title,body \
+              -q '"# " + .title + "\n\n" + (.body // "")' > "$IN/issue.txt" 2>/dev/null \
+              || echo "(issue #$ISSNUM referenced but not readable)" > "$IN/issue.txt"
+          else
+            HAS_CLOSING=0
+            echo "(this PR declares no Closes/Fixes #N issue reference)" > "$IN/issue.txt"
+          fi
+          {
+            echo "IS_AGENT=$IS_AGENT"
+            echo "TOUCHES_GITHUB=$TOUCHES_GITHUB"
+            echo "HAS_CLOSING=$HAS_CLOSING"
+            echo "ISSNUM=${ISSNUM:-}"
+          } > "$IN/meta.env"
+          echo "Staged review inputs: is_agent=$IS_AGENT touches_github=$TOUCHES_GITHUB has_closing=$HAS_CLOSING issue=${ISSNUM:-none}"
+
+      # 2. JUDGE — assess only. Read/Grep/Glob/Write, NO Bash and NO gh, so it cannot
+      #    post anything: its sole output is review-inputs/verdict.json.
+      - name: Judge — assess the diff, write findings JSON
+        uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Allow the build agent's bot to trigger reviews. claude-code-action blocks
-          # bot-initiated runs by default, but the entire point of this workflow is to
-          # review the build agent's PRs (app/claude, actor `claude[bot]`). Both login
-          # forms are listed so it matches whether or not the action strips `[bot]`.
-          # Safe scope: a fork bot PR receives no secrets (this action can't run on it),
-          # and a same-repo bot PR requires write access — i.e. the trusted build agent.
+          # Allow the build agent's bot to trigger reviews (a same-repo bot PR requires
+          # write access — i.e. the trusted build agent; a fork bot PR gets no secrets).
           allowed_bots: "claude,claude[bot]"
-          # The action blocks mutating tools by default, so the review couldn't post.
-          # Grant only what it needs to read the diff and post: scoped gh/git + file
-          # write. NOT arbitrary Bash — this reviews untrusted PR diffs, and the token
-          # is limited to contents:read + pull-requests:write, so the blast radius of a
-          # prompt-injected gh call is at most a misleading PR comment.
-          claude_args: "--model claude-opus-4-8 --allowedTools Bash(gh:*),Bash(git:*),Write,Read,Grep,Glob"
+          # Read/Grep/Glob/Write ONLY — deliberately no Bash. The judge reads untrusted
+          # PR content and MUST NOT be able to run a command or touch the gate; the scribe
+          # step below does all posting deterministically.
+          claude_args: "--model claude-opus-4-8 --allowedTools Read,Grep,Glob,Write"
           show_full_output: true
-          # Authenticate gh inside Claude's shell so it can post the review.
-          settings: |
-            { "env": { "GH_TOKEN": "${{ github.token }}" } }
           prompt: |
             You are the code reviewer for pull request #${{ github.event.pull_request.number }}
-            in ${{ github.repository }}. Review ONLY what this PR changes.
+            in ${{ github.repository }}. You ASSESS ONLY — a later deterministic step posts
+            your findings and computes the pass/fail verdict. You have NO shell and cannot
+            post anything: your sole deliverable is the file `review-inputs/verdict.json`.
 
-            Read the diff with:  gh pr diff ${{ github.event.pull_request.number }}
-            The repo is checked out — read surrounding files for context, and consult
-            CLAUDE.md for the project's conventions and the wire-format contract.
+            Inputs already staged for you (in the repo root's `review-inputs/` directory):
+            - `review-inputs/diff.txt`  — the full PR diff (what this PR changes). Review ONLY this.
+            - `review-inputs/pr.json`   — the PR title and body.
+            - `review-inputs/issue.txt` — the linked issue's acceptance criteria, or a note
+                                          that the PR references no issue.
+            The repo is checked out: use Read/Grep/Glob to read surrounding files for context
+            and consult CLAUDE.md for the project's conventions and the wire-format contract.
 
-            Review for ALL THREE, weighting them equally:
-            1. Correctness — bugs, wrong logic, unhandled edge cases, race conditions,
-               broken contracts (e.g. Java packet fields vs. the TS types that consume them).
+            Review for ALL THREE, weighted equally:
+            1. Correctness — bugs, wrong logic, unhandled edge cases, race conditions, broken
+               contracts (e.g. Java packet fields vs. the TS types that consume them).
             2. Code quality — readability, maintainability, clear naming, right-sized
                abstraction, error handling at boundaries; no magic numbers, dead code, or
                duplicated logic; consistency with existing patterns and CLAUDE.md. The bar
                is: would a careful maintainer be happy to own this code?
-            3. Documentation accuracy — the `docs/` tree is a required deliverable, not
-               optional. Two kinds of drift are `high`-severity findings:
-               (a) Stale docs — this PR changes behavior, structure, data flow, or any
-                   fact a `docs/` file describes (use `docs/README.md` as the index)
-                   without updating that doc; a present-but-incomplete/now-wrong update
-                   counts too.
-               (b) Undocumented new surface — this PR adds something a maintainer would
-                   need docs to understand (a new subsystem/service/module boundary, a new
-                   wire-format/IPC/protocol contract, or a new cross-cutting mechanism
-                   future work builds on) but ships NO doc for it (a new `docs/` file or a
-                   substantial new section, plus a `docs/README.md` index entry — and an
-                   `architecture.md` mention if architecturally significant).
-               Judge by whether a future maintainer would be lost without the doc, NOT by
-               diff size. Do NOT require docs for work that is merely another instance of
-               an already-documented pattern (a new panel type, packet consumer, or dye), a
-               localized change that doesn't alter what a doc says, or internal
-               refactors/helpers with no new concept or contract — flag only real gaps.
+            3. Documentation accuracy — the `docs/` tree is a required deliverable. Two kinds
+               of drift are `high`-severity: (a) Stale docs — this PR changes behavior,
+               structure, data flow, or any fact a `docs/` file describes (`docs/README.md`
+               is the index) without updating that doc; a now-wrong partial update counts too.
+               (b) Undocumented new surface — a new subsystem/service/module boundary, a new
+               wire-format/IPC/protocol contract, or a new cross-cutting mechanism, shipped
+               with NO doc. Judge by whether a future maintainer would be lost, NOT by diff
+               size; do NOT require docs for another instance of an existing pattern (a new
+               panel type, packet consumer, or dye) or an internal refactor with no new
+               concept.
 
-            Be coverage-first: surface every real issue with a severity
-            (critical / high / medium / low), each tied to a file and line where possible.
-            Skip pure formatting that eslint/prettier already handles.
+            Acceptance criteria: if `review-inputs/issue.txt` contains acceptance criteria,
+            check the diff against EACH one and put any this PR does not satisfy into
+            `acceptance_unmet`. If it says there is no linked issue, set `acceptance_unmet`
+            to `[]` (the deterministic step handles the missing-link case itself).
 
-            Decide a verdict from your findings:
-            - Any finding of severity `critical` or `high` → verdict = FAIL, review event = "REQUEST_CHANGES".
-            - Otherwise                                     → verdict = PASS, review event = "COMMENT".
-              Use COMMENT, NOT APPROVE, for a pass: the GitHub Actions bot cannot submit
-              APPROVE reviews (the call fails and your summary is dropped). The pass/fail
-              signal is carried by the review-verdict status below, not by an approval
-              (required approvals are 0). Low/medium findings still go in the body/comments
-              as non-blocking notes.
+            Severities: critical / high / medium / low. Skip pure formatting that
+            eslint/prettier already handles.
 
-            Then POST the review to the PR (do not just print it). Write /tmp/review.json:
-              {
-                "event": "<COMMENT or REQUEST_CHANGES, per the verdict above>",
-                "body": "<2-4 sentence summary; include any findings not tied to a line. ALWAYS end the summary with one line: `Docs affected: <the docs/ file(s) whose subject this PR changes, or none>; accurate after this diff: <yes | no>.` — state it even when nothing is wrong, so the documentation check is visibly performed and cannot be silently skipped>",
-                "comments": [
-                  { "path": "<file>", "line": <line number in the NEW version of the file>,
-                    "body": "**[severity]** <the issue and a concrete suggested fix>" }
-                ]
-              }
-            Only put inline comments on lines that appear in the diff (added/changed lines).
-            Post it with:
-              gh api --method POST \
-                "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews" \
-                --input /tmp/review.json
-            If that call errors (e.g. a line is outside the diff), fall back to posting all
-            findings as one comment so nothing is lost:
-              gh pr comment ${{ github.event.pull_request.number }} --body-file /tmp/review.md
+            WRITE `review-inputs/verdict.json` with EXACTLY this shape and nothing else:
+            {
+              "summary": "<2-4 sentence summary of the review>",
+              "docs_line": "Docs affected: <docs/ file(s) whose subject this PR changes, or none>; accurate after this diff: <yes|no>",
+              "acceptance_unmet": ["<unmet criterion>", "..."],
+              "findings": [
+                { "path": "<file>", "line": <line number in the NEW file, on an added/changed line>, "severity": "<critical|high|medium|low>", "body": "<the issue and a concrete suggested fix>" }
+              ]
+            }
+            Put a finding's `line` only on an added/changed line in the diff; omit it (or use
+            null) for a file-level note. ALWAYS include `docs_line`, even when nothing is
+            wrong, so the documentation check is visibly performed. Do not run or post
+            anything — the file IS your output.
 
-            FINALLY, publish the verdict as a commit status on the PR head SHA — this is the
-            machine-readable gate the gatekeeper and fix-loop read. Run exactly (state is
-            "success" for a PASS/COMMENT, "failure" for a FAIL/REQUEST_CHANGES):
-              gh api --method POST \
-                "repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }}" \
-                -f state="<success|failure>" \
-                -f context="review-verdict" \
-                -f description="<one-line reason, e.g. 'clean' or '2 high-severity findings'>"
-            Always post BOTH the review and the status. If there are genuinely no issues,
-            post a COMMENT review with a brief positive summary and post state=success.
+      # 3. SCRIBE — deterministic. Compute the verdict from the judge's findings + the
+      #    stage facts, post the review, and post the review-verdict status. `always()`
+      #    so it runs even if the judge step failed (then verdict.json is absent =>
+      #    fail-closed: nothing is posted and the required check stays absent => blocked).
+      - name: Scribe — post the review and the review-verdict status
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          IN="$GITHUB_WORKSPACE/review-inputs"
+          VJ="$IN/verdict.json"
+
+          # Fail-closed: no valid judge output => post NOTHING. review-verdict stays absent,
+          # so branch protection blocks the merge (correct inverse of "green on skip").
+          if [ ! -s "$VJ" ] || ! jq -e 'type == "object"' "$VJ" >/dev/null 2>&1; then
+            echo "::warning::No valid verdict.json from the judge — posting no review-verdict (fail-closed; PR stays blocked, re-run review to retry)."
+            exit 0
+          fi
+
+          # Deterministic verdict facts from the stage step (never from the model).
+          # shellcheck source=/dev/null
+          . "$IN/meta.env" # IS_AGENT, TOUCHES_GITHUB, HAS_CLOSING, ISSNUM
+
+          HIGHCRIT="$(jq '[.findings[]? | select(.severity=="high" or .severity=="critical")] | length' "$VJ")"
+          UNMET="$(jq '((.acceptance_unmet // []) | length)' "$VJ")"
+
+          # Verdict is a deterministic function of the findings + the stage facts.
+          FAIL=0
+          NOTES=""
+          if [ "${HIGHCRIT:-0}" -gt 0 ]; then FAIL=1; fi
+          if [ "${UNMET:-0}" -gt 0 ]; then
+            FAIL=1
+            NOTES="$NOTES"$'\n'"- ❌ **Acceptance criteria not met** (${UNMET}): $(jq -r '(.acceptance_unmet // []) | join("; ")' "$VJ")"
+          fi
+          if [ "${IS_AGENT:-0}" = 1 ] && [ "${TOUCHES_GITHUB:-0}" = 1 ]; then
+            FAIL=1
+            NOTES="$NOTES"$'\n'"- ❌ **Agent PR modifies \`.github/\`** — auto-failed (audit H1 tripwire). Workflow/CI changes must come from a maintainer, not the build agent."
+          fi
+          if [ "${IS_AGENT:-0}" = 1 ] && [ "${HAS_CLOSING:-0}" = 0 ]; then
+            FAIL=1
+            NOTES="$NOTES"$'\n'"- ❌ **No \`Closes #N\` / \`Fixes #N\` reference** — an agent PR must link the issue it resolves (drives auto-close, the label lifecycle, and this acceptance check)."
+          fi
+
+          if [ "$FAIL" = 1 ]; then EVENT=REQUEST_CHANGES; STATE=failure; else EVENT=COMMENT; STATE=success; fi
+
+          # Build the review payload deterministically from the judge's JSON + the gate
+          # notes. jq constructs the JSON (untrusted strings never hit the shell).
+          jq -n --slurpfile v "$VJ" --arg event "$EVENT" --arg notes "$NOTES" '
+            {
+              event: $event,
+              body: ( ($v[0].summary // "(no summary)")
+                      + "\n\n" + ($v[0].docs_line // "Docs affected: (not stated).")
+                      + ( if ($notes | length) > 0 then "\n\n**Gate checks:**" + $notes else "" end) ),
+              comments: [ $v[0].findings[]? | select(.line != null and .path != null)
+                          | { path: .path, line: .line,
+                              body: ("**[" + (.severity // "note") + "]** " + (.body // "")) } ]
+            }' > /tmp/review.json
+
+          # Post the review; on 422 (e.g. an inline line falls outside the diff, which
+          # rejects the whole review) fall back to one plain comment so nothing is lost.
+          if ! gh api --method POST "repos/$REPO/pulls/$PR_NUMBER/reviews" --input /tmp/review.json 2>/tmp/rev_err; then
+            echo "::warning::POST /reviews failed ($(tr '\n' ' ' </tmp/rev_err)); falling back to a single comment."
+            {
+              jq -r '(.summary // "(no summary)") + "\n\n" + (.docs_line // "")
+                     + "\n\n" + ( [ .findings[]?
+                         | "- **[" + (.severity // "note") + "]** "
+                           + (.path // "?") + (if .line then ":" + (.line|tostring) else "" end)
+                           + " — " + (.body // "") ] | join("\n") )' "$VJ"
+              printf '%s\n' "$NOTES"
+            } > /tmp/review.md
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/review.md || true
+          fi
+
+          # ALWAYS post the verdict status LAST — this is the machine-readable gate, and it
+          # is posted independently of whether the review body posted, so a review-post
+          # hiccup never leaves the gate unset.
+          if [ "$STATE" = failure ]; then
+            DESC="changes requested: ${HIGHCRIT:-0} high/critical"
+            if [ "${UNMET:-0}" -gt 0 ]; then DESC="$DESC; ${UNMET} unmet criteria"; fi
+            if [ "${IS_AGENT:-0}" = 1 ] && [ "${TOUCHES_GITHUB:-0}" = 1 ]; then DESC="$DESC; .github tripwire"; fi
+            if [ "${IS_AGENT:-0}" = 1 ] && [ "${HAS_CLOSING:-0}" = 0 ]; then DESC="$DESC; missing issue link"; fi
+          else
+            DESC="clean"
+          fi
+          gh api --method POST "repos/$REPO/statuses/$SHA" \
+            -f state="$STATE" -f context="review-verdict" -f description="${DESC:0:140}"
+          echo "Posted review-verdict=$STATE ($DESC) on $SHA."
