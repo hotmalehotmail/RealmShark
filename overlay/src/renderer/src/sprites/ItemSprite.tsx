@@ -8,6 +8,8 @@ interface ItemSpriteProps {
   objectType: number
   size?: number
   className?: string
+  /** Enchant rarity-border tier (0-4), forwarded to `<Sprite>` — see sprites/enchantRarity.ts. */
+  rarity?: number | null
   /**
    * The equipping entity's objectId, paired with `slotIndex` to resolve that
    * player's enchant data for this slot (`EntityRegistry.enchantSlots`).
@@ -33,6 +35,7 @@ export function ItemSprite({
   objectType,
   size = 32,
   className,
+  rarity,
   ownerObjectId,
   slotIndex
 }: ItemSpriteProps): React.JSX.Element {
@@ -81,7 +84,7 @@ export function ItemSprite({
 
   return (
     <Tooltip content={content} className={className}>
-      <Sprite objectType={objectType} size={size} />
+      <Sprite objectType={objectType} size={size} rarity={rarity} />
     </Tooltip>
   )
 }

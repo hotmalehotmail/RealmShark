@@ -7,6 +7,11 @@ const SLOT_COUNT = 4
 interface GearRowProps {
   /** Equipped-item objectTypes by slot; a missing array or slot renders a placeholder swatch. */
   equipment: number[] | null | undefined
+  /**
+   * Enchant rarity-border tier (0-4) by slot, parallel to `equipment` - see
+   * sprites/enchantRarity.ts. A missing array or slot renders no border.
+   */
+  rarity?: number[] | null
   /** Slot icon edge length in px; <= 0 renders nothing (a panel size hiding its gear row). */
   slotSize: number
   /**
@@ -21,6 +26,7 @@ interface GearRowProps {
 /** A player's 4 equipment-slot icons in a row, placeholder swatches for empty slots. */
 export function GearRow({
   equipment,
+  rarity,
   slotSize,
   ownerObjectId
 }: GearRowProps): React.JSX.Element | null {
@@ -34,6 +40,7 @@ export function GearRow({
             key={i}
             objectType={itemType}
             size={slotSize}
+            rarity={rarity?.[i]}
             ownerObjectId={ownerObjectId}
             slotIndex={i}
           />

@@ -1,6 +1,7 @@
 package bridge;
 
 import assets.IdToAsset;
+import bridge.dps.ParseEnchants;
 import packets.data.GroundTileData;
 import packets.data.ObjectData;
 import packets.data.ObjectStatusData;
@@ -18,9 +19,6 @@ import packets.outgoing.EnemyHitPacket;
 import packets.outgoing.PlayerShootPacket;
 import packets.packetcapture.register.Register;
 
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.util.Base64;
 import java.util.Random;
 
 /**
@@ -79,6 +77,13 @@ import java.util.Random;
  * player's bag inventory slots (INVENTORY_4..11) via {@link #lootPickupStatus},
  * so the Loot panel's asset-derived BagType categorization is demonstrable and
  * regression-testable with no game installed (issue #105).
+ * <p>
+ * Every roster member's UNIQUE_DATA_STRING stat also carries synthetic
+ * per-slot enchant data ({@link #ROSTER_ENCHANTS}, encoded via
+ * {@link ParseEnchants#encodeEnchantSlot}), covering all four enchant-count
+ * rarity tiers (1-4 filled slots) plus unenchanted (0) gear across the roster
+ * - so the overlay's rarity-border rendering (issue #107) is demonstrable and
+ * regression-testable with no game installed.
  */
 public class FakePacketSource {
 
@@ -127,19 +132,19 @@ public class FakePacketSource {
         {4003, 4103, 4203, 4303}       // Dave
     };
 
-    // Weapon-slot enchant ids per roster member (issue #109 - item tooltip
-    // enchantment list), decoded client-side from UNIQUE_DATA_STRING the same
-    // way a real ParseEnchants.extractEnchantIds would. Deliberately varied to
-    // exercise every tooltip fallback path with no game installed: Alice has
-    // real enchant ids (resolved to "Unknown(id)" names since this environment
-    // has no assets/xml/enchantments.xml), Bob has one, Carol's slot is known
-    // but carries zero enchants ("no enchantments" state), and Dave gets no
-    // UNIQUE_DATA_STRING stat at all (entirely unknown - no enchant section).
-    private static final short[][] ROSTER_WEAPON_ENCHANTS = {
-        { 1, 2 }, // Alice (local)
-        { 3 },    // Bob
-        {},       // Carol - known-empty
-        null      // Dave - no stat sent
+    // Per-roster-member filled-enchant-slot counts (weapon/ability/armor/ring),
+    // 0-4 each - the rarity derivation issue #107 uses (0=common/no border,
+    // 1=uncommon, 2=rare, 3=legendary, 4=divine), and the same encoded slots
+    // feed the item tooltip's enchant-id list (issue #109; ids resolve to the
+    // bare-id fallback headless). Alice covers all four tiers in one row; Bob
+    // is fully unenchanted (known-empty slots - the tooltip's "No
+    // enchantments" state); Carol mixes tiers; Dave (null) sends no
+    // UNIQUE_DATA_STRING stat at all (tooltip shows no enchant section).
+    private static final int[][] ROSTER_ENCHANTS = {
+        {1, 2, 3, 4}, // Alice (local): one of each tier
+        {0, 0, 0, 0}, // Bob: fully unenchanted
+        {4, 0, 2, 0}, // Carol: mixed
+        null          // Dave: no enchant stat at all
     };
 
     // A non-local player whose weapon we periodically swap, to prove OTHER players'
@@ -154,6 +159,7 @@ public class FakePacketSource {
     private static final int TRANSIENT_ID = 5;
     private static final String TRANSIENT_NAME = "Eve,7f2c";
     private static final int[] TRANSIENT_EQUIPMENT = {4005, 4105, 4205, 4305};
+    private static final int[] TRANSIENT_ENCHANTS = {2, 0, 4, 1};
 
     // Loot panel demo (issue #105): the ground-bag entities the two tracked
     // BagTypes (6 = white, 8 = orange/ST - see docs/asset-pipeline.md) resolve
@@ -451,8 +457,8 @@ public class FakePacketSource {
             // Every player carries name + 4 equipped slots; the local player also
             // gets a skin + dyes, so both the Character and Instance panels render.
             status.stats = ROSTER_IDS[i] == LOCAL_PLAYER_ID
-                ? localPlayerStats(ROSTER_NAMES[i], ROSTER_EQUIPMENT[i], ROSTER_WEAPON_ENCHANTS[i])
-                : playerStats(ROSTER_NAMES[i], ROSTER_EQUIPMENT[i], ROSTER_WEAPON_ENCHANTS[i]);
+                ? localPlayerStats(ROSTER_NAMES[i], ROSTER_EQUIPMENT[i], ROSTER_ENCHANTS[i])
+                : playerStats(ROSTER_NAMES[i], ROSTER_EQUIPMENT[i], ROSTER_ENCHANTS[i]);
 
             ObjectData obj = new ObjectData();
             obj.objectType = 0x0300; // player class 768, matches the synthetic players.xml
@@ -528,7 +534,7 @@ public class FakePacketSource {
         ObjectStatusData status = new ObjectStatusData();
         status.objectId = TRANSIENT_ID;
         status.pos = new WorldPosData();
-        status.stats = playerStats(TRANSIENT_NAME, TRANSIENT_EQUIPMENT, null);
+        status.stats = playerStats(TRANSIENT_NAME, TRANSIENT_EQUIPMENT, TRANSIENT_ENCHANTS);
 
         ObjectData obj = new ObjectData();
         obj.objectType = 0x0300; // player class 768, matches the synthetic players.xml
@@ -569,24 +575,17 @@ public class FakePacketSource {
     }
 
     /**
-     * Encodes enchant ids into the six-bit ("base64url") wire format
-     * {@code bridge.dps.ParseEnchants#extractEnchantIds} decodes: a header
-     * byte, the {@code 1026} type sentinel, each id as a little-endian short,
-     * and a {@code -3} terminator - the inverse of
-     * {@code PcStatsDecoder#sixBitStringToBytes}. RotMG's six-bit alphabet
-     * (A-Z, a-z, 0-9, -, _, in that order) is exactly the standard base64url
-     * alphabet, so {@link Base64.Encoder} produces byte-for-byte compatible
-     * output.
+     * Encodes 4 per-slot enchant counts (weapon/ability/armor/ring, 0-4 each)
+     * into UNIQUE_DATA_STRING's comma-separated 4-slot wire shape - see
+     * {@link ParseEnchants#getEnchantStrings}/{@link ParseEnchants#encodeEnchantSlot}.
      */
-    private static String encodeEnchantString(short... enchantIds) {
-        ByteBuffer buf = ByteBuffer
-            .allocate(1 + 2 + enchantIds.length * 2 + 2)
-            .order(ByteOrder.LITTLE_ENDIAN);
-        buf.put((byte) 0); // header (ignored by the decoder)
-        buf.putShort((short) 1026); // enchant-payload type sentinel
-        for (short id : enchantIds) buf.putShort(id);
-        buf.putShort((short) -3); // terminator
-        return Base64.getUrlEncoder().encodeToString(buf.array());
+    private static String enchantUniqueDataString(int[] slotEnchantCounts) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < slotEnchantCounts.length; i++) {
+            if (i > 0) sb.append(',');
+            sb.append(ParseEnchants.encodeEnchantSlot(slotEnchantCounts[i]));
+        }
+        return sb.toString();
     }
 
     /**
@@ -595,14 +594,13 @@ public class FakePacketSource {
      * damage multiplier, so a real client always sends all of these - the fake
      * source must too or the engine can't compute a maxed player's damage.
      *
-     * @param weaponEnchantIds Enchant ids to encode onto the weapon slot
-     *                         (UNIQUE_DATA_STRING, slot 0) - see
-     *                         {@link #ROSTER_WEAPON_ENCHANTS}. Null omits the
-     *                         stat entirely (this player reports no enchant
-     *                         data at all); an empty array still sends the
-     *                         stat with a known-empty weapon slot.
+     * @param enchantCounts filled-enchant-slot count per equipped slot (0-4 each,
+     *                      weapon/ability/armor/ring) - see {@link #ROSTER_ENCHANTS}.
+     *                      Null omits the UNIQUE_DATA_STRING stat entirely (this
+     *                      player reports no enchant data at all - the tooltip's
+     *                      no-enchant-section state).
      */
-    private StatData[] playerStats(String name, int[] equipment, short[] weaponEnchantIds) {
+    private StatData[] playerStats(String name, int[] equipment, int[] enchantCounts) {
         StatData nameStat = new StatData();
         nameStat.statTypeNum = StatType.NAME_STAT.get();
         nameStat.statType = StatType.NAME_STAT;
@@ -627,14 +625,14 @@ public class FakePacketSource {
             stat(StatType.VITALITY_BOOST_STAT, 0), stat(StatType.WISDOM_BOOST_STAT, 0),
             stat(StatType.EXALTATION_BONUS_DAMAGE, 1000) // /1000 -> x1.0 multiplier
         };
-        if (weaponEnchantIds == null) return base;
+        if (enchantCounts == null) return base;
 
-        String weaponSlot = weaponEnchantIds.length > 0 ? encodeEnchantString(weaponEnchantIds) : "";
-        // Slot order matches ParseEnchants.getEnchantStrings: weapon/ability/armor/ring.
-        String uniqueData = String.join(",", weaponSlot, "", "", "");
         StatData[] all = new StatData[base.length + 1];
         System.arraycopy(base, 0, all, 0, base.length);
-        all[base.length] = stringStat(StatType.UNIQUE_DATA_STRING, uniqueData);
+        all[base.length] = stringStat(
+            StatType.UNIQUE_DATA_STRING,
+            enchantUniqueDataString(enchantCounts)
+        );
         return all;
     }
 
@@ -644,8 +642,8 @@ public class FakePacketSource {
      * so the overlay's Character panel renders the player's skinned, dyed sprite +
      * loadout. Same shape a real client sends.
      */
-    private StatData[] localPlayerStats(String name, int[] equipment, short[] weaponEnchantIds) {
-        StatData[] base = playerStats(name, equipment, weaponEnchantIds);
+    private StatData[] localPlayerStats(String name, int[] equipment, int[] enchantCounts) {
+        StatData[] base = playerStats(name, equipment, enchantCounts);
         StatData[] extra = {
             stat(StatType.SKIN_ID, LOCAL_SKIN_ID),
             // Clothing (Tex1) / accessory (Tex2) dyes, as dye objectTypes, so the

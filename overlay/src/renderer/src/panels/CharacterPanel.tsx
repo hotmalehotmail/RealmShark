@@ -45,6 +45,7 @@ function CharacterPanel({ size }: PanelContentProps): React.JSX.Element {
       <div className="mt-3">
         <GearRow
           equipment={entities.equipment(localId)}
+          rarity={entities.equipmentRarity(localId)}
           slotSize={SLOT_SIZE[size]}
           ownerObjectId={localId}
         />

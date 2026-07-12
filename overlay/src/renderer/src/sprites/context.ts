@@ -101,6 +101,12 @@ export interface EntityContextValue {
    * for a live objectId. Empty slots are `<= 0`. Returns null if the id is unknown.
    */
   equipment: (objectId: number | null | undefined) => number[] | null
+  /**
+   * Rarity-border tier (0=common/no border..4=divine) per equipped slot,
+   * decoded from UNIQUE_DATA_STRING - see `sprites/enchantRarity.ts`. Parallel
+   * to `equipment`. Returns null if the id is unknown.
+   */
+  equipmentRarity: (objectId: number | null | undefined) => number[] | null
   /** The clothing dye (Tex1) objectType for a live objectId, or null. */
   clothingDye: (objectId: number | null | undefined) => number | null
   /** The accessory dye (Tex2) objectType for a live objectId, or null. */
@@ -138,6 +144,7 @@ export const EntityContext = createContext<EntityContextValue>({
   objectType: () => null,
   skin: () => null,
   equipment: () => null,
+  equipmentRarity: () => null,
   clothingDye: () => null,
   accessoryDye: () => null,
   enchantSlots: () => null,

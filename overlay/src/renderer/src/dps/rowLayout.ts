@@ -1,9 +1,11 @@
 import type { PanelSize } from '../../../shared/panels'
 
 /** Row character-sprite pixel size per panel size — also drives fixed per-row height. */
-export const DPS_ROW_SPRITE_SIZE: Record<PanelSize, number> = { sm: 16, md: 20, lg: 24 }
-/** Rows rendered by DpsList, including the local player's pinned last slot. */
-export const DPS_MAX_ROWS: Record<PanelSize, number> = { sm: 3, md: 6, lg: 12 }
+export const DPS_ROW_SPRITE_SIZE: Record<PanelSize, number> = { sm: 24, md: 32, lg: 40 }
+/** Rows rendered by DpsList, including the local player's pinned last slot — roughly half the previous {sm:3,md:6,lg:12} in exchange for bigger rows, so the panel reads at a glance mid-fight. */
+export const DPS_MAX_ROWS: Record<PanelSize, number> = { sm: 2, md: 3, lg: 6 }
+/** Row text size (`MeterRow`'s `textSize`) per panel size — the primary name/damage text, not the badges/secondary figures that stay `2xs` regardless. */
+export const DPS_ROW_TEXT_SIZE: Record<PanelSize, 'xs' | 'sm'> = { sm: 'xs', md: 'sm', lg: 'sm' }
 
 const ROW_GAP = 4 // Tailwind space-y-1
 const TARGET_HEADER_HEIGHT = 20 // DpsList's "Target: ..." line + mb-1; hidden on sm

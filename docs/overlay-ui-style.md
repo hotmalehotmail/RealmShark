@@ -54,6 +54,37 @@ not the token count.
 Opacity modifiers on accent tokens are fine where the old design used softened
 shades (`text-accent/70`, `ring-accent/70`, `bg-accent/25`).
 
+### Damage-share meter (`--color-meter-hot` / `--color-meter-cool`)
+
+| Token | Meaning | Examples |
+| --- | --- | --- |
+| `--color-meter-hot` | top-of-scale end of a damage-share bar | `MeterRow`'s fill at `fillPct` near 100 (the top damager) |
+| `--color-meter-cool` | bottom-of-scale end of a damage-share bar | `MeterRow`'s fill at `fillPct` near 0 (a trailing attacker) |
+
+`MeterRow`'s fill is `color-mix(in oklab, var(--color-meter-hot) <pct>%, var(--color-meter-cool))`,
+where `<pct>` is the same `fillPct` (0-100) that already drives the fill's
+*width* — so a row's bar communicates its share (typically
+`damage / topDamage`) by both length and color, monotonically, with no extra
+per-caller wiring. Deliberately distinct from `--color-accent`: the local
+player's identity ring/badge stay independent of a row's damage-share color.
+
+### Rarity roles
+
+| Token | Meaning | Examples |
+| --- | --- | --- |
+| `--color-rarity-uncommon` | 1 filled enchant slot | `Sprite`'s rarity ring on an equipped item (`GearRow`) |
+| `--color-rarity-rare` | 2 filled enchant slots | same |
+| `--color-rarity-legendary` | 3 filled enchant slots | same |
+| `--color-rarity-divine` | 4 filled enchant slots | same |
+
+Rendered as a `ring-2 ring-rarity-<tier>` on the item's `<Sprite>` (a
+box-shadow ring, not a layout `border`, so it never changes the sprite's
+rendered size) - see `sprites/enchantRarity.ts` for the tier derivation
+(count of an item's filled enchant slots, decoded from its
+`UNIQUE_DATA_STRING`) and `docs/overlay-renderer.md` §4 for how that was
+verified. An unenchanted (0 filled slots) item renders no ring, same as
+today.
+
 **Rule: raw Tailwind palette classes (`emerald-500`, `sky-600`, `white/40`,
 `neutral-900`, …) are allowed only inside `src/renderer/src/ui/`.** Everywhere
 else uses semantic tokens. This is greppable:
@@ -92,8 +123,8 @@ apart; new code must use them instead of re-rolling the markup.
 | --- | --- | --- |
 | `EmptyState` | the muted "nothing to show yet" line every panel needs | `children` |
 | `Swatch` | bordered placeholder box for an unknown sprite / empty slot | `size` (px), `className?` |
-| `GearRow` | a player's 4 equipment-slot icons (placeholder swatches for empty slots), hoverable for the item tooltip | `equipment` (nullable), `slotSize` (px; `<= 0` renders nothing), `ownerObjectId?` (for equipped-slot enchant tooltips) |
-| `MeterRow` | list row with a proportional damage-bar fill behind its content | `fillPct` (0–100, clamped), `highlight?` (local player: accent ring + tinted fill), `onClick?` (renders a `<button>`), `className?` |
+| `GearRow` | a player's 4 equipment-slot icons (placeholder swatches for empty slots), hoverable for the item tooltip | `equipment` (nullable), `rarity` (nullable, parallel enchant-tier array - see "Rarity roles" above), `slotSize` (px; `<= 0` renders nothing), `ownerObjectId?` (for equipped-slot enchant tooltips) |
+| `MeterRow` | list row with a damage-share bar (width **and** color) behind its content | `fillPct` (0–100, clamped — drives both fill width and its hot/cool color), `highlight?` (local player: accent ring only, independent of fill color), `textSize?` (`'2xs'\|'xs'\|'sm'`, default `'xs'`), `height?` (px, fixed-height lists), `onClick?` (renders a `<button>`), `className?` |
 | `Button` | every button | `variant`: `subtle` (default) \| `ghost` \| `primary` \| `success` \| `warn`; `size`: `xs` \| `sm` (default) \| `md`; `active?` (ghost toggles, e.g. the pin); plus native button props |
 | `StatRow` | label-left / mono-tabular-value-right line | `label`, `children`, `className?` |
 | `Tooltip` | hover tooltip that escapes a panel's clipping (portals to `document.body`) and clamps to the viewport | `content` (`ReactNode`), `children` (the hover trigger), `className?` (trigger wrapper only) |

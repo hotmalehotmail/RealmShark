@@ -1,5 +1,7 @@
 package bridge;
 
+import assets.AssetExtractor;
+import assets.resextractor.AssetProbe;
 import bridge.sprites.SpritePackService;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -28,9 +30,12 @@ import java.util.concurrent.TimeUnit;
  * during dungeon bursts and aligns naturally with a UI render frame.
  *
  * <pre>
- * Usage: java bridge.PacketBridge [--port &lt;n&gt;] [--fake]
- *   --port &lt;n&gt;  port to listen on (default 47474)
- *   --fake      emit synthetic packets instead of sniffing (no game/Npcap needed)
+ * Usage: java bridge.PacketBridge [--port &lt;n&gt;] [--fake] [--probe-assets]
+ *   --port &lt;n&gt;      port to listen on (default 47474)
+ *   --fake          emit synthetic packets instead of sniffing (no game/Npcap needed)
+ *   --probe-assets  print the enchant pip/icon extraction feasibility report
+ *                    (see assets.resextractor.AssetProbe / docs/asset-pipeline.md)
+ *                    and exit - does not start the bridge server.
  * </pre>
  */
 public class PacketBridge {
@@ -83,6 +88,7 @@ public class PacketBridge {
     public static void main(String[] args) {
         int port = DEFAULT_PORT;
         boolean fake = false;
+        boolean probeAssets = false;
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "--port":
@@ -91,9 +97,16 @@ public class PacketBridge {
                 case "--fake":
                     fake = true;
                     break;
+                case "--probe-assets":
+                    probeAssets = true;
+                    break;
                 default:
                     System.err.println("[bridge] unknown argument: " + args[i]);
             }
+        }
+        if (probeAssets) {
+            AssetProbe.run(AssetExtractor.assetFile(), System.out);
+            return;
         }
         new PacketBridge(port).start(fake);
     }

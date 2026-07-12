@@ -51,6 +51,7 @@ function InstancePanel({ size }: PanelContentProps): React.JSX.Element {
               </div>
               <GearRow
                 equipment={entities.equipment(id)}
+                rarity={entities.equipmentRarity(id)}
                 slotSize={SLOT_SIZE[size]}
                 ownerObjectId={id}
               />

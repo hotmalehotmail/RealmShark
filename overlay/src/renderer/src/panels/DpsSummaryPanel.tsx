@@ -150,6 +150,7 @@ function EnemyRow({
                 <FrozenCharacterSprite cosmetics={cosmetics} size={PLAYER_SPRITE_SIZE} />
                 <GearRow
                   equipment={cosmetics?.equipment}
+                  rarity={cosmetics?.equipmentRarity}
                   slotSize={GEAR_SLOT_SIZE}
                   ownerObjectId={row.objectId}
                 />

@@ -29,6 +29,19 @@
   --color-warn: #fbbf24; /* connecting, restart-needed, warnings */
   --color-danger: #f87171; /* disconnected, errors */
 
+  /* Damage-share meter fill (MeterRow) — a row's bar is color-mixed between
+     these by damage/topDamage, independent of --color-accent, which stays
+     the local-player identity ring rather than a bar tint. */
+  --color-meter-cool: rgb(148 163 184 / 0.35); /* trailing / low-share fill */
+  --color-meter-hot: rgb(249 115 22 / 0.85); /* leading / top-damager fill */
+
+  /* Rarity roles — enchant-count border tiers on equipped item sprites
+     (GearRow/Sprite), matching RotMG's own rarity-border colours. */
+  --color-rarity-uncommon: #10b981; /* 1 filled enchant slot */
+  --color-rarity-rare: #3b82f6; /* 2 filled enchant slots */
+  --color-rarity-legendary: #a855f7; /* 3 filled enchant slots */
+  --color-rarity-divine: #eab308; /* 4 filled enchant slots */
+
   /* Type scale addition — 10px badge/caption size (text-2xs). The full
      allowed scale is 2xs / xs / sm / base; arbitrary text-[…] is banned. */
   --text-2xs: 0.625rem;
