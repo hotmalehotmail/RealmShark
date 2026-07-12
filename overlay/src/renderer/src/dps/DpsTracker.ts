@@ -6,6 +6,7 @@ import {
   type CreateSuccessPacketData,
   type DamagePacketData,
   type EnemyHitPacketData,
+  type MapInfoPacketData,
   type PlayerDps,
   type QuestObjectIdPacketData,
   type ServerPlayerShootPacketData,
@@ -13,6 +14,56 @@ import {
 } from './types'
 
 const WINDOW_MS = 8000
+
+/** packets/data/enums/StatType.java: the stats a player's cosmetic loadout is carried on. */
+const SKIN_ID_STAT_TYPE_NUM = 25
+const INVENTORY_0_STAT_TYPE_NUM = 8
+const CLOTHING_DYE_STAT_TYPE_NUM = 32
+const ACCESSORY_DYE_STAT_TYPE_NUM = 33
+
+/** A player's cosmetic loadout, frozen into history at the moment their instance ends. */
+export interface PlayerCosmetics {
+  objectType: number
+  skin?: number
+  /** 4 equipped slots (INVENTORY_0..3). Empty slots are `<= 0`. */
+  equipment?: number[]
+  clothingDye?: number
+  accessoryDye?: number
+}
+
+/** One enemy's frozen final damage breakdown, retained in a `DpsHistoryEntry`. */
+export interface DpsHistoryEnemy {
+  id: number
+  name: string
+  /** The enemy's own objectType, for the master-list icon fallback (main-boss sprite). */
+  objectType: number | null
+  players: PlayerDps[]
+  /** Frozen cosmetics per player objectId, so the detail view renders correctly even after the live EntityRegistry has moved on to a later instance. */
+  cosmetics: Map<number, PlayerCosmetics>
+}
+
+/** A past instance's retained damage summary - the DPS summary panel's master-list row + detail source. */
+export interface DpsHistoryEntry {
+  id: string
+  instanceName: string
+  /** Wall-clock ms (Date.now()) when the instance ended. */
+  endedAt: number
+  localPlayerId: number | null
+  /** Enemies ranked by total damage absorbed, descending; boss phases already merged. */
+  enemies: DpsHistoryEnemy[]
+}
+
+/** How many past instances to retain (session-scoped; oldest drops off). */
+export const HISTORY_MAX_INSTANCES = 20
+
+/**
+ * Minimum total damage a single enemy must have absorbed for the instance to
+ * be logged - a proxy for "a boss-scale enemy was fought", so nexus/vault/
+ * realm hops/rushed-empty rooms don't clutter the history. An instance where a
+ * quest objective (the game's own boss marker) was engaged at all is logged
+ * regardless of this threshold, even if the fight was cut short.
+ */
+export const HISTORY_LOG_MIN_DAMAGE = 5000
 
 /**
  * Flip to false to silence the [dps] diagnostic logging (per-type packet
@@ -106,6 +157,18 @@ export class DpsTracker {
   /** Debug: types whose field keys we've already dumped once (to avoid per-packet spam). */
   private dumpedKeys = new Set<string>()
 
+  /** objectId -> objectType, for every object seen this instance (players and enemies alike). */
+  private objectTypes = new Map<number, number>()
+  /** Player objectId -> cosmetic loadout, built up from UpdatePacket the same way EntityRegistry does - kept local (rather than read live from EntityRegistry) so a retained history entry's per-player sprite/gear stays correct after the live registry clears on the next instance change. */
+  private playerCosmetics = new Map<number, PlayerCosmetics>()
+  /** The current instance's display name (MapInfoPacket.displayName), captured for the *next* instance-end snapshot. */
+  private currentInstanceName = ''
+  /** Every quest-objective objectId seen locked this instance (all phases, including the current one) - lets the history snapshot collapse them into one merged boss entry instead of listing each phase separately. */
+  private bossPhaseIds = new Set<number>()
+  /** Retained past-instance summaries, newest first. Session-scoped: survives `reset()`, only cleared by a fresh page load. */
+  private history: DpsHistoryEntry[] = []
+  private historySeq = 0
+
   ingest(packets: PacketEnvelope[]): void {
     for (const envelope of packets) {
       if (DPS_DEBUG) this.countAndDump(envelope)
@@ -115,10 +178,14 @@ export class DpsTracker {
           dlog('local player id =', this.localPlayerId, '(from CreateSuccessPacket)')
           break
         }
-        case 'MapInfoPacket':
+        case 'MapInfoPacket': {
           dlog('MapInfoPacket -> reset (instance change)')
+          this.retainInstanceIfQualifying()
           this.reset()
+          const mapInfo = envelope.data as MapInfoPacketData | null
+          this.currentInstanceName = mapInfo?.displayName ?? ''
           break
+        }
         case 'UpdatePacket':
           this.ingestUpdate(envelope.data as UpdatePacketData)
           break
@@ -167,23 +234,67 @@ export class DpsTracker {
 
   private ingestUpdate(data: UpdatePacketData): void {
     for (const obj of data.newObjects ?? []) {
-      const nameStat = obj.status?.stats?.find((s) => s.statTypeNum === NAME_STAT_TYPE_NUM)
+      if (!obj.status) continue
+      const objectId = obj.status.objectId
+      this.objectTypes.set(objectId, obj.objectType)
+      const nameStat = obj.status.stats?.find((s) => s.statTypeNum === NAME_STAT_TYPE_NUM)
       if (nameStat?.stringStatValue) {
         // NAME_STAT is "username,titleCode,...": keep only the username. This
         // entityNames entry overrides the bridge's p.name below, so it must be
         // stripped here too (the bridge already strips its own copy).
-        this.entityNames.set(obj.status.objectId, nameStat.stringStatValue.split(',')[0])
+        this.entityNames.set(objectId, nameStat.stringStatValue.split(',')[0])
       }
-      const maxHpStat = obj.status?.stats?.find((s) => s.statTypeNum === MAX_HP_STAT_TYPE_NUM)
+      const maxHpStat = obj.status.stats?.find((s) => s.statTypeNum === MAX_HP_STAT_TYPE_NUM)
       if (maxHpStat?.statValue !== undefined) {
-        this.enemyMaxHp.set(obj.status.objectId, maxHpStat.statValue)
+        this.enemyMaxHp.set(objectId, maxHpStat.statValue)
       }
+      this.mergeCosmetics(objectId, obj.objectType, obj.status.stats)
     }
     // An entity leaving view covers both despawn (killed) and the game simply
     // no longer rendering it - either way, if it's our locked boss target we
     // can no longer assume it's alive; see onBossDespawn.
     for (const dropId of data.drops ?? []) {
       this.onBossDespawn(dropId)
+    }
+  }
+
+  /**
+   * Merges a player's cosmetic loadout (skin/equipment/dyes) from a stat
+   * delta, mirroring EntityRegistry's own merge - kept as a local, frozen-at-
+   * retention-time copy (see `playerCosmetics`) rather than a live lookup, so
+   * a retained history entry's sprite/gear survive the live registry clearing
+   * on the next instance change.
+   */
+  private mergeCosmetics(
+    objectId: number,
+    objectType: number,
+    stats?: { statTypeNum: number; statValue?: number }[]
+  ): void {
+    if (!stats || stats.length === 0) return
+    let rec = this.playerCosmetics.get(objectId)
+    for (const s of stats) {
+      if (s.statTypeNum === SKIN_ID_STAT_TYPE_NUM && s.statValue !== undefined) {
+        rec = rec ?? { objectType }
+        rec.skin = s.statValue
+      } else if (
+        s.statTypeNum >= INVENTORY_0_STAT_TYPE_NUM &&
+        s.statTypeNum <= INVENTORY_0_STAT_TYPE_NUM + 3 &&
+        s.statValue !== undefined
+      ) {
+        rec = rec ?? { objectType }
+        if (!rec.equipment) rec.equipment = [-1, -1, -1, -1]
+        rec.equipment[s.statTypeNum - INVENTORY_0_STAT_TYPE_NUM] = s.statValue
+      } else if (s.statTypeNum === CLOTHING_DYE_STAT_TYPE_NUM && s.statValue !== undefined) {
+        rec = rec ?? { objectType }
+        rec.clothingDye = s.statValue
+      } else if (s.statTypeNum === ACCESSORY_DYE_STAT_TYPE_NUM && s.statValue !== undefined) {
+        rec = rec ?? { objectType }
+        rec.accessoryDye = s.statValue
+      }
+    }
+    if (rec) {
+      rec.objectType = objectType
+      this.playerCosmetics.set(objectId, rec)
     }
   }
 
@@ -311,11 +422,13 @@ export class DpsTracker {
     if (!Number.isFinite(newId) || newId <= 0 || newId === this.lockedBossId) return
     if (this.lockedBossId !== null) {
       this.carryForwardBossDamage(this.lockedBossId)
+      this.bossPhaseIds.add(this.lockedBossId)
     }
     dlog('quest objective ->', newId, `(${this.nameOf(newId)}) - locking DPS focus`)
     this.lockedBossId = newId
     this.bossAlive = true
     this.focusTargetId = newId
+    this.bossPhaseIds.add(newId)
   }
 
   /**
@@ -404,9 +517,15 @@ export class DpsTracker {
     this.lockedBossId = null
     this.bossAlive = false
     this.bossCarry.clear()
+    this.objectTypes.clear()
+    this.playerCosmetics.clear()
+    this.bossPhaseIds.clear()
     // Deliberately keep typeCounts/dumpedKeys across resets so the running
     // totals (and one-time key dumps) survive instance changes - they describe
-    // the whole session's traffic, not a single instance.
+    // the whole session's traffic, not a single instance. Likewise `history`/
+    // `historySeq`/`currentInstanceName` are session-scoped, not per-instance -
+    // see retainInstanceIfQualifying, called just before reset() on every
+    // MapInfoPacket.
   }
 
   /**
@@ -544,4 +663,101 @@ export class DpsTracker {
     // has an objectType); enemies only have the latter; else fall back to id.
     return this.entityNames.get(id) ?? this.objectNames.get(id) ?? `#${id}`
   }
+
+  /**
+   * Retained past-instance summaries, newest first (capped at
+   * `HISTORY_MAX_INSTANCES`). Populated by `retainInstanceIfQualifying` on
+   * every instance change; never mutated by `reset()`.
+   */
+  getHistory(): DpsHistoryEntry[] {
+    return this.history
+  }
+
+  /**
+   * Called on every MapInfoPacket, just before `reset()` wipes the live
+   * state: if the instance about to end had a real fight (gated by
+   * `HISTORY_LOG_MIN_DAMAGE`, or any quest objective engaged at all), freezes
+   * its per-enemy damage breakdown into `history`. Nexus/vault/realm hops/
+   * rushed-empty rooms fall under the threshold and are silently skipped.
+   */
+  private retainInstanceIfQualifying(): void {
+    if (this.bridgeEnemies.size === 0 && this.lockedBossId === null) return
+
+    const enemies = this.buildHistoryEnemies()
+    if (enemies.length === 0) return
+
+    const maxDamage = Math.max(...enemies.map((e) => totalDamage(e.players)))
+    const bossEngaged = this.lockedBossId !== null
+    if (maxDamage < HISTORY_LOG_MIN_DAMAGE && !bossEngaged) return
+
+    this.historySeq += 1
+    this.history.unshift({
+      id: `${Date.now()}-${this.historySeq}`,
+      instanceName: this.currentInstanceName || 'Unknown Instance',
+      endedAt: Date.now(),
+      localPlayerId: this.localPlayerId,
+      enemies
+    })
+    if (this.history.length > HISTORY_MAX_INSTANCES) {
+      this.history.length = HISTORY_MAX_INSTANCES
+    }
+  }
+
+  /**
+   * Builds the ranked, boss-phase-merged enemy list for a history snapshot.
+   * `bridgeEnemies` holds one entry per raw objectId the bridge has ever seen
+   * the local user hit this instance, including every phase of a boss whose
+   * objectId changed form - those phase ids (`bossPhaseIds`) are excluded from
+   * the flat per-enemy loop below and replaced with a single merged entry
+   * (reusing `bossSnapshot`'s carry-forward merge, the same one the live panel
+   * uses for a phase-changing boss - see docs/dps-engine.md's bossPhaseDamage
+   * note for why that bridge-side field is NOT what does this merging).
+   */
+  private buildHistoryEnemies(): DpsHistoryEnemy[] {
+    const enemies: DpsHistoryEnemy[] = []
+    const mergedIds = new Set(this.bossPhaseIds)
+    if (this.lockedBossId !== null) mergedIds.add(this.lockedBossId)
+
+    for (const [id, enemy] of this.bridgeEnemies) {
+      if (mergedIds.has(id)) continue
+      if (totalDamage(enemy.rows) <= 0) continue
+      enemies.push({
+        id,
+        name: enemy.name,
+        objectType: this.objectTypes.get(id) ?? null,
+        players: enemy.rows,
+        cosmetics: this.cosmeticsFor(enemy.rows)
+      })
+    }
+
+    if (this.lockedBossId !== null) {
+      const merged = this.bossSnapshot(Date.now(), WINDOW_MS)
+      if (merged.rows.length > 0) {
+        enemies.push({
+          id: this.lockedBossId,
+          name: merged.targetName,
+          objectType: this.objectTypes.get(this.lockedBossId) ?? null,
+          players: merged.rows,
+          cosmetics: this.cosmeticsFor(merged.rows)
+        })
+      }
+    }
+
+    enemies.sort((a, b) => totalDamage(b.players) - totalDamage(a.players))
+    return enemies
+  }
+
+  /** Frozen cosmetic loadout for each player row, for the detail view's per-player gear/sprite. */
+  private cosmeticsFor(rows: PlayerDps[]): Map<number, PlayerCosmetics> {
+    const cosmetics = new Map<number, PlayerCosmetics>()
+    for (const row of rows) {
+      const rec = this.playerCosmetics.get(row.objectId)
+      if (rec) cosmetics.set(row.objectId, { ...rec, equipment: rec.equipment?.slice() })
+    }
+    return cosmetics
+  }
+}
+
+function totalDamage(rows: PlayerDps[]): number {
+  return rows.reduce((sum, row) => sum + row.damage, 0)
 }

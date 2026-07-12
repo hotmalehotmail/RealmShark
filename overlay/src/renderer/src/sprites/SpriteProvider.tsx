@@ -481,6 +481,12 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
     [pack, baseFrame, baseSpriteRect, baseMaskRect, dyeFrameOf, dyeRoleInput]
   )
 
+  const dungeonIcon = useCallback(
+    (name: string | null | undefined): number | null =>
+      name ? (pack.dungeonIcons?.[name] ?? null) : null,
+    [pack]
+  )
+
   return (
     <SpriteContext.Provider
       value={{
@@ -492,7 +498,8 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
         bakeAnimatedDye,
         frameMs,
         scrollSpeed,
-        rotateSpeed
+        rotateSpeed,
+        dungeonIcon
       }}
     >
       {children}

@@ -4,6 +4,7 @@ import type { SizePx } from './anchor'
 import CharacterPanel from './CharacterPanel'
 import ConsolePanel from './ConsolePanel'
 import DpsPanel from './DpsPanel'
+import DpsSummaryPanel from './DpsSummaryPanel'
 import InstancePanel from './InstancePanel'
 import StatusPanel from './StatusPanel'
 
@@ -68,5 +69,15 @@ export const PANEL_REGISTRY: Record<string, PanelSpec> = {
       lg: { width: 360, height: 360 }
     },
     component: InstancePanel
+  },
+  dpsSummary: {
+    type: 'dpsSummary',
+    title: 'DPS Summary',
+    sizes: {
+      sm: { width: 240, height: 200 },
+      md: { width: 320, height: 300 },
+      lg: { width: 400, height: 420 }
+    },
+    component: DpsSummaryPanel
   }
 }

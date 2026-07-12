@@ -60,6 +60,12 @@ export interface SpriteContextValue {
   scrollSpeed: number
   /** Animated-cloth rotate rate: radians/sec per unit of the dye's own speed. */
   rotateSpeed: number
+  /**
+   * The dungeon icon spriteId for a dungeon display name (matches
+   * `MapInfoPacket.displayName`), or null if unknown (a non-dungeon map, or
+   * the pack predates this table). See `SpritePack.dungeonIcons`.
+   */
+  dungeonIcon: (name: string | null | undefined) => number | null
 }
 
 export const SpriteContext = createContext<SpriteContextValue>({
@@ -71,7 +77,8 @@ export const SpriteContext = createContext<SpriteContextValue>({
   bakeAnimatedDye: () => null,
   frameMs: 200,
   scrollSpeed: 1.5,
-  rotateSpeed: 0.15
+  rotateSpeed: 0.15,
+  dungeonIcon: () => null
 })
 
 export function useSprites(): SpriteContextValue {

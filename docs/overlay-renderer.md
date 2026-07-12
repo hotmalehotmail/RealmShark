@@ -25,13 +25,14 @@ for the Java DPS engine that feeds this UI see `dps-engine.md`.
 | `overlay/src/renderer/src/panels/PanelFrame.tsx` | One panel's chrome: title bar, drag, size/pin buttons, visibility. |
 | `overlay/src/renderer/src/panels/anchor.ts` | Percentage-anchor ↔ pixel math (`panelStyle`, `anchorFromPointer`). |
 | `overlay/src/renderer/src/panels/registry.ts` | `type → { title, per-size px dims, component }` and `PanelContentProps`. |
-| `overlay/src/renderer/src/panels/{Status,Dps,Console,Character,Instance}Panel.tsx` | The five panel bodies. |
+| `overlay/src/renderer/src/panels/{Status,Dps,Console,Character,Instance,DpsSummary}Panel.tsx` | The six panel bodies. |
 | `overlay/src/renderer/src/sprites/SpriteProvider.tsx` | Loads/decodes the atlas pack; `getSprite` / `getDyedSprite`. |
 | `overlay/src/renderer/src/sprites/Sprite.tsx` / `CharacterSprite.tsx` | `<Sprite objectType>` / `<CharacterSprite objectId>` components. |
 | `overlay/src/renderer/src/sprites/EntityRegistry.tsx` | objectId → name/skin/equipment/dyes, built from the packet stream. |
 | `overlay/src/renderer/src/sprites/context.ts` | The two React contexts + `useSprites` / `useEntityRegistry` hooks. |
-| `overlay/src/renderer/src/dps/DpsTracker.ts` | Framework-agnostic class ingesting packets → `DpsSnapshot`. |
+| `overlay/src/renderer/src/dps/DpsTracker.ts` | Framework-agnostic class ingesting packets → `DpsSnapshot`; also retains a session-scoped per-instance damage history (§5.1). |
 | `overlay/src/renderer/src/dps/useDpsTracker.ts` | React hook wrapping `DpsTracker` (event-driven on bridge `dps` packets + 1 s fallback recompute). |
+| `overlay/src/renderer/src/dps/useDpsHistory.ts` | React hook owning a dedicated `DpsTracker` instance for the DPS summary panel; exposes `DpsHistoryEntry[]`. |
 | `overlay/src/renderer/src/dps/types.ts` | Packet-field shapes the tracker reads. |
 
 ---
@@ -213,7 +214,7 @@ content (sprite px, row counts, which optional lines to show).
 
 ## 3. The panels
 
-All five bodies are thin; the data lives in the shared services. `size` maps to
+All six bodies are thin; the data lives in the shared services. `size` maps to
 per-panel scale tables at the top of each file.
 
 | Panel | Title | Data source | Notes |
@@ -223,6 +224,7 @@ per-panel scale tables at the top of each file.
 | `ConsolePanel` | "Console" | `consoleLog.ts` buffer | Live log with search (Ctrl/Cmd+F), level colours, clear. |
 | `CharacterPanel` | "Character" | `EntityRegistry` (local player) | Big dyed sprite + 4 equip icons + username. |
 | `InstancePanel` | "Instance" | `EntityRegistry.characters()` | Every named player in the instance, dyed sprites + gear. |
+| `DpsSummaryPanel` | "DPS Summary" | `useDpsHistory()` | Post-fight master/detail: a master list of retained past instances (icon + name + a "You: Xdmg (#rank)" headline), each opening a detail view of that instance's enemies ranked by total damage, expandable to a frozen per-player breakdown. See §5.1. |
 
 **StatusPanel** (`panels/StatusPanel.tsx`) is the only panel wired straight to
 the IPC surface rather than a shared service. It subscribes to `onBridgeStatus`,
@@ -388,11 +390,11 @@ than the task's summary implies:
 | `EnemyHitPacket` | `ingestEnemyHit` | local-player id (from `mainID`), a last-hit focus signal (via `onLocalHit`), and a despawn signal when `kill` is set |
 | `ServerPlayerShootPacket` | `ingestShoot` | `minionOwners`: minion/pet id → owning player |
 | `DamagePacket` | `ingestDamage` | per-target, per-attacker rolling hit buffers, and a last-hit focus signal for the local player's own attributed hits |
-| `UpdatePacket` | `ingestUpdate` | `entityNames` (`NAME_STAT`), `enemyMaxHp` (`MAX_HP_STAT`), and a despawn signal per dropped id |
+| `UpdatePacket` | `ingestUpdate` | `entityNames` (`NAME_STAT`), `enemyMaxHp` (`MAX_HP_STAT`), `objectTypes` (every seen objectId's `objectType`), `playerCosmetics` (skin/equipment/dyes, for history's frozen per-player sprite — §5.1), and a despawn signal per dropped id |
 | `objectNames` (synthetic) | `ingestObjectNames` | enemy names resolved bridge-side |
 | `dps` (synthetic) | `ingestBridgeDps` | **the Java engine's computed DPS snapshot** |
 | `QuestObjectIdPacket` | `ingestQuestObjectId` | locks/re-locks the sticky boss focus, carrying forward the prior phase's damage on a phase change |
-| `MapInfoPacket` | `reset()` | wipes all state on instance change |
+| `MapInfoPacket` | `retainInstanceIfQualifying()` then `reset()` | freezes the ending instance's damage into session history (§5.1) if it qualifies, *then* wipes all live state for the new instance |
 
 **Focus target — sticky quest-objective lock, falling back to last-hit.** The
 tracker reports DPS against *one* enemy (`focusTargetId`), chosen by:
@@ -437,10 +439,89 @@ to its owner via `minionOwners`. `snapshot` trims each buffer to the last
 **`WINDOW_MS = 8000`** ms and computes `dps = windowDamage / 8`.
 
 **Reset.** `reset()` wipes names, minion map, targets, focus, local id, the
-boss lock (`lockedBossId`/`bossAlive`/`bossCarry`), and `enemyMaxHp`. It runs on
-`MapInfoPacket` internally and is also called from the hook on detach. Debug
-counters are deliberately *kept* across resets. Note `CreateSuccessPacket` does
-**not** reset — it only sets the local id.
+boss lock (`lockedBossId`/`bossAlive`/`bossCarry`), `enemyMaxHp`, `objectTypes`,
+`playerCosmetics`, and `bossPhaseIds` — all *per-instance* state. It runs on
+`MapInfoPacket` internally (after `retainInstanceIfQualifying()` — §5.1) and is
+also called from the hook on detach (which skips retention — see §5.1). Debug
+counters and the retained `history`/`historySeq`/`currentInstanceName` are
+deliberately *kept* across resets — they're session-scoped, not per-instance.
+Note `CreateSuccessPacket` does **not** reset — it only sets the local id.
+
+### 5.1 Retained instance history (the DPS summary panel)
+
+`DpsTracker` also retains a session-scoped, in-memory history of past
+instances' damage, so a separate **DPS summary panel** (`DpsSummaryPanel.tsx`)
+can show a post-fight master/detail view with no time pressure — unlike the
+live DPS panel (§3), which only ever shows the currently-focused enemy.
+
+**The hook: `MapInfoPacket`, before `reset()`.** Every instance ends the same
+way the tracker learns about it starting: a `MapInfoPacket`. `ingest()` calls
+`retainInstanceIfQualifying()` on the *about-to-end* instance's still-live
+state, **then** `reset()` wipes it, **then** `currentInstanceName` is set from
+the new packet's `displayName` (`MapInfoPacketData.displayName` — the
+human-readable name, e.g. `"Oryx's Sanctuary"`, matching the bridge's
+`dungeonIcons` table keys; `name` is a machine id and unrelated).
+
+**Log-gating.** `retainInstanceIfQualifying` skips instances with no real
+fight: it requires either some enemy's total damage (`totalDamage`, summed
+across `players`) to reach `HISTORY_LOG_MIN_DAMAGE` (a tunable constant, a
+proxy for "a boss-scale enemy was fought"), or a quest objective to have been
+engaged at all (`lockedBossId !== null`) even if the fight was cut short.
+Nexus/vault/realm hops/rushed-empty rooms fall under both and are silently
+skipped — no history entry, no user-visible signal.
+
+**Boss-phase merging.** `buildHistoryEnemies()` builds the ranked enemy list
+for a history entry from `bridgeEnemies`, but a boss whose `objectId` changed
+across phases would otherwise appear as several split entries — one per raw
+id, each showing only that phase's damage. `bossPhaseIds` (populated by
+`ingestQuestObjectId` alongside the existing `bossCarry` carry-forward — see
+above) tracks every phase id the current lock chain has ever used; those ids
+are excluded from the flat per-enemy loop and replaced with **one** merged
+entry, reusing `bossSnapshot()` (the same carry-forward merge the *live* panel
+uses for a phase-changing boss — §5's "Boss-phase damage carryover"). This is
+also why the merge is **not** the bridge's `bossPhaseDamage` field: per the
+discrepancy note in `dps-engine.md`, that field only flags three specific
+counter-damage mechanics and does not aggregate a boss's damage across
+phase/objectId changes — the renderer has always been the one place that does,
+and history reuses that same mechanism rather than duplicating it.
+
+**Frozen cosmetics, not a live `EntityRegistry` lookup.** A history entry must
+still render correctly long after the instance ended, but `EntityRegistry`
+(§4) clears itself on every `MapInfoPacket` — by the time a user opens an old
+entry, its players' `objectId`s may resolve to nothing, or worse, to a
+different instance's different player. So `DpsTracker` keeps its own
+`playerCosmetics` map (objectId → skin/equipment/clothingDye/accessoryDye),
+merged from `UpdatePacket` the same way `EntityRegistry` does but kept
+independent, and a history entry's `DpsHistoryEnemy.cosmetics` is a **snapshot
+copy** taken at retention time. `DpsSummaryPanel.tsx`'s `FrozenCharacterSprite`
+renders directly from that frozen record (`<Sprite objectType clothingDye
+accessoryDye>`), never through `CharacterSprite`/`useEntityRegistry`.
+
+**Shape.** `getHistory(): DpsHistoryEntry[]` returns the retained list, newest
+first, capped at `HISTORY_MAX_INSTANCES` (oldest dropped). Each
+`DpsHistoryEntry` is `{ id, instanceName, endedAt, localPlayerId, enemies:
+DpsHistoryEnemy[] }`; each `DpsHistoryEnemy` is `{ id, name, objectType,
+players: PlayerDps[], cosmetics: Map<objectId, PlayerCosmetics> }`, sorted
+descending by total damage. `objectType` (the enemy's own, from `objectTypes`)
+feeds the master-list icon fallback chain (§3): dungeon-icon map
+(`useSprites().dungeonIcon(instanceName)`) → the top-ranked enemy's
+`objectType` (the "main-boss sprite") → a generic placeholder chip.
+
+**A separate tracker instance, not the live panel's.** The summary panel's
+`useDpsHistory()` hook (`dps/useDpsHistory.ts`) constructs its **own**
+`DpsTracker`, independent from `DpsPanel`'s (via `useDpsTracker()`) — both
+ingest the identical packet stream (`window.overlay.onPacketBatch`)
+independently, so history-tracking never perturbs the live glance panel and
+vice versa. `<PanelCanvas/>` being always mounted (§1, "Interactive mode")
+keeps every panel *in the layout* alive across interactive toggles, but a
+panel only mounts its `Content` component at all once `PanelCanvas` renders
+its `<PanelFrame/>` — which it does for every entry in `panels`, visible or
+not (`PanelFrame.tsx`'s `display: visible ? undefined : 'none'` hides it
+without unmounting). Since `dpsSummary` is in `defaultLayout()`, its tracker
+keeps ingesting (and retaining) for the app's whole session even while the
+panel itself is hidden — the "session-scoped" part of the retention contract
+depends on this always-in-layout property, not on the user having the panel
+open.
 
 ### Which DPS numbers the UI renders — the two paths reconciled
 
