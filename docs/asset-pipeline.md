@@ -367,7 +367,17 @@ exposed via:
   first `Class=Bag` entry whose own BagType matches, returning its id (the
   bag entity's `objectType`, i.e. its sprite) or `null`. Called once per
   tracked BagType when building the `lootBagTypes` envelope (below), not
-  hot-path, so the scan cost doesn't matter.
+  hot-path, so the scan cost doesn't matter. Soak testing against the real
+  client (issue soak #113) showed this scan alone finds nothing on real game
+  assets — the ground-bag entity's own `Object` XML entry doesn't reliably
+  carry a matching `Class=Bag`+`BagType` pair the way an item's own BagType
+  does — leaving `lootBagIcons` empty and the Loot panel's category header
+  rendering no sprite at all. `findBagIconObjectType` now falls back to a
+  small hardcoded table (`KNOWN_BAG_ICON_IDS`: white=1292, orange=1295),
+  verified against the live game the same way upstream Tomato's `LootBags`
+  enum hardcodes them, used only when the scan comes up empty and only when
+  that id is actually a loaded object (so a minimal/synthetic asset set can't
+  return a dangling id).
 
 **`bridge/LootBagTypes.java`** is the only consumer: it builds `bagTypeTable`
 (item id → BagType, filtered to 6/8 and excluding `Class=Bag` entries so a bag

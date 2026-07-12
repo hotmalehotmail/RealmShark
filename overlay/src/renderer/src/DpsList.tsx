@@ -135,7 +135,7 @@ function DpsList({ snapshot, maxRows, showHeader, size }: DpsListProps): React.J
                   slotSize={slotSize}
                   ownerObjectId={row.objectId}
                 />
-                <span className="min-w-0 flex-1 truncate text-fg-muted">
+                <span className="min-w-0 flex-1 truncate text-fg">
                   {isLocal && (
                     <span className="mr-1 font-mono text-2xs text-accent/80">#{rank}</span>
                   )}

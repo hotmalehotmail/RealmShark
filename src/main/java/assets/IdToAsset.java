@@ -5,6 +5,7 @@ import java.io.File;
 import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Id to asset class. Used to convert incoming realm IDs to the corresponding asset.
@@ -392,10 +393,29 @@ public class IdToAsset {
     }
 
     /**
+     * Known ground-bag entity object ids for the two tracked BagTypes,
+     * verified against the live game the same way upstream Tomato's {@code
+     * LootBags} enum is (WHITE=1292, ORANGE=1295 - see {@code
+     * upstream/tomato:src/main/java/tomato/realmshark/enums/LootBags.java}).
+     * Used only as a fallback in {@link #findBagIconObjectType} when the
+     * XML-derived scan below finds nothing: soak testing against the real
+     * client (issue soak #113) showed the ground-bag entity's own {@code
+     * Object} XML entry does not reliably carry a matching {@code
+     * Class=Bag}+{@code BagType} pair, unlike an item's BagType (which does
+     * resolve correctly) - so the scan alone silently left {@code
+     * lootBagIcons} empty and the Loot panel's category header rendered no
+     * sprite at all.
+     */
+    private static final Map<Integer, Integer> KNOWN_BAG_ICON_IDS = Map.of(6, 1292, 8, 1295);
+
+    /**
      * Finds the ground-bag entity ({@code <Class>Bag</Class>}) that
      * self-identifies as the given BagType, e.g. the white/orange bag sprite
-     * the Loot panel uses as a category header. Derived entirely from loaded
-     * asset data (real or {@code --fake}-registered) - no hardcoded ids.
+     * the Loot panel uses as a category header. Prefers asset-derived data
+     * (real or {@code --fake}-registered); falls back to {@link
+     * #KNOWN_BAG_ICON_IDS} - and only when that id is actually a loaded
+     * object, so a minimal/synthetic asset set can't return a dangling id -
+     * when the scan finds no match.
      *
      * @param bagType BagType to find the bag entity for.
      * @return that bag entity's object id, or null if none is loaded.
@@ -406,6 +426,8 @@ public class IdToAsset {
                 return i.id;
             }
         }
+        Integer known = KNOWN_BAG_ICON_IDS.get(bagType);
+        if (known != null && objectID.containsKey(known)) return known;
         return null;
     }
 

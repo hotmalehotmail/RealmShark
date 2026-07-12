@@ -52,7 +52,29 @@ public class ParseEnchants {
         ENCHANTS.put((short) -1, "[empty]");
     }
 
-    private static void loadEnchants(String path) {
+    /**
+     * Re-reads enchantments.xml from disk. Mirrors {@link
+     * bridge.dps.enums.CharacterClass#reload}: the bridge's asset-extraction
+     * runs on a background thread ({@code ObjectNames.init}) that can still be
+     * writing this file the first time this class is touched (e.g. by {@link
+     * bridge.EnchantNames#envelopeJson}, on its own 2s broadcast schedule) - a
+     * JVM only runs a class's static initializer once, so that first premature
+     * read would otherwise leave {@link #ENCHANTS} permanently containing only
+     * the built-in {@code -1 -> "[empty]"} entry (every real id falling back
+     * to the bare enchant id in the item tooltip) for the rest of the process.
+     * Callers that know extraction has since finished should call this to pick
+     * up the real data.
+     */
+    public static synchronized void reload() {
+        ENCHANTS.clear();
+        ENCHANT_EFFECTS.clear();
+        ENCHANT_REGEN.clear();
+        ENCHANT_LOOT_BONUS.clear();
+        loadEnchants(ENCHANT_XML_PATH);
+        ENCHANTS.put((short) -1, "[empty]");
+    }
+
+    private static synchronized void loadEnchants(String path) {
         try {
             FileInputStream file = new FileInputStream(path);
             String result = new BufferedReader(new InputStreamReader(file))

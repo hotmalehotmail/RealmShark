@@ -841,9 +841,12 @@ behind a `relative z-10` wrapper holding the sprite/gear/name/numbers) so it
 never competes with them for horizontal space, and stays meaningful even
 at `sm` where the gear icons are hidden. The fill's *color*, not just its
 width, also encodes `damage / topDamage` — `color-mix`'d between the
-`--color-meter-hot`/`--color-meter-cool` tokens — so the top damager's row
-reads clearly "hot" and low-share rows read "cool" even when two bars are
-similar lengths (`overlay-ui-style.md`). The row is clipped
+`--color-meter-high`/`--color-meter-low` tokens — so the top damager's row
+reads clearly green and low-share rows read red even when two bars are
+similar lengths (`overlay-ui-style.md`). The row's name uses full-opacity
+`text-fg`, not the dimmer `text-fg-muted` other row text uses, since it sits
+directly on the color-coded fill and needs the extra contrast across the
+whole gradient. The row is clipped
 (`overflow-hidden rounded-sm`) so the fill can never overflow the row or panel.
 Every row, real or placeholder, gets an explicit fixed height (`rowHeight`,
 via `MeterRow`'s `height` prop) so the list's total rendered height is
@@ -912,15 +915,22 @@ identical to `EntityRegistry`/`DpsTracker`'s approach) and its own
 (`INVENTORY_4..11`, wire `statTypeNum` 12-19 — the 4 *equipped* slots
 `EntityRegistry` already reads are 8-11, a distinct range).
 
-**"Obtained" detection.** A bag slot transitioning from empty (`<= 0`, or never
-seen) to a populated item id is logged as a pickup — the same shape a real
-pickup takes (landing in a free bag slot), and the one transition that can't
-also mean "dropped" (populated → empty) or "reconnected mid-session" (an
-already-known value re-arriving). The new item's `objectType` is looked up in
-`bagTypeTable` (from the `lootBagTypes` envelope); if it isn't BagType 6 or 8,
-nothing is logged. Two different bag slots holding the *same* item id both log
-their own entry — the log is chronological, not a de-duplicated set, so two
-of the same white-bag item dropping in one session both appear.
+**"Obtained" detection.** A bag slot transitioning from empty (`<= 0`) to a
+populated item id is logged as a pickup — the same shape a real pickup takes
+(landing in a free bag slot), and the one transition that can't also mean
+"dropped" (populated → empty) or "reconnected mid-session" (an already-known
+value re-arriving). Critically, a slot's *first* sighting since the last
+`resetPerInstance()` never logs, regardless of its value — it only seeds
+`slotValues`' baseline. Without that check (issue soak #113), whatever was
+already sitting in the bag at login, or on entering a fresh instance right
+after `resetPerInstance()` clears the map, reads as an unseen slot jumping
+straight to a populated value — indistinguishable from a real
+empty→populated pickup — and got logged as one every time. The new item's
+`objectType` is looked up in `bagTypeTable` (from the `lootBagTypes`
+envelope); if it isn't BagType 6 or 8, nothing is logged. Two different bag
+slots holding the *same* item id both log their own entry — the log is
+chronological, not a de-duplicated set, so two of the same white-bag item
+dropping in one session both appear.
 
 **Session-scoped, mirroring `DpsTracker`'s retained history (§5.1).**
 `entries` (the loot log itself) persists across `MapInfoPacket` (instance

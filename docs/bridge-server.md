@@ -584,16 +584,22 @@ pack's.
   and rebuilt on the same `loadedObjectCount()`-changed condition as
   `LootBagTypes`. Envelope: `type:"itemInfo"`, `direction:"internal"`.
 - **`EnchantNames`** (`src/main/java/bridge/EnchantNames.java`) - reflects
-  `bridge.dps.ParseEnchants.ENCHANTS` (enchant id→display name, loaded once
-  from `assets/xml/enchantments.xml` at class-init - see
-  [dps-engine.md](dps-engine.md)) into `{"type":"enchantNames","data":{"names":{...}}}`.
-  Unlike `ItemInfo`/`LootBagTypes` there's no async readiness gate to poll:
-  `ParseEnchants`'s static initializer reads the XML file synchronously the
-  first time the class is referenced, so the map (real names, or just its
-  built-in `-1 -> "[empty]"` entry when the XML is missing, e.g. `--fake` mode
-  or any machine without the game's assets extracted) is already final by the
-  time this class is constructed. `envelopeJson()` is therefore built once and
-  cached forever, not rebuilt on a poll.
+  `bridge.dps.ParseEnchants.ENCHANTS` (enchant id→display name, loaded from
+  `assets/xml/enchantments.xml` - see [dps-engine.md](dps-engine.md)) into
+  `{"type":"enchantNames","data":{"names":{...}}}`. `ParseEnchants`'s static
+  initializer reads the XML file synchronously the first time the class is
+  referenced - which, on a real (non-`--fake`) machine, can be this class's
+  own first broadcast (2s after bridge startup), well before `ObjectNames`'s
+  background `AssetExtractor.extractHeadless` call has finished writing that
+  file. Soak testing (issue soak #113) showed that race losing in practice:
+  the map stuck at just its built-in `-1 -> "[empty]"` entry, so real
+  enchantments never resolved and the tooltip fell back to the bare id for
+  every one. `ObjectNames.init` now calls `bridge.dps.ParseEnchants#reload`
+  once extraction completes (mirroring `CharacterClass.reload()`'s existing
+  fix for the same race on `players.xml`), and `EnchantNames.envelopeJson()`
+  tracks `ParseEnchants.ENCHANTS.size()` the same way `ItemInfo`/`LootBagTypes`
+  track `loadedObjectCount()`, rebuilding the cached envelope when a reload
+  changes it instead of caching the pre-extraction result forever.
 - **Both re-sent every poll, not one-shot** - same rationale as
   `LootBagTypes` (§6): a tiny payload, re-sent so a client that connects after
   the first broadcast still gets it, with no separate request/response
