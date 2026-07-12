@@ -226,12 +226,20 @@ jobs:
 
           # Build the review payload deterministically from the judge's JSON + the gate
           # notes. jq constructs the JSON (untrusted strings never hit the shell).
+          # Inline comments carry only line-anchored findings; a file-level finding (no line)
+          # would otherwise be invisible on the happy path — failing the gate with no
+          # explanation, and giving the fix loop (which relays the review body) nothing to act
+          # on. So list those in the body too, guaranteeing every finding is surfaced somewhere.
           jq -n --slurpfile v "$VJ" --arg event "$EVENT" --arg notes "$NOTES" '
-            {
+            ( [ $v[0].findings[]? | select(.line == null)
+                | "- **[" + (.severity // "note") + "]** "
+                  + (if .path then .path + " — " else "" end) + (.body // "") ] ) as $flf
+            | {
               event: $event,
               body: ( ($v[0].summary // "(no summary)")
                       + "\n\n" + ($v[0].docs_line // "Docs affected: (not stated).")
-                      + ( if ($notes | length) > 0 then "\n\n**Gate checks:**" + $notes else "" end) ),
+                      + ( if ($notes | length) > 0 then "\n\n**Gate checks:**" + $notes else "" end)
+                      + ( if ($flf | length) > 0 then "\n\n**File-level findings** (no line anchor):\n" + ($flf | join("\n")) else "" end) ),
               comments: [ $v[0].findings[]? | select(.line != null and .path != null)
                           | { path: .path, line: .line,
                               body: ("**[" + (.severity // "note") + "]** " + (.body // "")) } ]
