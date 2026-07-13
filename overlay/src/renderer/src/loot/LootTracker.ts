@@ -12,6 +12,15 @@ const BAG_SLOT_COUNT = 8
 /** UNIQUE_DATA_STRING(80): comma-separated per-slot encoded enchant codes - one entry per bag slot, same shape as a player's equipped-slot enchants. */
 const UNIQUE_DATA_STRING_STAT = 80
 
+/**
+ * Cap on `LootTracker.pendingNewObjects` (oldest dropped first). Normally the
+ * queue empties within the ~2s startup race it exists for, but if
+ * `lootBagTypes` never arrives at all (e.g. game assets never load) it would
+ * otherwise grow for the whole session - loot tracking is already dead in
+ * that case, so this just bounds the memory instead of fixing it.
+ */
+const MAX_PENDING_NEW_OBJECTS = 64
+
 /** BagType values the Loot panel tracks - see docs/asset-pipeline.md (6 = white bag, 8 = orange/ST bag). */
 export const TRACKED_BAG_TYPES = [6, 8] as const
 export type TrackedBagType = (typeof TRACKED_BAG_TYPES)[number]
@@ -176,7 +185,10 @@ export class LootTracker {
   ): boolean {
     const bagType = this.bagEntityTypes.get(objectType)
     if (bagType == null) {
-      if (!this.bagTypesReady) this.pendingNewObjects.push({ objectType, objectId, stats })
+      if (!this.bagTypesReady) {
+        this.pendingNewObjects.push({ objectType, objectId, stats })
+        if (this.pendingNewObjects.length > MAX_PENDING_NEW_OBJECTS) this.pendingNewObjects.shift()
+      }
       return false
     }
     let bag = this.bagsInView.get(objectId)
