@@ -17,7 +17,11 @@ const UNIQUE_DATA_STRING_STAT = 80
  * queue empties within the ~2s startup race it exists for, but if
  * `lootBagTypes` never arrives at all (e.g. game assets never load) it would
  * otherwise grow for the whole session - loot tracking is already dead in
- * that case, so this just bounds the memory instead of fixing it.
+ * that case, so this just bounds the memory instead of fixing it. This is a
+ * memory bound, not a correctness guarantee: since eviction is oldest-first,
+ * a crowded pre-meta window (more than this many objects arriving before
+ * `lootBagTypes` shows up) can still evict the very bag that triggered the
+ * race, reintroducing the drop this fix targets.
  */
 const MAX_PENDING_NEW_OBJECTS = 64
 

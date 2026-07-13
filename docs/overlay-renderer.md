@@ -974,6 +974,11 @@ the in-view map. `LootTracker` queues any `newObjects` entry it can't yet
 classify in `pendingNewObjects` and replays the queue once the first
 `lootBagTypes` envelope arrives (a one-time catch-up; the queue is also
 dropped on `resetPerInstance` since a map change invalidates those objectIds).
+The queue is bounded (`MAX_PENDING_NEW_OBJECTS`, oldest evicted first) as a
+memory bound rather than a correctness guarantee — every `newObjects` entry
+queues pre-meta, not just bags, so unusually heavy non-bag traffic in that
+window could in principle evict the earliest-queued (and thus race-triggering)
+bag before meta arrives.
 
 **Reading contents + enchants.** For each bag slot holding an item id, the item
 is categorized by *its own* `BagType` (from `bagTypeTable`), so a lower-tier
