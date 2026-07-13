@@ -59,6 +59,10 @@ interface BagInView {
  * logged once per `(bagObjectId, slot)`. `NewTickPacket` deltas for a bag
  * already in view are folded in too (its status entries carry no objectType,
  * so a bag is only recognized there once `newObjects` has introduced its id).
+ * A bag that spawns before the bridge's first `lootBagTypes` broadcast (a ~2s
+ * startup delay) can't be classified yet - its `newObjects` entry is queued in
+ * `pendingNewObjects` and replayed once that first envelope arrives, instead of
+ * being silently lost.
  * <p>
  * Only bags the client actually rendered contents for are visible (an inherent
  * sniffer limit) - i.e. bags near the local player, which for soulbound
@@ -80,6 +84,21 @@ export class LootTracker {
   private bagsInView = new Map<number, BagInView>()
   /** Bag objectId -> slot indices already logged, so a re-seen bag doesn't double-log (per-instance). */
   private loggedBagSlots = new Map<number, Set<number>>()
+
+  /** True once the first `lootBagTypes` envelope has populated `bagEntityTypes`. */
+  private bagTypesReady = false
+  /**
+   * `newObjects` entries seen before `bagTypesReady` - the bridge only starts
+   * broadcasting `lootBagTypes` ~2s after startup, so a bag that spawns in that
+   * window would otherwise fail the `bagEntityTypes` lookup and be silently
+   * dropped forever (its later `NewTickPacket` content updates never resolve
+   * since it was never added to `bagsInView`). Replayed once meta arrives.
+   */
+  private pendingNewObjects: Array<{
+    objectType: number
+    objectId: number
+    stats: StatEntry[] | undefined
+  }> = []
 
   private entries: LootEntry[] = []
   private nextEntryId = 1
@@ -135,6 +154,13 @@ export class LootTracker {
     for (const [k, v] of Object.entries(data.itemNames ?? {})) {
       this.itemNames.set(Number(k), v)
     }
+
+    if (!this.bagTypesReady) {
+      this.bagTypesReady = true
+      const pending = this.pendingNewObjects
+      this.pendingNewObjects = []
+      for (const p of pending) this.ingestBagObject(p.objectType, p.objectId, p.stats)
+    }
     return true
   }
 
@@ -149,7 +175,10 @@ export class LootTracker {
     stats: StatEntry[] | undefined
   ): boolean {
     const bagType = this.bagEntityTypes.get(objectType)
-    if (bagType == null) return false
+    if (bagType == null) {
+      if (!this.bagTypesReady) this.pendingNewObjects.push({ objectType, objectId, stats })
+      return false
+    }
     let bag = this.bagsInView.get(objectId)
     if (!bag) {
       bag = { bagType, enchantSlots: [] }
@@ -232,6 +261,9 @@ export class LootTracker {
   private resetPerInstance(): void {
     this.bagsInView.clear()
     this.loggedBagSlots.clear()
+    // Pending objectIds belong to whichever instance just ended; stale by the
+    // time bagTypesReady would replay them (if it's still ever false).
+    this.pendingNewObjects = []
   }
 
   /** Full reset (overlay detach / game close) - also clears the session log itself. */
