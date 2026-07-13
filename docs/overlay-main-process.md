@@ -480,14 +480,22 @@ Two shapes of method:
 
 - **`invoke` wrappers** return a `Promise` (request/response to an
   `ipcMain.handle`).
-- **`on…` subscriptions** take a callback, attach an `ipcRenderer.on` listener,
-  and **return an unsubscribe function** that removes it.
+- **`on…` subscriptions** take a callback and **return an unsubscribe
+  function**. Each attaches its own `ipcRenderer.on` listener that the
+  unsubscribe removes - **except `onPacketBatch`**, the shared-fan-out
+  exception: preload registers a single `ipcRenderer.on(IPC.packetBatch, …)`
+  at module load and fans batches out to a `Set` of callbacks, so
+  `onPacketBatch(cb)` adds/removes a Set member rather than its own IPC
+  listener. That's also what lets `setPacketBatchSuspended` (below) buffer and
+  replay batches to every current listener from one place. See the packet
+  fan-out note in `overlay-renderer.md`.
 
 | `window.overlay.*` | Channel (`IPC.*`) | Direction | Payload |
 | --- | --- | --- | --- |
 | `getBridgeStatus()` | `get-bridge-status` | invoke | → `BridgeStatus` |
 | `onBridgeStatus(cb)` | `bridge-status` | main→rend | `BridgeStatus` |
 | `onPacketBatch(cb)` | `packet-batch` | main→rend | `PacketEnvelope[]` |
+| `setPacketBatchSuspended(b)` | *(none - preload-local)* | rend-local | `boolean` → void |
 | `onInteractiveChange(cb)` | `interactive-change` | main→rend | `boolean` |
 | `onAttachSuccess(cb)` | `attach-success` | main→rend | — |
 | `onOverlayDetach(cb)` | `overlay-detach` | main→rend | — |
@@ -507,6 +515,11 @@ Two shapes of method:
 | `downloadUpdate()` | `download-update` | invoke | → void (emits `update-progress`) |
 | `onUpdateAvailable(cb)` | `update-available` | main→rend | `UpdateInfo` |
 | `onUpdateProgress(cb)` | `update-progress` | main→rend | `UpdateProgress` |
+
+`setPacketBatchSuspended` is the one `window.overlay.*` method with no IPC
+channel behind it - it only flips the local suspend flag preload checks before
+fanning `packet-batch` out to `onPacketBatch` listeners (see above), so it
+never crosses into the main process.
 
 `IPC` (`shared/ipc.ts:2`) is the single source of truth for channel *names*;
 `preload` and `index.ts` both import it so a rename can't drift between the two
