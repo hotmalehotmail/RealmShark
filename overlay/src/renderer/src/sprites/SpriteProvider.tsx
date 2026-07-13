@@ -233,6 +233,7 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       // outlineAtDisplaySize for why (outlining before the scale blows the
       // line up by the same factor as the sprite itself).
       const outlined = outlineAtDisplaySize(cropped, size)
+      if (!outlined) return null
       const canvas = document.createElement('canvas')
       canvas.width = outlined.width
       canvas.height = outlined.height
@@ -412,6 +413,7 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       // exactly 1 pixel - see outlineAtDisplaySize (SpriteProvider.tsx's
       // getSprite does the same for undyed sprites).
       const outlined = outlineAtDisplaySize(out, size)
+      if (!outlined) return null
       const canvas = document.createElement('canvas')
       canvas.width = outlined.width
       canvas.height = outlined.height

@@ -95,11 +95,12 @@ export function outlineImageData(src: ImageData, thickness: number): ImageData {
  * factor as the sprite - fine when source and display resolution are close,
  * badly-thick when a small native/composite sprite is scaled up several times
  * for display (see the git history of this function for the pre-fix
- * behaviour). Returns `displaySize`×`displaySize` ImageData; falls back to a
- * plain unoutlined scale when `displaySize` is too small to fit the 1px
- * border on each side.
+ * behaviour). Returns `displaySize`×`displaySize` ImageData, or `null` if a
+ * canvas 2D context couldn't be obtained (mirrors the `if (!ctx) return null`
+ * sentinel callers use elsewhere); falls back to a plain unoutlined scale
+ * when `displaySize` is too small to fit the 1px border on each side.
  */
-export function outlineAtDisplaySize(src: ImageData, displaySize: number): ImageData {
+export function outlineAtDisplaySize(src: ImageData, displaySize: number): ImageData | null {
   const inner = displaySize - 2
   const targetW = inner > 0 ? inner : displaySize
   const targetH = targetW
@@ -107,7 +108,7 @@ export function outlineAtDisplaySize(src: ImageData, displaySize: number): Image
   canvas.width = targetW
   canvas.height = targetH
   const ctx = canvas.getContext('2d')
-  if (!ctx) return src
+  if (!ctx) return null
   ctx.imageSmoothingEnabled = false
   ctx.drawImage(imageDataToCanvas(src), 0, 0, src.width, src.height, 0, 0, targetW, targetH)
   const scaled = ctx.getImageData(0, 0, targetW, targetH)
