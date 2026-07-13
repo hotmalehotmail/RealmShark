@@ -8,12 +8,23 @@
  * future regression in drag smoothness (frame time should track the
  * display's refresh interval with no multi-frame stalls).
  */
+
+/** Mirrors DPS_DEBUG (DpsTracker.ts) - flip locally to enable, e.g. for an
+ * alpha-soak drag-smoothness check. Off by default so a normal drag doesn't
+ * log to the Console panel; disabled sessions skip the rAF sampling loop
+ * entirely, not just the log. */
+export const DRAG_PERF_DEBUG = false
+
 export interface DragPerfSession {
   /** Stop sampling and log the summary. */
   stop(): void
 }
 
+const NOOP_SESSION: DragPerfSession = { stop: (): void => undefined }
+
 export function startDragPerf(): DragPerfSession {
+  if (!DRAG_PERF_DEBUG) return NOOP_SESSION
+
   const frames: number[] = []
   const started = performance.now()
   let last = started
