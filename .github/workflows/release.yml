@@ -74,7 +74,13 @@ jobs:
           # Squash-merged PRs carry "(#N)"; merge syncs/promotions are dropped by
           # --no-merges. Fall back to the tag range only if `bridge` can't be fetched.
           PR_RANGE="$RANGE"
-          if git fetch --quiet origin bridge 2>/dev/null && git rev-parse --verify --quiet origin/bridge >/dev/null; then
+          # Explicit refspec so refs/remotes/origin/bridge is guaranteed to exist:
+          # checkout@v4 uses a narrow refspec, so a bare `git fetch origin bridge` may
+          # only move FETCH_HEAD, leaving `origin/bridge` a "bad revision" — which here
+          # would silently fall back to the buggy tag range. Same guard as ci.yml's
+          # workflow-parity job (which documents this exact checkout@v4 gotcha).
+          if git fetch --quiet --no-tags origin '+refs/heads/bridge:refs/remotes/origin/bridge' 2>/dev/null \
+             && git rev-parse --verify --quiet origin/bridge >/dev/null; then
             PR_RANGE="origin/bridge..HEAD"
           fi
           git log --no-merges --pretty=format:'- %s' "$PR_RANGE" 2>/dev/null \
