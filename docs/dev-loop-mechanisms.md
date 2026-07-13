@@ -706,6 +706,15 @@ promotion + the installer link + the verdict instructions. Opened with the built
 alpha**: a re-cut (9.5) opens a new one and closes the prior as *superseded*, so each
 alpha keeps a clean, self-contained verdict record.
 
+> **"Pull requests in this build" boundary** — the issue's PR list is
+> `origin/bridge..HEAD` (PRs on `staging` not yet promoted to the stable branch),
+> **not** a `git describe`-from-the-last-tag range. `gh release create` tags the
+> default branch (`bridge`) by default, so alpha tags don't advance as `staging`
+> accumulates a soak's PRs; a tag-based boundary sticks at the last promotion
+> *reachable from `staging`* and re-lists every prior soak's PRs. `bridge` only
+> moves on a promotion (a passed soak), so the branch diff is exactly this soak's
+> own, un-shipped content.
+
 ### 9.2 · Verdict — `soak:pass` / `soak:fail`
 Two maintainer-applied labels on the soak issue, read by `on: issues: labeled`
 workflows scoped to issues that carry the `soak` label. Applying a label requires
