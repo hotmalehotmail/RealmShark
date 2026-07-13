@@ -166,14 +166,21 @@ export function bakeDyedSprite(params: {
   const accessoryAnimated = accessory?.kind === 'textile' && accessory.motion != null
 
   const SUB = clothing?.kind === 'textile' || accessory?.kind === 'textile' ? TEXTILE_SUB : 1
-  // Outline thickness in this bake's own pixel grid: 1 native pixel, scaled by
-  // the same SUB subdivision as the rest of the composite so the baked-in
-  // silhouette outline stays exactly 1 native pixel thick after the caller's
-  // final size-scale (mirrors SpriteProvider.tsx's getSprite, the SUB=1 case).
+  // Outline thickness in this bake's own pixel grid: always exactly 1
+  // composite pixel, independent of the SUB texture subdivision. renderDyeFrame
+  // scales this whole accumulator (base + moving layers) up to the caller's
+  // display size every frame via a single canvas draw, so whatever thickness
+  // is baked in here gets magnified by that same display-size/composite-size
+  // ratio - using SUB (multiple composite pixels) made the line several times
+  // too thick at typical display sizes. This can't do SpriteProvider.tsx's
+  // getSprite/getDyedSprite trick of scaling to display size *before*
+  // outlining (that needs a pixel readback, which the per-frame path here
+  // deliberately avoids - see the file header), so 1 composite pixel is the
+  // closest approximation to a thin on-screen line without one.
   // The layers below (regionSelector/regionShade/tile) are sized and written
   // into this same padded (cw+2t)×(ch+2t) grid so they stay aligned with the
   // base once padding shifts its content - see docs/dyes-and-textiles.md.
-  const thickness = SUB
+  const thickness = 1
   const cw = Math.max(w, mw) * SUB
   const ch = Math.max(h, mh) * SUB
   const ow = cw + thickness * 2

@@ -11,18 +11,11 @@ import {
   type DyeRoleInput
 } from './dyeBake'
 import { LruCache } from './lruCache'
-import { imageDataToCanvas, outlineImageData } from './outline'
+import { outlineAtDisplaySize } from './outline'
 
 // animTable stores this many ints per animation frame:
 // [x, y, w, h, spriteAtlasId, maskX, maskY, maskW, maskH].
 const FRAME_STRIDE = 9
-
-// Silhouette outline thickness for an undyed sprite, in native atlas pixels -
-// matches RotMG's own in-game 1px outline (see sprites/outline.ts and the
-// Swing desktop client's equivalent, assets/ImageBuffer.java's
-// getOutlinedIcon). Dyed sprites instead use `SUB` as their thickness (below)
-// since they composite at a subdivided resolution.
-const OUTLINE_THICKNESS = 1
 
 // Cache caps. The crop/dye caches key on a combinatorial space (objectType ×
 // size × dye × enchant × animation frame), so an unbounded Map grew monotonically
@@ -236,24 +229,17 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
       if (!img) return null // atlas not decoded yet; a later setGen re-renders
       const cropped = regionImageData(img, x, y, w, h)
       if (!cropped) return null
-      const outlined = outlineImageData(cropped, OUTLINE_THICKNESS)
+      // Scale to display size first, then outline by exactly 1 pixel - see
+      // outlineAtDisplaySize for why (outlining before the scale blows the
+      // line up by the same factor as the sprite itself).
+      const outlined = outlineAtDisplaySize(cropped, size)
+      if (!outlined) return null
       const canvas = document.createElement('canvas')
-      canvas.width = size
-      canvas.height = size
+      canvas.width = outlined.width
+      canvas.height = outlined.height
       const ctx = canvas.getContext('2d')
       if (!ctx) return null
-      ctx.imageSmoothingEnabled = false // preserve the pixel-art look when scaling
-      ctx.drawImage(
-        imageDataToCanvas(outlined),
-        0,
-        0,
-        outlined.width,
-        outlined.height,
-        0,
-        0,
-        size,
-        size
-      )
+      ctx.putImageData(outlined, 0, 0)
       const url = canvas.toDataURL()
       cacheRef.current.set(key, url)
       return url
@@ -423,25 +409,18 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
         }
       }
 
-      // Bake the silhouette outline in at composite resolution before the
-      // final size-scale, at the same SUB-scaled thickness bakeDyedSprite
-      // uses, so it stays exactly 1 native pixel thick either way.
-      const outlined = outlineImageData(out, SUB)
-      const composed = document.createElement('canvas')
-      composed.width = outlined.width
-      composed.height = outlined.height
-      const cctx = composed.getContext('2d')
-      if (!cctx) return null
-      cctx.putImageData(outlined, 0, 0)
-
-      const scaled = document.createElement('canvas')
-      scaled.width = size
-      scaled.height = size
-      const sctx = scaled.getContext('2d')
-      if (!sctx) return null
-      sctx.imageSmoothingEnabled = false
-      sctx.drawImage(composed, 0, 0, outlined.width, outlined.height, 0, 0, size, size)
-      const url = scaled.toDataURL()
+      // Scale the dye composite to display size first, then outline by
+      // exactly 1 pixel - see outlineAtDisplaySize (SpriteProvider.tsx's
+      // getSprite does the same for undyed sprites).
+      const outlined = outlineAtDisplaySize(out, size)
+      if (!outlined) return null
+      const canvas = document.createElement('canvas')
+      canvas.width = outlined.width
+      canvas.height = outlined.height
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return null
+      ctx.putImageData(outlined, 0, 0)
+      const url = canvas.toDataURL()
       cacheRef.current.set(key, url)
       return url
     },
