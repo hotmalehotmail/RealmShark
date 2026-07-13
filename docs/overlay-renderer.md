@@ -354,24 +354,24 @@ bitmaps go in `atlasesRef`; a `setGen` bump (`SpriteProvider.tsx:69`) re-renders
 consumers so a sprite that returned `null` before its atlas finished decoding is
 retried.
 
-`getSprite(objectType, size)` (`SpriteProvider.tsx:164-189`): look up the current frame's rect (from
+`getSprite(objectType, size)` (`SpriteProvider.tsx:217-249`): look up the current frame's rect (from
 `pack.animTable[objectType]` for an animated idle sprite, else `pack.table[objectType]`)
-→ `[atlasId,x,y,w,h]`, crop it to an `ImageData` at native resolution, bake in
-a 1-native-pixel black silhouette outline (`outline.ts`'s `outlineImageData` —
-see "Silhouette outline" below), then draw that padded, outlined image to a
-`size×size` canvas with `imageSmoothingEnabled=false` (nearest-neighbour,
-preserving the pixel-art look), return `canvas.toDataURL()`, memoised by
-`"objectType:size:frame"`. Returns `null` when the pack isn't ready, the
-objectType is absent, or the atlas hasn't decoded yet.
+→ `[atlasId,x,y,w,h]`, crop it to an `ImageData` at native resolution, scale
+that up to `size×size` with `imageSmoothingEnabled=false` (nearest-neighbour,
+preserving the pixel-art look) and bake in a 1-pixel black silhouette outline
+at that display resolution (`outline.ts`'s `outlineAtDisplaySize` — see
+"Silhouette outline" below), then `canvas.putImageData` the result and return
+`canvas.toDataURL()`, memoised by `"objectType:size:frame"`. Returns `null`
+when the pack isn't ready, the objectType is absent, or the atlas hasn't
+decoded yet.
 
 `getDyedSprite(baseType, size, clothingDye?, accessoryDye?)`
-(`SpriteProvider.tsx:204-361`) composites clothing/accessory dyes onto a character
+(`SpriteProvider.tsx:278-431`) composites clothing/accessory dyes onto a character
 sprite using the pack's `maskTable` + `dyeTable`. The full compositing model
 (mask channels = region + shade, textile sub-pixel tiling via `TEXTILE_SUB=5`,
 solid vs. textile `dyeTable` encoding) is documented in **`dyes-and-textiles.md`**
 — not repeated here. Key contract: it **falls back to `getSprite`** when the pack
-isn't ready, there's no dye, or the base type has no mask
-(`SpriteProvider.tsx:217,227`), and memoises by
+isn't ready, there's no dye, or the base type has no mask, and memoises by
 `"dye:baseType:size:clothingDye:accessoryDye:baseFrame:clothingFrame:accessoryFrame"`
 (the base frame only varies for an animated idle character; the dye frames only
 vary for animated textiles — see `dyes-and-textiles.md`).
@@ -384,13 +384,21 @@ approach the Swing desktop client uses (`assets/ImageBuffer.java`'s
 pads an `ImageData` by `thickness` transparent pixels on every side, then
 `dilateSilhouette` grows the opaque region into that padding (`thickness`
 passes of 4-neighbour dilation) and paints newly-opaque pixels solid black —
-crisp/aliased, not a blurred glow. `getSprite` uses `thickness=1` (one native
-atlas pixel); `getDyedSprite` and `bakeDyedSprite` (`dyeBake.ts`) use
-`thickness=SUB` so the outline stays exactly 1 native pixel thick even at
-textile dyes' subdivided compositing resolution (see `dyes-and-textiles.md`).
-The outline shares the crop/bake caches, so cache entry counts and per-frame
-cost are unaffected; it composes with — sits *inside* — the CSS `ring`
-rarity border `Sprite.tsx` applies around the `<img>`/`<canvas>` element.
+crisp/aliased, not a blurred glow. `getSprite`/`getDyedSprite` use
+`outlineAtDisplaySize`, which scales the composite up to the caller's display
+size *first* and only then calls `outlineImageData` with `thickness=1` — this
+mirrors `getOutlinedIcon`, which also scales before outlining, so the line
+reads as exactly 1 screen pixel regardless of the sprite's native resolution
+or how large it's displayed. `bakeDyedSprite` (`dyeBake.ts`) can't do that: its
+output is scaled to display size every *frame* by `renderDyeFrame` via a
+single canvas draw with no pixel readback, so it instead calls
+`outlineImageData` directly with a flat `thickness=1` in its own (SUB-subdivided)
+composite resolution — thinner than a true 1-screen-pixel line at large
+display sizes, but not blown up by `SUB` the way outlining at native
+resolution would be (see `dyes-and-textiles.md`'s "Sprite outline"). The
+outline shares the crop/bake caches, so cache entry counts and per-frame cost
+are unaffected; it composes with — sits *inside* — the CSS `ring` rarity
+border `Sprite.tsx` applies around the `<img>`/`<canvas>` element.
 
 Both functions (plus `isAnimated`/`frameMs`) are exposed via `SpriteContext` (`context.ts:6-37`); panels call
 them through `useSprites()` or the `<Sprite>` component.

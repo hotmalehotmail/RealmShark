@@ -84,3 +84,32 @@ export function outlineImageData(src: ImageData, thickness: number): ImageData {
   dilateSilhouette(out, thickness)
   return out
 }
+
+/**
+ * Scale `src` up to `displaySize`×`displaySize` first, *then* dilate by
+ * exactly 1 pixel - matching the Swing desktop client's `getOutlinedIcon`
+ * (`assets/ImageBuffer.java`), which calls `img.getScaledInstance(size - 2,
+ * size - 2, ...)` before dilating the already-scaled icon by 1 pixel on every
+ * edge. Outlining in the *source* resolution and scaling the result afterward
+ * (as `outlineImageData` alone does) instead blows the line up by the same
+ * factor as the sprite - fine when source and display resolution are close,
+ * badly-thick when a small native/composite sprite is scaled up several times
+ * for display (see the git history of this function for the pre-fix
+ * behaviour). Returns `displaySize`×`displaySize` ImageData; falls back to a
+ * plain unoutlined scale when `displaySize` is too small to fit the 1px
+ * border on each side.
+ */
+export function outlineAtDisplaySize(src: ImageData, displaySize: number): ImageData {
+  const inner = displaySize - 2
+  const targetW = inner > 0 ? inner : displaySize
+  const targetH = targetW
+  const canvas = document.createElement('canvas')
+  canvas.width = targetW
+  canvas.height = targetH
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return src
+  ctx.imageSmoothingEnabled = false
+  ctx.drawImage(imageDataToCanvas(src), 0, 0, src.width, src.height, 0, 0, targetW, targetH)
+  const scaled = ctx.getImageData(0, 0, targetW, targetH)
+  return inner > 0 ? outlineImageData(scaled, 1) : scaled
+}
