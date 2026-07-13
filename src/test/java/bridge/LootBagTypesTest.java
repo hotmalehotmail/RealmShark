@@ -25,20 +25,37 @@ import org.junit.Test;
 public class LootBagTypesTest {
 
     @Test
-    public void lootBagObjectTypesFallsBackToKnownIdsWhenXmlScanFindsNothing() {
+    public void lootBagObjectTypesIncludesResolvedIconEntityForEachTrackedColor() {
         // Known fallback ids (see IdToAsset.KNOWN_BAG_ICON_IDS: white=1292,
         // orange=1295) loaded as plain objects with no matching Class=Bag +
-        // BagType - simulating the real client's ground-bag XML gap.
+        // BagType - simulating the real client's ground-bag XML gap, so
+        // findBagIconObjectType has at least this to resolve to for either
+        // color even if no other test in this shared-state JVM has already
+        // registered a genuine Class=Bag entity for it.
+        //
+        // Asserting against IdToAsset.findBagIconObjectType's own result
+        // (rather than hardcoding which id "wins") is deliberate:
+        // IdToAsset.registerFake entries are process-wide and never undone,
+        // so another test class (e.g. IdToAssetBagIconTest) may have already
+        // registered a real Class=Bag+BagType=6 entity earlier in this JVM,
+        // in which case the scan legitimately outranks the known fallback for
+        // that color - IdToAssetBagIconTest already covers that precedence.
+        // This test's job is only to confirm LootBagTypes.envelopeJson()
+        // actually folds findBagIconObjectType's resolution (soak #144),
+        // whichever id that turns out to be.
         IdToAsset.registerFake(1292, "Equipment", 0);
         IdToAsset.registerFake(1295, "Equipment", 0);
+
+        Integer expectedWhite = IdToAsset.findBagIconObjectType(6);
+        Integer expectedOrange = IdToAsset.findBagIconObjectType(8);
 
         JsonObject data = JsonParser.parseString(new LootBagTypes().envelopeJson())
             .getAsJsonObject()
             .getAsJsonObject("data");
         JsonObject objectTypes = data.getAsJsonObject("lootBagObjectTypes");
 
-        assertEquals(6, objectTypes.get("1292").getAsInt());
-        assertEquals(8, objectTypes.get("1295").getAsInt());
+        assertEquals(6, objectTypes.get(String.valueOf(expectedWhite)).getAsInt());
+        assertEquals(8, objectTypes.get(String.valueOf(expectedOrange)).getAsInt());
     }
 
     @Test

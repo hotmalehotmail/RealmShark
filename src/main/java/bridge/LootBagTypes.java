@@ -18,7 +18,7 @@ import java.util.Map;
  * (soak #113/#144 - see {@link IdToAsset#findBagIconObjectType}), so each
  * tracked color's resolved icon id (real scan match, or the verified known
  * fallback) is also always included. Broadcast as a synthetic
- * {@code {"type":"lootBagTypes","data":{"bagTypeTable":{...},"lootBagIcons":{...},"itemNames":{...}}}}
+ * {@code {"type":"lootBagTypes","data":{"bagTypeTable":{...},"lootBagIcons":{...},"lootBagObjectTypes":{...},"itemNames":{...}}}}
  * envelope through the normal packet-batch stream, independent of the sprite
  * pack's atlas-readiness gate ({@link bridge.sprites.SpritePackService#ready()})
  * since this data needs no atlas.
