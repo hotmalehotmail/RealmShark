@@ -127,7 +127,7 @@ Tracing one incoming packet (say a `DamagePacket`) from wire to render:
    ▼
  handlers.onBatch(batch)  →  webContents.send(IPC.packetBatch, batch)
    │                                                  index.ts:247
-   ▼   preload: window.overlay.onPacketBatch(cb)      preload/index.ts:21
+   ▼   preload: window.overlay.onPacketBatch(cb)      preload/index.ts:63
  ── TIER 3: renderer (React) ────────────────────────────────────────────────
    ▼
  DpsTracker.ingest(batch)   switch(env.type){ … }     DpsTracker.ts:82

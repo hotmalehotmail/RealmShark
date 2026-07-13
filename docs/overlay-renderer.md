@@ -84,7 +84,14 @@ window onto the outside world is `window.overlay`, the object
 > `window.overlay.onPacketBatch(...)`: `StatusPanel` (counter), `EntityRegistry`,
 > `useDpsTracker`, and `useLootTracker` each register their own listener and
 > process the same `PacketEnvelope[]` batches. Ordering across consumers is not
-> coordinated.
+> coordinated. The preload side (`preload/index.ts`) fans a single
+> `ipcRenderer` subscription out to every registered listener and can suspend
+> that fan-out via `window.overlay.setPacketBatchSuspended(true)` — batches
+> keep arriving from the bridge but are buffered (not dropped) until delivery
+> resumes, when they're merged into one combined batch and delivered once.
+> `PanelFrame` calls this for the duration of a drag, so panel content
+> (DPS/loot/entity-registry re-renders) doesn't compete with the drag for the
+> main thread — see "Drag / reposition" below.
 
 A `PacketEnvelope` is `{ type, direction, time, data }` (`overlay/src/shared/ipc.ts:61-66`),
 with `data: unknown` — each consumer casts `data` to its own field shape. The
@@ -193,20 +200,41 @@ Dragging is manual (no library). `PanelFrame.startDrag` (`PanelFrame.tsx:35`)
 records the grab offset within the panel (so the panel doesn't snap its corner
 to the cursor), then attaches window `mousemove`/`mouseup` listeners. Each move
 calls `anchorFromPointer` (`anchor.ts:35-43`) to convert `(clientX - grabOffset)`
-into a **clamped 0-100 % anchor** and writes the resulting `panelStyle`
-**directly to the frame's DOM** (`left`/`top`/`width`/`height`) — *not* through
-React state. Routing every pointer event through `setPanels` instead would
-re-render `PanelCanvas` and every panel's (sprite-rendering) content 60-125×/sec,
-which is what made dragging lag. The final anchor is committed to state once, on
-`mouseup`, via `onDrag` → `updatePanel(id, { anchor:{ pos:'tl', x, y } })`
-(`PanelCanvas.tsx:108`) — that persists the move and triggers the debounced save
-below. `PanelCanvas` never re-renders during the move phase, so the direct DOM
-writes can't be clobbered by a reconcile, and the commit reasserts the identical
-position (no drop jump). Only the drag handle (the title bar) starts a drag, and
-only when `interactive`. The pin/size buttons `stopPropagation` on `mousedown` so
+into a **clamped 0-100 % anchor** and writes the resulting position **directly
+to the frame's DOM** — *not* through React state. Routing every pointer event
+through `setPanels` instead would re-render `PanelCanvas` and every panel's
+(sprite-rendering) content 60-125×/sec, which is what made dragging lag (#120).
+The final anchor is committed to state once, on `mouseup`, via `onDrag` →
+`updatePanel(id, { anchor:{ pos:'tl', x, y } })` (`PanelCanvas.tsx:108`) — that
+persists the move and triggers the debounced save below. `PanelCanvas` never
+re-renders during the move phase, so the direct DOM writes can't be clobbered
+by a reconcile, and the commit reasserts the identical position (no drop jump).
+Only the drag handle (the title bar) starts a drag, and only when
+`interactive`. The pin/size buttons `stopPropagation` on `mousedown` so
 clicking them never begins a drag (`PanelFrame.tsx:98,110`). Clicking anywhere on
 a panel raises it via `onBringToTop`, which bumps `zIndex` to `max+1`
 (`PanelCanvas.tsx:89-94`).
+
+**Per-frame cost during the move.** `left`/`top` stay at their rest values for
+the whole drag; position is applied via `transform: translate3d(...)` instead
+(a compositor-only property — no layout/repaint — unlike rewriting `left`/`top`
+every frame, which forces a full layout + repaint). `width`/`height` are still
+recomputed from `panelStyle` each move (for the near-an-edge clamp described
+above) but only written to the DOM when the clamped value actually changes,
+which is only near a canvas edge — the common frame does a transform-only
+write. On top of that, `document.documentElement` gets the `panel-dragging`
+class for the drag's duration, which suspends every panel's `backdrop-filter`
+blur + `box-shadow` (`main.css`) — hardware acceleration is off (required for
+overlay transparency, Electron #25153), so blur/shadow is otherwise
+recomposited on the CPU every frame a panel moves, which measured (#132) as
+the dominant per-frame cost. `window.overlay.setPacketBatchSuspended(true)` is
+also called for the drag's duration, so panel content isn't independently
+re-rendering off the packet stream at the same time (see the fan-out note
+above). `dragPerf.ts`'s `startDragPerf`/`stop` bracket every drag and, when
+the module's `DRAG_PERF_DEBUG` const is flipped to `true` (mirroring
+`DPS_DEBUG` in `DpsTracker.ts` — off by default, so a normal drag logs
+nothing), log a `[drag-perf]` frame-cadence summary to the Console panel, for
+catching a future regression in drag smoothness.
 
 ### Layout persistence round-trip
 
