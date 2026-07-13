@@ -250,7 +250,7 @@ jobs:
             # known, rare gap; they don't gate. Count with ...| .id | wc -l, not `-q length`
             # (miscounts under --paginate).
             FINDINGS="$(gh api --paginate "repos/$REPO/pulls/$NUM/comments" \
-                          -q ".[] | select(.user.login==\"github-actions[bot]\" and .commit_id==\"$PR_HEAD_OID\" and (.body | contains(\"**[low]**\") | not)) | .id" 2>/dev/null | wc -l | tr -d ' ')"
+                          -q ".[] | select(.user.login==\"github-actions[bot]\" and .commit_id==\"$PR_HEAD_OID\" and (.body | startswith(\"**[low]**\") | not)) | .id" 2>/dev/null | wc -l | tr -d ' ')"
             if [ "${FINDINGS:-0}" -gt 0 ]; then
               if gh api --paginate "repos/$REPO/issues/$NUM/comments" \
                    -q ".[] | select(.body | contains(\"<!-- session-triaged: $PR_HEAD_OID -->\")) | .id" 2>/dev/null | grep -q .; then
