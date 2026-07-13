@@ -272,7 +272,8 @@ app.whenReady().then(() => {
     'NotificationPacket',
     // bridge-synthesized envelopes the overlay consumes (non-sensitive)
     'objectNames',
-    'dps'
+    'dps',
+    'lootBagTypes'
   ])
   const recentPackets: PacketEnvelope[] = []
 

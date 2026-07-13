@@ -12,8 +12,13 @@ import java.util.Map;
  * from the extracted game assets (or, in {@code --fake} bridge mode, the
  * synthetic entries {@link IdToAsset#registerFake} adds) - so the overlay's
  * Loot panel can categorize picked-up items with no hand-maintained item
- * list. Broadcast as a synthetic
- * {@code {"type":"lootBagTypes","data":{"bagTypeTable":{...},"lootBagIcons":{...},"itemNames":{...}}}}
+ * list. {@code lootBagObjectTypes} (the world objectTypes the drop tracker
+ * watches for) is built primarily by scanning for a {@code Class=Bag} entry
+ * whose own BagType matches, but that scan can find nothing on real assets
+ * (soak #113/#144 - see {@link IdToAsset#findBagIconObjectType}), so each
+ * tracked color's resolved icon id (real scan match, or the verified known
+ * fallback) is also always included. Broadcast as a synthetic
+ * {@code {"type":"lootBagTypes","data":{"bagTypeTable":{...},"lootBagIcons":{...},"lootBagObjectTypes":{...},"itemNames":{...}}}}
  * envelope through the normal packet-batch stream, independent of the sprite
  * pack's atlas-readiness gate ({@link bridge.sprites.SpritePackService#ready()})
  * since this data needs no atlas.
@@ -66,7 +71,20 @@ public class LootBagTypes {
         Map<String, Integer> lootBagIcons = new LinkedHashMap<>();
         for (int bt : TRACKED_BAG_TYPES) {
             Integer iconId = IdToAsset.findBagIconObjectType(bt);
-            if (iconId != null) lootBagIcons.put(String.valueOf(bt), iconId);
+            if (iconId != null) {
+                lootBagIcons.put(String.valueOf(bt), iconId);
+                // Soak #113 found the ground-bag entity's own Object XML entry
+                // doesn't reliably carry a matching Class=Bag+BagType pair on
+                // real assets, so the scan the loop above relies on can come up
+                // empty for a tracked color - the same gap findBagIconObjectType
+                // already works around (real scan match, else a known fallback
+                // id). Without this, lootBagObjectTypes stayed empty on real
+                // assets and the overlay's drop tracker never recognized a bag
+                // entity at all (soak #144) - reuse the same resolved id here so
+                // the tracker is told to watch for it regardless of how it was
+                // resolved.
+                lootBagObjectTypes.putIfAbsent(String.valueOf(iconId), bt);
+            }
         }
 
         Envelope env = new Envelope();
