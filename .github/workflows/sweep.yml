@@ -136,10 +136,12 @@ jobs:
                     echo "#$P is CLEAN but has no session-done marker (head ${HEAD_AGE_MIN}m old) — authoring session may still be running; skipping."
                   fi
                 fi
-                # (b) Triage: a passing review's medium/low findings were decided (only if (a) passed).
+                # (b) Triage: a passing review's MEDIUM-and-up findings were decided (only if (a)
+                #     passed). `low` findings are informational — never gated (same non-low filter
+                #     as fixloop/gatekeeper), so a low-only PR isn't held here either.
                 if [ "$GATED_OK" = 1 ]; then
                   FINDINGS="$(gh api --paginate "repos/$REPO/pulls/$P/comments" \
-                                -q ".[] | select(.user.login==\"github-actions[bot]\" and .commit_id==\"$POID\") | .id" 2>/dev/null | wc -l | tr -d ' ')"
+                                -q ".[] | select(.user.login==\"github-actions[bot]\" and .commit_id==\"$POID\" and (.body | contains(\"**[low]**\") | not)) | .id" 2>/dev/null | wc -l | tr -d ' ')"
                   if [ "${FINDINGS:-0}" -gt 0 ] \
                      && ! gh api --paginate "repos/$REPO/issues/$P/comments" \
                             -q ".[] | select(.body | contains(\"<!-- session-triaged: $POID -->\")) | .id" 2>/dev/null | grep -q .; then

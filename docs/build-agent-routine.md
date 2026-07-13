@@ -69,7 +69,7 @@ Then pick your mode from the WORK ITEM text (not from these instructions):
 - If the work item begins with `FIX MODE`, follow "FIX MODE" below — you are iterating on
   an EXISTING PR branch, not starting fresh.
 - If the work item begins with `TRIAGE MODE`, follow "TRIAGE MODE" below — a review PASSED
-  but left medium/low findings for you to fix or decline on an EXISTING PR branch.
+  but left non-blocking findings for you to fix or decline on an EXISTING PR branch.
 - Otherwise the work item is a new issue (a maintainer labeled it `agent:build` for a
   feature or `agent:fix` for a bug) — follow "BUILD MODE" below.
 
@@ -114,8 +114,9 @@ new branch and do NOT open a new PR.
 Success = your fixes pushed to the existing branch, with CI + review re-running.
 
 ## TRIAGE MODE — decide the non-blocking findings on a passing review (never open a new PR)
-The review PASSED (no blocking issues) but left medium/low findings. The input names the
-existing PR, its head branch, and the findings. Do NOT create a new branch or a new PR.
+The review PASSED (no blocking issues) but left findings worth a decision. The input names the
+existing PR, its head branch, and the findings to decide (low-severity nits are excluded — they
+are informational only). Do NOT create a new branch or a new PR.
 1. Fetch and check out the named existing head branch; read the full PR conversation.
 2. Address ONLY the findings named in the input — this is a bounded decision pass, NOT another
    development round. Do NOT hunt for new improvements, refactor, or polish beyond those

@@ -98,12 +98,16 @@ jobs:
           if [ "$VERDICT" = "failure" ]; then
             MODE=fix
           elif [ "$VERDICT" = "success" ]; then
-            # The reviewer's inline comments on THIS head = its unaddressed findings (count with
-            # the `... | .id | wc -l` idiom, not `-q length`, which miscounts under --paginate).
+            # The reviewer's inline comments on THIS head are its unaddressed findings, each tagged
+            # `**[low|medium|high|critical]**` in the body. Triage only MEDIUM-and-up (high/critical
+            # already fail the verdict, so on a pass "medium+" just means "a medium"); `low` findings
+            # are informational — posted on the PR but never triaged or gated (the gatekeeper/sweep
+            # gates apply the same non-low filter, so a low-only PR isn't held). Count with the
+            # `... | .id | wc -l` idiom, not `-q length`, which miscounts under --paginate.
             FINDINGS="$(gh api --paginate "repos/$REPO/pulls/$PR/comments" \
-                          -q ".[] | select(.user.login==\"github-actions[bot]\" and .commit_id==\"$SHA\") | .id" 2>/dev/null | wc -l | tr -d ' ')"
+                          -q ".[] | select(.user.login==\"github-actions[bot]\" and .commit_id==\"$SHA\" and (.body | contains(\"**[low]**\") | not)) | .id" 2>/dev/null | wc -l | tr -d ' ')"
             if [ "${FINDINGS:-0}" -eq 0 ]; then
-              echo "review-verdict success on $SHA with no inline findings — clean pass; the gatekeeper owns it."
+              echo "review-verdict success on $SHA with no medium+ findings (any lows are informational) — the gatekeeper owns it."
               exit 0
             fi
             if gh api --paginate "repos/$REPO/issues/$PR/comments" \
@@ -150,8 +154,10 @@ jobs:
               echo "::warning::ROUTINE_FIRE_URL / ROUTINE_FIRE_TOKEN unset — cannot fire a triage pass."
               exit 0
             fi
+            # Only the medium+ findings go in the work item — lows are informational, not the
+            # agent's to decide (matches the FINDINGS filter above).
             INLINE="$(gh api --paginate "repos/$REPO/pulls/$PR/comments" \
-                        -q ".[] | select(.commit_id==\"$SHA\") | \"- \(.path):\(.line // .original_line // \"?\"): \(.body)\"" 2>/dev/null || true)"
+                        -q ".[] | select(.user.login==\"github-actions[bot]\" and .commit_id==\"$SHA\" and (.body | contains(\"**[low]**\") | not)) | \"- \(.path):\(.line // .original_line // \"?\"): \(.body)\"" 2>/dev/null || true)"
             # Untrusted review text goes to jq via --arg (never interpolated into the shell).
             TTEXT="$(printf 'TRIAGE MODE. Repository %s. PR #%s, head branch `%s`, base `staging`.\nThe review PASSED (no blocking issues) but left the medium/low findings below. Check out `%s`, read the full PR conversation, and for EACH finding decide: FIX it if worthwhile (edit + commit), or DECLINE it by replying to that review comment with a brief reason (your call is final). When done: if you made NO code changes, post a PR comment whose body ends with the EXACT marker `<!-- session-triaged: %s -->` — that is what lets the merge proceed. If you DID push fixes, do NOT post that marker; the re-review re-evaluates the new head. Never open a new PR.\n\nFindings:\n%s\n' \
               "$REPO" "$PR" "$HEAD" "$HEAD" "$SHA" "${INLINE:-(see the inline review comments on the PR)}")"

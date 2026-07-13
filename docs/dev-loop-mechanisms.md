@@ -593,7 +593,7 @@ non-firing hook degrades to "merges ~45 min late," not "never merges."
 gate + `push`/`synchronize` triggers + synchronize-disarm; ✅ sweep marker gate + crash backstop
 + marker GC. ⏳ live validation of (a)/(b) above on a Routine run.
 
-### 7.3 · Triage gate — a passing review's medium/low findings get a decision
+### 7.3 · Triage gate — a passing review's medium+ findings get a decision (lows are informational)
 
 **Why.** `review-verdict` is a *deterministic* function of the findings: it fails only on a
 **high/critical** finding (plus the `.github` tripwire and the missing-issue-link check).
@@ -604,10 +604,16 @@ first. (`review.yml` is untouched — the workflow-parity guard requires it byte
 default branch — so triage reads its *existing* outputs.)
 
 **Detecting "passed with findings."** The reviewer posts each line-anchored finding as an inline
-review comment (`/pulls/{n}/comments`) at the reviewed head sha. Both the fix loop and the
-gatekeeper count `github-actions[bot]` inline comments whose `commit_id` == the current head.
-(Known gap: a *file-level* finding with no line anchor lives only in the review body, so it isn't
-counted and won't get a triage pass — rare, and never blocking since it's medium/low.)
+review comment (`/pulls/{n}/comments`) at the reviewed head sha, severity-tagged `**[low|medium|
+high|critical]**` in the body. The fix loop, gatekeeper, and sweep all count `github-actions[bot]`
+inline comments whose `commit_id` == the current head **and that are NOT `**[low]**`** — i.e.
+**medium-and-up** only (high/critical already fail the verdict, so on a pass that means "a
+medium"). **`low` findings are informational: posted on the PR for the record, but never triaged
+and never gated** — the reviewer stays comprehensive (its thoroughness is what caught the #129
+`sweep` bypass as a *high*), while nit-level lows don't cost a triage run or hold a merge. All
+three counters apply the identical non-low filter, so a low-only PR is never held waiting for a
+`session-triaged` marker that would never come. (Known gap: a *file-level* finding with no line
+anchor lives only in the review body, so it isn't counted — rare, and never blocking.)
 
 **The loop (`fixloop.yml`).** On `review-verdict = success` with unaddressed findings on the head
 and no `session-triaged` marker for it yet, the fix loop re-fires the agent in **TRIAGE MODE**
