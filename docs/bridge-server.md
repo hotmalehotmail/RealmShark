@@ -451,7 +451,11 @@ plumbing.
   `itemNames` (item id → `IdToAsset.objectName`). Separately,
   `IdToAsset.findBagIconObjectType(bagType)` resolves each tracked BagType's one
   representative `Class=Bag` entity id into `lootBagIcons` (the panel's category
-  header sprite). Cached and only rebuilt when `IdToAsset.loadedObjectCount()`
+  header sprite) — **and** (soak #144) is also folded into `lootBagObjectTypes`
+  for that color, since the XML scan above finds no `Class=Bag`+own-`BagType`
+  match at all on real assets (soak #113) and `lootBagObjectTypes` would
+  otherwise stay permanently empty on a real client, with no drop ever
+  recognized. Cached and only rebuilt when `IdToAsset.loadedObjectCount()`
   changes (a reload), so repeated polling is cheap.
 - **Envelope shape** mirrors `ObjectNames`'s (`type:"lootBagTypes"`,
   `direction:"internal"`) - see the full JSON shape in

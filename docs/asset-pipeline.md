@@ -394,6 +394,20 @@ for the bridge-side broadcast mechanics and
 (no atlas), so it's available - and broadcast - independent of the sprite
 pack's atlas-readiness gate.
 
+`lootBagObjectTypes` inherited the same real-asset gap as the icon lookup
+above: on real game assets its `Class=Bag`+own-`BagType` scan finds nothing
+(soak #113), so before soak #144 it stayed **empty** on a real client — the
+overlay's `LootTracker` never had a `bagEntityTypes` entry to match against,
+so no ground-bag entity was ever recognized in `UpdatePacket.newObjects` and
+the Loot panel stayed empty even for a correctly-dropped item, no startup
+race required. `LootBagTypes.envelopeJson()` now always includes each tracked
+color's `findBagIconObjectType` result (real scan match, or its known-id
+fallback) in `lootBagObjectTypes` too — not just `lootBagIcons` — so the drop
+tracker is guaranteed to watch for at least that entity regardless of what
+the ground-bag entity's own XML self-reports. A boosted variant the scan
+*does* find (a `Class=Bag` entry that genuinely self-reports the right
+BagType) is kept in addition, not replaced.
+
 > **Non-obvious fact — `IdToAsset.registerFake` (real assets don't exist in
 > CI or most dev sandboxes).** Real game asset XML only exists on a machine
 > with RotMG installed (see "The problem" above) - `--fake` bridge mode and
