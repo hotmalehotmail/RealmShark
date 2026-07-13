@@ -664,8 +664,10 @@ the dispatch itself, not the version bump.
 **Status.** 🟢 Built, incl. the release-notes captain.
 
 - **Release-notes "captain" — built.** A preceding `notes` job runs a Haiku agent
-  (`claude-haiku-4-5`, `CLAUDE_CODE_OAUTH_TOKEN`) over the Conventional Commits since
-  the last tag (`git describe --tags` → `git log`), which writes `release-notes.md`;
+  (`claude-haiku-4-5`, `CLAUDE_CODE_OAUTH_TOKEN`) over this build's Conventional Commits —
+  for an **alpha**, the same `origin/bridge..HEAD` range as the PR list (this soak's
+  un-shipped content, NOT the git-describe range, which walks back to an old tag and re-lists
+  every prior soak — see §9.1); for a **beta**, since the last tag — which writes `release-notes.md`;
   the Windows publish job downloads it and passes `--notes-file`. **Best-effort:**
   every captain step is `continue-on-error` and the publish job falls back to the old
   static note (`"Automated {channel} build from {ref}"`) if no notes were produced, so
@@ -717,7 +719,10 @@ alpha keeps a clean, self-contained verdict record.
 > accumulates a soak's PRs; a tag-based boundary sticks at the last promotion
 > *reachable from `staging`* and re-lists every prior soak's PRs. `bridge` only
 > moves on a promotion (a passed soak), so the branch diff is exactly this soak's
-> own, un-shipped content.
+> own, un-shipped content. The Haiku **release-notes captain draws from this SAME
+> `origin/bridge..HEAD` range for an alpha** (a beta uses the tag range, since
+> `origin/bridge..HEAD` is empty when cut from `bridge`) — so the "What changed"
+> notes and the PR list describe the same build, not every soak since v0.15.0.
 
 ### 9.2 · Verdict — `soak:pass` / `soak:fail`
 Two maintainer-applied labels on the soak issue, read by `on: issues: labeled`
