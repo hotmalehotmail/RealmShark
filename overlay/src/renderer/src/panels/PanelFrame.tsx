@@ -127,6 +127,11 @@ function PanelFrame({
       el.style.transform = `translate3d(${deltaX}px, ${deltaY}px, 0)`
     }
     const handleUp = (): void => {
+      // A real mouseup and the interactive-change/detach abort are meant to
+      // be mutually exclusive, but guard idempotency anyway: a stray second
+      // invocation (of either) becomes a clean no-op instead of double-
+      // logging drag-perf or double-committing the drop position.
+      if (!draggingRef.current) return
       draggingRef.current = false
       endDragRef.current = null
       window.removeEventListener('mousemove', handleMove)
