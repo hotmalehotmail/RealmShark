@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import type { PanelInstance, PanelSize } from '../../../shared/panels'
 import { Button } from '../ui/Button'
 import { anchorFromPointer, panelStyle, type SizePx } from './anchor'
@@ -35,6 +35,28 @@ function PanelFrame({
   const Content = spec.component
   const draggingRef = useRef(false)
   const frameRef = useRef<HTMLDivElement>(null)
+  // Set to the in-flight drag's handleUp while dragging, so an external abort
+  // (see the effect below) can end it the same way a mouseup would.
+  const endDragRef = useRef<(() => void) | null>(null)
+
+  // The preload-side packet-suspend failsafe (interactive-change=false /
+  // overlay-detach) guards against a drag whose mouseup never reaches the
+  // renderer (hotkey toggle mid-drag can setIgnoreMouseEvents before the
+  // mouseup lands; the game closing mid-drag is the detach case). Mirror it
+  // here for the renderer-side visual drag state - otherwise `panel-dragging`
+  // would stay on <html> (blur/shadow suspended at rest) and the dragged
+  // frame would keep a stale transform, both self-healing only on the next
+  // completed drag.
+  useEffect(() => {
+    const offInteractive = window.overlay.onInteractiveChange((stillInteractive) => {
+      if (!stillInteractive) endDragRef.current?.()
+    })
+    const offDetach = window.overlay.onOverlayDetach(() => endDragRef.current?.())
+    return () => {
+      offInteractive()
+      offDetach()
+    }
+  }, [])
 
   const startDrag = (e: React.MouseEvent): void => {
     e.preventDefault()
@@ -106,6 +128,7 @@ function PanelFrame({
     }
     const handleUp = (): void => {
       draggingRef.current = false
+      endDragRef.current = null
       window.removeEventListener('mousemove', handleMove)
       window.removeEventListener('mouseup', handleUp)
       const el = frameRef.current
@@ -118,6 +141,10 @@ function PanelFrame({
       perf.stop()
       onDrag(panel.id, last.x, last.y)
     }
+
+    // Lets the interactive-change/detach effect above end this drag exactly
+    // as a mouseup would (same cleanup, commits the last known position).
+    endDragRef.current = handleUp
 
     window.addEventListener('mousemove', handleMove)
     window.addEventListener('mouseup', handleUp)
