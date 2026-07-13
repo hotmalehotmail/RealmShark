@@ -138,6 +138,19 @@ function PanelFrame({
       window.removeEventListener('mouseup', handleUp)
       const el = frameRef.current
       if (el) {
+        // Assert the committed rest position imperatively (matching what
+        // `onDrag`'s state update will render) in the same synchronous block
+        // as clearing the transform, rather than relying on React flushing
+        // that state update before the next paint - true today for a
+        // discrete native mouseup handler, but asserting it directly removes
+        // the dependency on that timing outright.
+        const finalStyle = panelStyle(
+          { ...panel.anchor, x: last.x, y: last.y },
+          spec.sizes[panel.size],
+          canvasSize
+        )
+        el.style.left = String(finalStyle.left)
+        el.style.top = String(finalStyle.top)
         el.style.transform = ''
         el.style.willChange = ''
       }

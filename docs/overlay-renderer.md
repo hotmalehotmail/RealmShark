@@ -229,9 +229,11 @@ recomposited on the CPU every frame a panel moves, which measured (#132) as
 the dominant per-frame cost. `window.overlay.setPacketBatchSuspended(true)` is
 also called for the drag's duration, so panel content isn't independently
 re-rendering off the packet stream at the same time (see the fan-out note
-above). `dragPerf.ts`'s `startDragPerf`/`stop` bracket every drag and log a
-`[drag-perf]` frame-cadence summary to the Console panel, for catching a
-future regression in drag smoothness.
+above). `dragPerf.ts`'s `startDragPerf`/`stop` bracket every drag and, when
+the module's `DRAG_PERF_DEBUG` const is flipped to `true` (mirroring
+`DPS_DEBUG` in `DpsTracker.ts` — off by default, so a normal drag logs
+nothing), log a `[drag-perf]` frame-cadence summary to the Console panel, for
+catching a future regression in drag smoothness.
 
 ### Layout persistence round-trip
 
