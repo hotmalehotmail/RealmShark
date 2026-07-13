@@ -1014,6 +1014,20 @@ objectId in an in-view map. A loot bag's 8 slots are `INVENTORY_0..7` (wire
 `INVENTORY_4..11` (12-19) *held* slots a player carries, so a player entity is
 never mistaken for a bag.
 
+**Startup race.** The bridge's `lootBagTypes` broadcast has a ~2s startup delay
+(`bridge-server.md` §6), so a bag can spawn before `bagEntityTypes` is
+populated — its `newObjects` entry would otherwise fail the lookup and be lost
+for good, since a later `NewTickPacket` delta only resolves a bag already in
+the in-view map. `LootTracker` queues any `newObjects` entry it can't yet
+classify in `pendingNewObjects` and replays the queue once the first
+`lootBagTypes` envelope arrives (a one-time catch-up; the queue is also
+dropped on `resetPerInstance` since a map change invalidates those objectIds).
+The queue is bounded (`MAX_PENDING_NEW_OBJECTS`, oldest evicted first) as a
+memory bound rather than a correctness guarantee — every `newObjects` entry
+queues pre-meta, not just bags, so unusually heavy non-bag traffic in that
+window could in principle evict the earliest-queued (and thus race-triggering)
+bag before meta arrives.
+
 **Reading contents + enchants.** For each bag slot holding an item id, the item
 is categorized by *its own* `BagType` (from `bagTypeTable`), so a lower-tier
 filler item sharing a bag isn't listed. Each item's enchantments come straight
