@@ -32,6 +32,7 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/ui/interactiveContext.ts` | `InteractiveContext` / `useInteractive()` - the click-through-mode flag, for `Tooltip` (§4.2). |
 | `overlay/src/renderer/src/assets/main.css` | Tailwind entry + the `@theme` design-token block — see `overlay-ui-style.md`. |
 | `overlay/src/renderer/src/sprites/SpriteProvider.tsx` | Loads/decodes the atlas pack; `getSprite` / `getDyedSprite`. |
+| `overlay/src/renderer/src/sprites/outline.ts` | `outlineImageData`/`dilateSilhouette` — bakes RotMG's thin black silhouette outline into a cropped/composited sprite. |
 | `overlay/src/renderer/src/sprites/Sprite.tsx` / `CharacterSprite.tsx` | `<Sprite objectType>` / `<CharacterSprite objectId>` components. |
 | `overlay/src/renderer/src/sprites/EntityRegistry.tsx` | objectId → name/skin/equipment/equipmentRarity/enchantSlots/dyes, built from the packet stream. |
 | `overlay/src/renderer/src/sprites/context.ts` | The two React contexts + `useSprites` / `useEntityRegistry` hooks. |
@@ -327,10 +328,13 @@ retried.
 
 `getSprite(objectType, size)` (`SpriteProvider.tsx:164-189`): look up the current frame's rect (from
 `pack.animTable[objectType]` for an animated idle sprite, else `pack.table[objectType]`)
-→ `[atlasId,x,y,w,h]`, crop to a `size×size` canvas with
-`imageSmoothingEnabled=false` (nearest-neighbour, preserving the pixel-art look),
-return `canvas.toDataURL()`, memoised by `"objectType:size:frame"`. Returns `null` when
-the pack isn't ready, the objectType is absent, or the atlas hasn't decoded yet.
+→ `[atlasId,x,y,w,h]`, crop it to an `ImageData` at native resolution, bake in
+a 1-native-pixel black silhouette outline (`outline.ts`'s `outlineImageData` —
+see "Silhouette outline" below), then draw that padded, outlined image to a
+`size×size` canvas with `imageSmoothingEnabled=false` (nearest-neighbour,
+preserving the pixel-art look), return `canvas.toDataURL()`, memoised by
+`"objectType:size:frame"`. Returns `null` when the pack isn't ready, the
+objectType is absent, or the atlas hasn't decoded yet.
 
 `getDyedSprite(baseType, size, clothingDye?, accessoryDye?)`
 (`SpriteProvider.tsx:204-361`) composites clothing/accessory dyes onto a character
@@ -343,6 +347,22 @@ isn't ready, there's no dye, or the base type has no mask
 `"dye:baseType:size:clothingDye:accessoryDye:baseFrame:clothingFrame:accessoryFrame"`
 (the base frame only varies for an animated idle character; the dye frames only
 vary for animated textiles — see `dyes-and-textiles.md`).
+
+**Silhouette outline (`sprites/outline.ts`).** Every sprite drawn through this
+path gets RotMG's thin black outline hugging its opaque silhouette, baked in at
+crop/bake time (never recomputed per frame) — ports the same padded-dilation
+approach the Swing desktop client uses (`assets/ImageBuffer.java`'s
+`getOutlinedIcon`; see `asset-pipeline.md`). `outlineImageData(src, thickness)`
+pads an `ImageData` by `thickness` transparent pixels on every side, then
+`dilateSilhouette` grows the opaque region into that padding (`thickness`
+passes of 4-neighbour dilation) and paints newly-opaque pixels solid black —
+crisp/aliased, not a blurred glow. `getSprite` uses `thickness=1` (one native
+atlas pixel); `getDyedSprite` and `bakeDyedSprite` (`dyeBake.ts`) use
+`thickness=SUB` so the outline stays exactly 1 native pixel thick even at
+textile dyes' subdivided compositing resolution (see `dyes-and-textiles.md`).
+The outline shares the crop/bake caches, so cache entry counts and per-frame
+cost are unaffected; it composes with — sits *inside* — the CSS `ring`
+rarity border `Sprite.tsx` applies around the `<img>`/`<canvas>` element.
 
 Both functions (plus `isAnimated`/`frameMs`) are exposed via `SpriteContext` (`context.ts:6-37`); panels call
 them through `useSprites()` or the `<Sprite>` component.
