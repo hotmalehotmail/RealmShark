@@ -91,8 +91,9 @@ feature; steps + expected/actual + a repro capture for a bug).
    links `Closes #<issue>` (or `Fixes #<issue>` for bugs) and lists your assumptions
    under an "Assumptions" heading.
 
-Success = a PR open against `staging` that implements the issue, with assumptions
-documented and CI green.
+Success = a PR opened against `staging` that implements the issue, with assumptions
+documented. Once the PR is open you are DONE — do NOT wait for CI to go green (see the
+"Finishing" guardrail).
 
 ## FIX MODE — iterate on an existing PR branch (never open a new PR)
 The input names an existing PR, its head branch, and the changes to make — either
@@ -137,6 +138,16 @@ existing PR, its head branch, and the findings. Do NOT create a new branch or a 
 
 Success = every finding fixed or explicitly declined, and either your fixes pushed OR the
 `session-triaged` marker posted.
+
+## Finishing (ALL modes) — stop when your deliverable is done
+When you have produced your deliverable — the PR opened (BUILD), or your commits/`session-triaged`
+marker pushed (FIX/TRIAGE) — STOP and end the run. The pipeline is fully EVENT-DRIVEN: CI, the
+review agent, the gatekeeper, and the fix loop take over automatically and will re-fire you in a
+FRESH session if (and only if) there is something to act on — a failing review, a triage pass, a
+merge conflict. So do NOT wait for CI or review to finish, do NOT poll or re-check the PR, and do
+NOT schedule a check-in or a future wake-up ("send later" / remind-me-later) — a scheduled
+check-in just burns an extra run and almost always wakes to find the work already handled. Trust
+the loop to summon you.
 
 ## Guardrails (ALL modes)
 Never touch `bridge` directly, never publish a release, never edit
