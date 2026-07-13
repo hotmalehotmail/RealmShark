@@ -468,10 +468,25 @@ emitted on every one of our hits, so it re-establishes identity continuously).
 Both guard on an actual id change, since `EnemyHitPacket` arrives every hit but
 should only count as a display change the first time it resolves. The registry
 **clears** on `MapInfoPacket` (instance change) and on `onOverlayDetach`
-(`EntityRegistry.tsx:77-81`). Individual records are **removed** when their
-objectId appears in `UpdatePacket.drops` (the entity left view / the instance),
-so the roster reflects players *leaving* as well as joining — if the local
-player's own id drops, `localPlayerRef` is forgotten too.
+(`EntityRegistry.tsx:77-81`).
+
+> **Two maps, not one — `recordsRef` (live) vs. `lastRecordRef` (last-known).**
+> `mergeStats` writes every merged record into *both* `recordsRef` (the live
+> roster) and `lastRecordRef` (never pruned). When an objectId appears in
+> `UpdatePacket.drops` (the entity left view / the instance), only its
+> `recordsRef` entry is deleted — if the local player's own id drops,
+> `localPlayerRef` is forgotten too. `lastRecordRef` keeps the same record
+> object indefinitely (until the next full `clear()`), so `objectType`,
+> `skin`, `equipment`, `equipmentRarity`, `clothingDye`, `accessoryDye`,
+> `enchantSlots`, and `name` all keep resolving a dropped entity's *last-seen*
+> values instead of `null` — e.g. the DPS list keeps showing a player's actual
+> gear/sprite after they leave the instance mid-fight, rather than an empty
+> silhouette. `characters()` deliberately reads `recordsRef` only, so the
+> *live* instance roster (`InstancePanel`) still drops a player who left. If an
+> objectId reappears after a drop (rejoin, or plain id reuse), `mergeStats`
+> re-seeds the new record from `lastRecordRef`'s prior entry rather than
+> starting blank, so a partial first packet (e.g. `NAME_STAT` only) doesn't
+> transiently wipe known equipment.
 
 **`subscribe(cb)`** (`EntityRegistry.tsx:59-64`) lets a panel register a
 callback instead of polling. Any batch that contains a display-relevant change
@@ -483,10 +498,12 @@ sets a local `changed` flag and calls `scheduleNotify()`
 Accessors (`objectType`, `skin`, `equipment`, `equipmentRarity`, `name`,
 `clothingDye`, `accessoryDye`, `enchantSlots`, `characters`, `localPlayerId`)
 are `useCallback`-stable and read the ref synchronously
-(`EntityRegistry.tsx:171-251`). `characters()` returns every objectId with a
-non-empty `name` — i.e. the instance's players. `enchantSlots(objectId)`
-returns the raw 4-element array (or `null` if this entity has never sent the
-stat) — see §4.2 for decoding it.
+(`EntityRegistry.tsx:171-251`) — all but `characters()`/`localPlayerId()` read
+`lastRecordRef` (see above), so they resolve for a since-dropped objectId too.
+`characters()` returns every *currently live* objectId with a non-empty `name`
+— i.e. the instance's present players. `enchantSlots(objectId)` returns the
+raw 4-element array (or `null` if this entity has never sent the stat) — see
+§4.2 for decoding it.
 
 ### 4.1 Enchant rarity borders (`sprites/enchantRarity.ts`, issue #107)
 
