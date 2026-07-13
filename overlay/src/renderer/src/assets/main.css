@@ -65,3 +65,18 @@ body,
   height: 100%;
   background: transparent;
 }
+
+/*
+ * TEMPORARY DIAGNOSTIC (drag-perf) — remove with dragPerf.ts once the drag-lag
+ * root cause is confirmed. Holding Shift while dragging a panel toggles this
+ * class on <html> for the drag's duration, stripping every panel's
+ * backdrop-filter + shadow. Since hardware acceleration is off (overlay
+ * transparency), those are recomposited on the CPU each frame a panel moves;
+ * if a Shift-drag is visibly smoother (and its [drag-perf] frame stats better),
+ * software-composited backdrop blur is confirmed as the bottleneck.
+ */
+html.diag-suspend-blur [data-panel-frame] {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: none !important;
+}
