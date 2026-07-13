@@ -71,8 +71,8 @@ function PanelFrame({
     // never re-renders, so these direct writes are safe from being clobbered
     // by a reconcile.
     let last = { x: panel.anchor.x, y: panel.anchor.y }
-    let lastWidth: number | undefined
-    let lastHeight: number | undefined
+    let lastWidth: string | undefined
+    let lastHeight: string | undefined
     const handleMove = (moveEvent: MouseEvent): void => {
       const el = frameRef.current
       if (!draggingRef.current || !el) return
@@ -86,14 +86,18 @@ function PanelFrame({
         spec.sizes[panel.size],
         canvasSize
       )
-      const width = s.width as number
-      const height = s.height as number
+      // panelStyle's declared type is CSSProperties (string | number for
+      // width/height, even though it only ever returns numbers) - narrow
+      // rather than assert, so a future string/percentage return can't
+      // silently turn into `NaNpx`.
+      const width = typeof s.width === 'number' ? `${s.width}px` : String(s.width ?? '')
+      const height = typeof s.height === 'number' ? `${s.height}px` : String(s.height ?? '')
       if (width !== lastWidth) {
-        el.style.width = `${width}px`
+        el.style.width = width
         lastWidth = width
       }
       if (height !== lastHeight) {
-        el.style.height = `${height}px`
+        el.style.height = height
         lastHeight = height
       }
       const deltaX = ((last.x - panel.anchor.x) / 100) * canvasSize.width

@@ -519,7 +519,10 @@ Two shapes of method:
 `setPacketBatchSuspended` is the one `window.overlay.*` method with no IPC
 channel behind it - it only flips the local suspend flag preload checks before
 fanning `packet-batch` out to `onPacketBatch` listeners (see above), so it
-never crosses into the main process.
+never crosses into the main process. Preload also force-clears the flag itself
+on `interactive-change → false` and `overlay-detach` - a failsafe against a
+drag whose `mouseup` never reaches the renderer (hotkey toggle mid-drag, game
+closing), which would otherwise leave every packet-batch consumer frozen.
 
 `IPC` (`shared/ipc.ts:2`) is the single source of truth for channel *names*;
 `preload` and `index.ts` both import it so a rename can't drift between the two
