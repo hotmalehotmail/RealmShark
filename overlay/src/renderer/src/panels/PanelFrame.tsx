@@ -2,6 +2,7 @@ import { useRef } from 'react'
 import type { PanelInstance, PanelSize } from '../../../shared/panels'
 import { Button } from '../ui/Button'
 import { anchorFromPointer, panelStyle, type SizePx } from './anchor'
+import { startDragPerf } from './dragPerf'
 import type { PanelSpec } from './registry'
 
 const SIZE_CYCLE: Record<PanelSize, PanelSize> = { sm: 'md', md: 'lg', lg: 'sm' }
@@ -36,6 +37,10 @@ function PanelFrame({
     e.preventDefault()
     onBringToTop(panel.id)
     draggingRef.current = true
+
+    // TEMPORARY DIAGNOSTIC (drag-perf) — measures per-frame cadence for this
+    // drag; Shift-drag also suspends panel blur/shadow as an A/B. See dragPerf.ts.
+    const perf = startDragPerf(e.shiftKey)
 
     // Keep the cursor over the same point of the panel it grabbed, instead
     // of snapping the panel's corner to wherever the cursor happens to be.
@@ -74,6 +79,7 @@ function PanelFrame({
       draggingRef.current = false
       window.removeEventListener('mousemove', handleMove)
       window.removeEventListener('mouseup', handleUp)
+      perf.stop() // TEMPORARY DIAGNOSTIC (drag-perf)
       onDrag(panel.id, last.x, last.y)
     }
 
@@ -90,6 +96,7 @@ function PanelFrame({
   return (
     <div
       ref={frameRef}
+      data-panel-frame=""
       className={`flex flex-col overflow-hidden rounded-lg border border-edge bg-panel shadow-lg backdrop-blur-sm ${
         interactive ? '' : 'pointer-events-none'
       }`}
