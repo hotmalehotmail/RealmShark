@@ -244,12 +244,13 @@ jobs:
               echo "PR #$NUM: review-verdict for current head $PR_HEAD_OID is '${RV:-absent}' — review not complete/passed for this sha; holding until it is."
               exit 0
             fi
-            # Inline review comments the reviewer left on THIS head = its unaddressed findings.
-            # (File-level findings with no line anchor live only in the review body — a known,
-            # rare gap; they don't get a triage pass. Count with the ...| .id | wc -l idiom, not
-            # `-q length`, which miscounts under --paginate.)
+            # The reviewer's inline comments on THIS head that are MEDIUM-and-up (tagged
+            # `**[medium|high|critical]**`; `low` is informational only, never gated — same filter
+            # as fixloop). File-level findings with no line anchor live only in the review body — a
+            # known, rare gap; they don't gate. Count with ...| .id | wc -l, not `-q length`
+            # (miscounts under --paginate).
             FINDINGS="$(gh api --paginate "repos/$REPO/pulls/$NUM/comments" \
-                          -q ".[] | select(.user.login==\"github-actions[bot]\" and .commit_id==\"$PR_HEAD_OID\") | .id" 2>/dev/null | wc -l | tr -d ' ')"
+                          -q ".[] | select(.user.login==\"github-actions[bot]\" and .commit_id==\"$PR_HEAD_OID\" and (.body | startswith(\"**[low]**\") | not)) | .id" 2>/dev/null | wc -l | tr -d ' ')"
             if [ "${FINDINGS:-0}" -gt 0 ]; then
               if gh api --paginate "repos/$REPO/issues/$NUM/comments" \
                    -q ".[] | select(.body | contains(\"<!-- session-triaged: $PR_HEAD_OID -->\")) | .id" 2>/dev/null | grep -q .; then
