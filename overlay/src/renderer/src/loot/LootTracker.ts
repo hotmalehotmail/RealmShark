@@ -97,11 +97,13 @@ export class LootTracker {
   /** True once the first `lootBagTypes` envelope has populated `bagEntityTypes`. */
   private bagTypesReady = false
   /**
-   * `newObjects` entries seen before `bagTypesReady` - the bridge only starts
-   * broadcasting `lootBagTypes` ~2s after startup, so a bag that spawns in that
-   * window would otherwise fail the `bagEntityTypes` lookup and be silently
-   * dropped forever (its later `NewTickPacket` content updates never resolve
-   * since it was never added to `bagsInView`). Replayed once meta arrives.
+   * Every `newObjects` entry seen before `bagTypesReady` - NOT just bags:
+   * until the first `lootBagTypes` envelope arrives, `bagEntityTypes` is empty
+   * so nothing can be classified yet, and a bag missed here would otherwise
+   * fail the `bagEntityTypes` lookup and be silently dropped forever (its
+   * later `NewTickPacket` content updates never resolve since it was never
+   * added to `bagsInView`). Replayed once meta arrives; bounded by
+   * `MAX_PENDING_NEW_OBJECTS` since most queued entries aren't bags at all.
    */
   private pendingNewObjects: Array<{
     objectType: number
