@@ -7,6 +7,9 @@ import type { PanelSpec } from './registry'
 
 const SIZE_CYCLE: Record<PanelSize, PanelSize> = { sm: 'md', md: 'lg', lg: 'sm' }
 
+/** Toggled on <html> for the duration of any panel drag - see main.css. */
+const DRAGGING_CLASS = 'panel-dragging'
+
 interface PanelFrameProps {
   panel: PanelInstance
   spec: PanelSpec
@@ -38,25 +41,38 @@ function PanelFrame({
     onBringToTop(panel.id)
     draggingRef.current = true
 
-    // TEMPORARY DIAGNOSTIC (drag-perf) — measures per-frame cadence for this
-    // drag; Shift-drag also suspends panel blur/shadow as an A/B. See dragPerf.ts.
-    const perf = startDragPerf(e.shiftKey)
+    const perf = startDragPerf()
+
+    // Suspend every panel's blur/shadow and the packet-stream content updates
+    // (DPS/loot/entity-registry re-renders) for the drag's duration - both
+    // compete with the drag for the main thread. Restored/flushed in handleUp.
+    document.documentElement.classList.add(DRAGGING_CLASS)
+    window.overlay.setPacketBatchSuspended(true)
 
     // Keep the cursor over the same point of the panel it grabbed, instead
     // of snapping the panel's corner to wherever the cursor happens to be.
     const rect = frameRef.current!.getBoundingClientRect()
     const grabOffsetX = e.clientX - rect.left
     const grabOffsetY = e.clientY - rect.top
+    frameRef.current!.style.willChange = 'transform'
 
-    // Drag imperatively: write the moved panel's position straight to the DOM on
-    // each mousemove rather than round-tripping through React state. A state
-    // update per pointer event would re-render PanelCanvas and every panel's
-    // (sprite-rendering) content ~60-125x/sec, which is what made dragging lag.
-    // The position is committed to state once, on drop (handleUp) - that
-    // persists the move and triggers PanelCanvas's debounced layout save. During
-    // the move phase PanelCanvas never re-renders, so these direct writes are
-    // safe from being clobbered by a reconcile.
+    // Drag imperatively (#120): write the moved panel's position straight to
+    // the DOM on each mousemove rather than round-tripping through React
+    // state, which would re-render PanelCanvas and every panel's (sprite-
+    // rendering) content ~60-125x/sec. On top of that, move the panel with a
+    // `transform` instead of rewriting `left`/`top` every frame - transform
+    // is compositor-only (no layout/repaint), whereas left/top forces a full
+    // layout + repaint each frame even with blur/shadow suspended. `left`/
+    // `top` stay at their rest values for the whole drag; only `transform`
+    // (position) and, when a clamped edge actually changes them, `width`/
+    // `height` are written per frame. The position is committed to state
+    // once, on drop (handleUp) - that persists the move and triggers
+    // PanelCanvas's debounced layout save. During the move phase PanelCanvas
+    // never re-renders, so these direct writes are safe from being clobbered
+    // by a reconcile.
     let last = { x: panel.anchor.x, y: panel.anchor.y }
+    let lastWidth: number | undefined
+    let lastHeight: number | undefined
     const handleMove = (moveEvent: MouseEvent): void => {
       const el = frameRef.current
       if (!draggingRef.current || !el) return
@@ -70,16 +86,32 @@ function PanelFrame({
         spec.sizes[panel.size],
         canvasSize
       )
-      el.style.left = String(s.left)
-      el.style.top = String(s.top)
-      el.style.width = typeof s.width === 'number' ? `${s.width}px` : String(s.width ?? '')
-      el.style.height = typeof s.height === 'number' ? `${s.height}px` : String(s.height ?? '')
+      const width = s.width as number
+      const height = s.height as number
+      if (width !== lastWidth) {
+        el.style.width = `${width}px`
+        lastWidth = width
+      }
+      if (height !== lastHeight) {
+        el.style.height = `${height}px`
+        lastHeight = height
+      }
+      const deltaX = ((last.x - panel.anchor.x) / 100) * canvasSize.width
+      const deltaY = ((last.y - panel.anchor.y) / 100) * canvasSize.height
+      el.style.transform = `translate3d(${deltaX}px, ${deltaY}px, 0)`
     }
     const handleUp = (): void => {
       draggingRef.current = false
       window.removeEventListener('mousemove', handleMove)
       window.removeEventListener('mouseup', handleUp)
-      perf.stop() // TEMPORARY DIAGNOSTIC (drag-perf)
+      const el = frameRef.current
+      if (el) {
+        el.style.transform = ''
+        el.style.willChange = ''
+      }
+      document.documentElement.classList.remove(DRAGGING_CLASS)
+      window.overlay.setPacketBatchSuspended(false)
+      perf.stop()
       onDrag(panel.id, last.x, last.y)
     }
 

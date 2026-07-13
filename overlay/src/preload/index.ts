@@ -13,6 +13,25 @@ import {
 import type { PanelInstance } from '../shared/panels'
 import type { OverlaySettings } from '../shared/settings'
 
+// The packet stream is a fan-out: every consumer (StatusPanel, EntityRegistry,
+// useDpsTracker, useLootTracker, …) registers its own onPacketBatch listener,
+// each triggering its own re-render off the same batches. During a panel drag
+// those re-renders compete with the drag for the main thread, so delivery can
+// be suspended (buffered, not dropped) for the duration - see
+// setPacketBatchSuspended, called from PanelFrame's drag handlers. Buffered
+// batches are merged and delivered as one batch when delivery resumes.
+let packetDeliverySuspended = false
+let suspendedBatches: PacketEnvelope[][] = []
+const packetBatchListeners = new Set<(packets: PacketEnvelope[]) => void>()
+
+ipcRenderer.on(IPC.packetBatch, (_: unknown, packets: PacketEnvelope[]) => {
+  if (packetDeliverySuspended) {
+    suspendedBatches.push(packets)
+    return
+  }
+  for (const listener of packetBatchListeners) listener(packets)
+})
+
 const overlayApi = {
   onBridgeStatus: (cb: (status: BridgeStatus) => void) => {
     const listener = (_: unknown, status: BridgeStatus): void => cb(status)
@@ -20,9 +39,17 @@ const overlayApi = {
     return () => ipcRenderer.removeListener(IPC.bridgeStatus, listener)
   },
   onPacketBatch: (cb: (packets: PacketEnvelope[]) => void) => {
-    const listener = (_: unknown, packets: PacketEnvelope[]): void => cb(packets)
-    ipcRenderer.on(IPC.packetBatch, listener)
-    return () => ipcRenderer.removeListener(IPC.packetBatch, listener)
+    packetBatchListeners.add(cb)
+    return () => packetBatchListeners.delete(cb)
+  },
+  /** See the fan-out comment above. */
+  setPacketBatchSuspended: (suspended: boolean): void => {
+    packetDeliverySuspended = suspended
+    if (!suspended && suspendedBatches.length > 0) {
+      const merged = suspendedBatches.flat()
+      suspendedBatches = []
+      for (const listener of packetBatchListeners) listener(merged)
+    }
   },
   onInteractiveChange: (cb: (interactive: boolean) => void) => {
     const listener = (_: unknown, interactive: boolean): void => cb(interactive)
