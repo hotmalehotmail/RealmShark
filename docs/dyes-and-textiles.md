@@ -103,9 +103,29 @@ sampling the dye's icon. The mask and base sprite are the **same 8×8 resolution
    (`mr > 0 && mr >= mg` → clothing; else `mg > 0` → accessory), take
    `shade = maskValue/255`, and write `colour × shade`, keeping the base pixel's
    alpha (silhouette). Non-region pixels pass the base sprite through.
-4. Scale the composite to the requested display size with **nearest-neighbour**
-   (`imageSmoothingEnabled = false`) to keep the pixel-art look; memoise by
+4. Bake in the black silhouette outline (`sprites/outline.ts`'s
+   `outlineImageData`, thickness = `SUB` — see "Sprite outline" below).
+5. Scale the outlined composite to the requested display size with
+   **nearest-neighbour** (`imageSmoothingEnabled = false`) to keep the
+   pixel-art look; memoise by
    `dye:${baseType}:${size}:${clothingDye}:${accessoryDye}:${clothingFrame}:${accessoryFrame}`.
+
+### Sprite outline
+
+Every sprite rendered through `getSprite`/`getDyedSprite`/`bakeDyedSprite` gets
+RotMG's thin black silhouette outline baked in at crop/bake time — see
+`overlay-renderer.md`'s "Silhouette outline" for the shared algorithm
+(`sprites/outline.ts`). The one wrinkle specific to dyeing: outline thickness is
+`SUB` (not a flat `1`), since these compositors already work in the same
+`SUB`-subdivided pixel grid textile tiling uses (see "Textile sub-pixel tiling"
+above) — a flat 1-pixel dilation there would only be `1/SUB` of a native pixel
+thick after the final display-size scale. `bakeDyedSprite` additionally has to
+keep its outline aligned with its animated dye layers: it writes `baseOut` and
+the `regionSelector`/`regionShade` layer masks directly into a pre-padded
+`(cw+2·SUB)×(ch+2·SUB)` buffer (shifting every write index by `SUB`) rather
+than padding after the fact, so the moving cloth layers `renderDyeFrame`
+composites every frame land in the same padded coordinate space as the outlined
+base beneath them.
 
 ### Textile sub-pixel tiling
 
@@ -182,6 +202,7 @@ pixels exact, which matters both for the dye colour and the base sprite.
 | `overlay/src/renderer/src/sprites/EntityRegistry.tsx` | Tracks `clothingDye`(32)/`accessoryDye`(33) per objectId from the packet stream. |
 | `overlay/src/renderer/src/sprites/SpriteProvider.tsx` | `getDyedSprite`/`getSprite` — the static per-pixel compositor and per-frame lookup; `bakeAnimatedDye` — bakes a `DyeBake` for a dyeAnimated sprite. |
 | `overlay/src/renderer/src/sprites/dyeBake.ts` | `bakeDyedSprite`/`renderDyeFrame` — the continuous scroll/rotate compositor: bake once (`TEXTILE_SUB` lives here), redraw every frame via `CanvasPattern`/compositing ops, no per-frame readback or encode. |
+| `overlay/src/renderer/src/sprites/outline.ts` | `outlineImageData`/`dilateSilhouette` — bakes the shared silhouette outline into a cropped/composited sprite (see "Sprite outline" above). |
 | `overlay/src/renderer/src/sprites/animClock.ts` | `subscribeAnimClock` — the single shared `requestAnimationFrame` loop every animated-dye canvas subscribes to. |
 | `overlay/src/renderer/src/sprites/AnimatedDyeCanvas.tsx` | `<AnimatedDyeCanvas>` — subscribes a `<canvas>` to the shared clock and calls `renderDyeFrame` every tick. |
 | `overlay/src/renderer/src/sprites/Sprite.tsx` | `<Sprite>` — ticks its own *discrete*-frame clock (`isAnimated`) only when the sprite has idle/textile frames to cycle; routes a `dyeAnimated` dye to `<AnimatedDyeCanvas>` instead of `getDyedSprite`. |
