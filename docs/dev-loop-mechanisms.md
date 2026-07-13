@@ -615,8 +615,12 @@ and no `session-triaged` marker for it yet, the fix loop re-fires the agent in *
 the rest — **the agent's call is final** (the chosen Q2 policy). A **separate budget**
 (`MAX_TRIAGE_ROUNDS`, marker `<!-- fixloop:triage -->`) from the fix rounds, so nit-churn can't
 starve real fixes. **Budget spent → auto-accept** (the loop posts the `session-triaged` marker
-itself): medium/low are non-blocking, so they must never freeze a PR — the opposite of the fix
-loop's escalate-on-exhaustion.
+itself, **via `MERGE_PAT`** — a `GITHUB_TOKEN`-authored comment is swallowed by GitHub's recursion
+guard and would never wake the gatekeeper's `issue_comment` trigger, stranding the PR until the
+next sweep; observed on #138): medium/low are non-blocking, so they must never freeze a PR — the
+opposite of the fix loop's escalate-on-exhaustion. The TRIAGE MODE prompt also tells the agent to
+address *only* the listed findings in one pass (no extra polishing/refactoring), since every extra
+commit moves the head and re-triggers the whole review+triage cycle.
 
 **The gate + signal.** Triage-complete is a **comment** marker `<!-- session-triaged: <head-sha> -->`
 — posted by the agent when it declines-only (it can post via MCP; a decline changes no code so

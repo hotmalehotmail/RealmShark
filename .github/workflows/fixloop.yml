@@ -61,6 +61,7 @@ jobs:
       - name: Re-fire the build agent in FIX MODE, or escalate when the budget is spent
         env:
           GH_TOKEN: ${{ github.token }}
+          MERGE_PAT: ${{ secrets.MERGE_PAT }} # post the auto-accept marker as a member identity so its issue_comment triggers the gatekeeper
           REPO: ${{ github.repository }}
           HEAD: ${{ github.event.workflow_run.head_branch }}
           SHA: ${{ github.event.workflow_run.head_sha }}
@@ -129,7 +130,20 @@ jobs:
             TATTEMPT=$((PRIOR_TRIAGE + 1))
             if [ "$PRIOR_TRIAGE" -ge "$MAX_TRIAGE_ROUNDS" ]; then
               echo "Triage budget spent ($PRIOR_TRIAGE >= $MAX_TRIAGE_ROUNDS) — auto-accepting the remaining findings so the PR can merge."
-              gh pr comment "$PR" --repo "$REPO" --body "🧿 Triage budget spent after ${MAX_TRIAGE_ROUNDS} pass(es); the remaining medium/low review findings are accepted as-is so the PR isn't blocked on non-blocking nits. <!-- session-triaged: $SHA -->"
+              # Post the marker via MERGE_PAT (a member identity), NOT GITHUB_TOKEN: GitHub's
+              # recursion guard suppresses the issue_comment trigger for a GITHUB_TOKEN-authored
+              # comment, so a bot-posted marker would NOT wake the gatekeeper — the PR would then
+              # merge only via the next sweep (~30 min) instead of promptly (observed on #138).
+              # Fall back to GITHUB_TOKEN (sweep still catches it) if the PAT is missing/failing.
+              ACCEPT_BODY="🧿 Triage budget spent after ${MAX_TRIAGE_ROUNDS} pass(es); the remaining medium/low review findings are accepted as-is so the PR isn't blocked on non-blocking nits. <!-- session-triaged: $SHA -->"
+              POSTED=0
+              if [ -n "${MERGE_PAT:-}" ]; then
+                GH_TOKEN="$MERGE_PAT" gh pr comment "$PR" --repo "$REPO" --body "$ACCEPT_BODY" && POSTED=1 || true
+              fi
+              if [ "$POSTED" = 0 ]; then
+                echo "::warning::Auto-accept marker posted via GITHUB_TOKEN (MERGE_PAT unset or failed) — the recursion guard suppresses its gatekeeper trigger, so PR #$PR merges via the next sweep rather than promptly."
+                gh pr comment "$PR" --repo "$REPO" --body "$ACCEPT_BODY"
+              fi
               exit 0
             fi
             if [ -z "${FIRE_URL:-}" ] || [ -z "${FIRE_TOKEN:-}" ]; then

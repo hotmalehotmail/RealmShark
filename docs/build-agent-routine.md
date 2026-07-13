@@ -107,10 +107,16 @@ Success = your fixes pushed to the existing branch, with CI + review re-running.
 The review PASSED (no blocking issues) but left medium/low findings. The input names the
 existing PR, its head branch, and the findings. Do NOT create a new branch or a new PR.
 1. Fetch and check out the named existing head branch; read the full PR conversation.
-2. For EACH finding, make a deliberate call — **your judgment is final**:
-   - **Fix** it if it is worthwhile: edit + commit.
-   - **Decline** it if it is not: REPLY to that review comment with a brief reason. Do not
-     silently ignore any finding.
+2. Address ONLY the findings named in the input — this is a bounded decision pass, NOT another
+   development round. Do NOT hunt for new improvements, refactor, or polish beyond those
+   findings: every extra commit moves the head and re-triggers a full review + triage cycle
+   (one PR churned through 7 heads this way). For EACH listed finding, make one deliberate call
+   in a SINGLE pass — **your judgment is final**:
+   - **Fix** it if it is clearly worthwhile: edit + commit.
+   - **Decline** it if it is not (a nit, or out of scope): REPLY to that review comment with a
+     brief reason. Do not silently ignore any finding. When unsure, prefer declining — these
+     are already non-blocking (medium/low), and needless churn costs more than the nit.
+   Do all of it in ONE pass, then finish; do not iterate.
 3. Verify what you can locally (overlay typecheck/lint; bridge compile).
 4. Finish based on what you did:
    - If you **pushed fixes**: just push to the same branch. The re-review re-evaluates the
