@@ -87,29 +87,34 @@ export function useSprites(): SpriteContextValue {
 
 export interface EntityContextValue {
   /**
-   * The objectType for a live objectId, or null if unknown. Kept for an
-   * objectId that has since left view (dropped from the roster) so a panel
-   * still tracking it - e.g. the DPS panel showing a just-killed enemy's
-   * rolling damage window - can keep resolving a sprite; cleared only on a
-   * full reset (instance change / overlay detach).
+   * The objectType for a live-or-since-left objectId, or null if unknown.
+   * Survives the entity leaving view/the instance (dropped from the live
+   * roster) so a panel still tracking it - e.g. the DPS panel showing a
+   * just-killed enemy's rolling damage window, or a player's row after they
+   * leave the instance - can keep resolving a sprite; cleared only on a full
+   * reset (instance change / overlay detach).
    */
   objectType: (objectId: number | null | undefined) => number | null
-  /** The equipped skin objectType (SKIN_ID) for a live objectId, or null if unset/unknown. */
+  /** The equipped skin objectType (SKIN_ID) for a live-or-since-left objectId, or null if unset/unknown. Survives a drop like `objectType` above. */
   skin: (objectId: number | null | undefined) => number | null
   /**
    * The 4 equipped-slot item objectTypes (INVENTORY_0..3: weapon/ability/armor/ring)
-   * for a live objectId. Empty slots are `<= 0`. Returns null if the id is unknown.
+   * for a live-or-since-left objectId. Empty slots are `<= 0`. Returns null if
+   * the id is unknown. Survives a drop like `objectType` above - so a DPS row
+   * for a player who left the instance mid-fight keeps showing their
+   * last-seen gear instead of an empty sprite.
    */
   equipment: (objectId: number | null | undefined) => number[] | null
   /**
    * Rarity-border tier (0=common/no border..4=divine) per equipped slot,
    * decoded from UNIQUE_DATA_STRING - see `sprites/enchantRarity.ts`. Parallel
-   * to `equipment`. Returns null if the id is unknown.
+   * to `equipment`. Returns null if the id is unknown. Survives a drop like
+   * `objectType` above.
    */
   equipmentRarity: (objectId: number | null | undefined) => number[] | null
-  /** The clothing dye (Tex1) objectType for a live objectId, or null. */
+  /** The clothing dye (Tex1) objectType for a live-or-since-left objectId, or null. Survives a drop like `objectType` above. */
   clothingDye: (objectId: number | null | undefined) => number | null
-  /** The accessory dye (Tex2) objectType for a live objectId, or null. */
+  /** The accessory dye (Tex2) objectType for a live-or-since-left objectId, or null. Survives a drop like `objectType` above. */
   accessoryDye: (objectId: number | null | undefined) => number | null
   /**
    * The 4 equipped slots' raw encoded enchant strings (UNIQUE_DATA_STRING,
@@ -118,15 +123,19 @@ export interface EntityContextValue {
    * player the server hasn't sent enchant data for). A present-but-empty
    * string at a given index means "known, no enchantments" - distinct from
    * the whole array being null ("unknown"). Decode with
-   * `items/enchantDecode.ts#decodeEnchantIds`.
+   * `items/enchantDecode.ts#decodeEnchantIds`. Survives a drop like
+   * `objectType` above.
    */
   enchantSlots: (objectId: number | null | undefined) => string[] | null
-  /** The NAME_STAT username for a live objectId, or null if unknown. */
+  /** The NAME_STAT username for a live-or-since-left objectId, or null if unknown. Survives a drop like `objectType` above. */
   name: (objectId: number | null | undefined) => string | null
   /**
-   * objectIds of every player currently tracked. Players carry a NAME_STAT
-   * username and broadcast equipment (INVENTORY_0..3); named-but-equipmentless
-   * entities (portals, NPCs, pets) are excluded.
+   * objectIds of every player currently tracked in the live instance (does
+   * NOT survive a drop, unlike the accessors above - a player who leaves the
+   * instance disappears from this list even though their last-seen sprite/gear
+   * remain resolvable). Players carry a NAME_STAT username and broadcast
+   * equipment (INVENTORY_0..3); named-but-equipmentless entities (portals,
+   * NPCs, pets) are excluded.
    */
   characters: () => number[]
   /** The local player's objectId (CreateSuccessPacket / EnemyHitPacket.mainID), or null if not yet resolved. */
