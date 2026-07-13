@@ -125,10 +125,11 @@ that: `renderDyeFrame` scales its whole accumulator (base + moving layers) up
 to display size every *frame* via a single canvas draw with no pixel readback
 (see dyeBake.ts's file header), so there's no per-bake point to insert a
 scale-then-outline step without breaking that no-readback invariant. It bakes
-a flat 1-composite-pixel dilation instead (`outlineImageData` with
-`thickness=1`, independent of `SUB`) — thinner than a true 1-screen-pixel line
-at large display sizes, but far closer than dilating by `SUB` composite pixels
-ever was. It also has to keep its outline aligned with its animated dye
+a flat 1-composite-pixel dilation instead (`dilateSilhouette` with
+`thickness=1` on its own pre-padded buffer, independent of `SUB`) — thinner
+than a true 1-screen-pixel line at large display sizes, but far closer than
+dilating by `SUB` composite pixels ever was. It also has to keep its outline
+aligned with its animated dye
 layers: it writes `baseOut` and the `regionSelector`/`regionShade` layer masks
 directly into a pre-padded `(cw+2)×(ch+2)` buffer (shifting every write index
 by the 1px outline padding) rather than padding after the fact, so the moving

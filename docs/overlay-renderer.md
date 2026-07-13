@@ -392,8 +392,9 @@ reads as exactly 1 screen pixel regardless of the sprite's native resolution
 or how large it's displayed. `bakeDyedSprite` (`dyeBake.ts`) can't do that: its
 output is scaled to display size every *frame* by `renderDyeFrame` via a
 single canvas draw with no pixel readback, so it instead calls
-`outlineImageData` directly with a flat `thickness=1` in its own (SUB-subdivided)
-composite resolution — thinner than a true 1-screen-pixel line at large
+`dilateSilhouette` directly with a flat `thickness=1` on its own pre-padded
+buffer, in its (SUB-subdivided) composite resolution — thinner than a true
+1-screen-pixel line at large
 display sizes, but not blown up by `SUB` the way outlining at native
 resolution would be (see `dyes-and-textiles.md`'s "Sprite outline"). The
 outline shares the crop/bake caches, so cache entry counts and per-frame cost
