@@ -34,6 +34,11 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run typecheck
       - run: npm run lint
+      # vitest (overlay/test/: capture-replay regression tests + the allowlist
+      # tripwire — see docs/overlay-testing.md). Runs inside this job so the
+      # required-check context name (`overlay — typecheck + lint`) is unchanged,
+      # same precedent as `gradle test` inside `bridge — compile + fat jar`.
+      - run: npm test
 
   bridge:
     name: bridge — compile + fat jar
