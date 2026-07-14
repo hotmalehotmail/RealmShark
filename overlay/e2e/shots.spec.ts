@@ -1,3 +1,4 @@
+import { existsSync, unlinkSync } from 'node:fs'
 import { resolve } from 'path'
 import { expect, test } from '@playwright/test'
 import { PANEL_REGISTRY } from '../src/renderer/src/panels/registry'
@@ -10,6 +11,13 @@ const FIXTURE_READY_TIMEOUT_MS = 20_000
 const FROZEN_NOW_MS = 1_700_000_000_000
 /** Arbitrary fixed `performance.memory.usedJSHeapSize` reading for the Status panel - see `freezeNondeterminism`. */
 const FROZEN_HEAP_BYTES = 42 * 1024 * 1024
+/**
+ * Cap on the expanded frame height for a `-full` variant (below-the-fold
+ * blind spot, issue #178). A handful of pixels of slack over the cap is
+ * fine - the point is bounding runaway content (e.g. an unbounded log), not
+ * a razor-exact ceiling.
+ */
+const MAX_FULL_HEIGHT_PX = 2000
 
 /**
  * Two panels read real, run-to-run-varying browser state that has nothing to
@@ -50,6 +58,19 @@ async function freezeNondeterminism(page: import('@playwright/test').Page): Prom
  * there's nothing JS-driven left to freeze there; the CSS animation/
  * transition reset below is defensive insurance against a future animated
  * Tailwind utility, not load-bearing today.
+ *
+ * Below-the-fold blind spot (issue #178): a panel's content wrapper
+ * (`data-panel-content` in `PanelMount.tsx`) clips at `overflow-auto` when
+ * `scrollHeight` exceeds `clientHeight` - the preset shot above is still
+ * legitimate evidence (it's exactly what the user sees at that preset size)
+ * but is silently incomplete when content clips. When it does, a *second*
+ * shot re-renders the same mount with the wrapper expanded to its natural
+ * content height (capped at `MAX_FULL_HEIGHT_PX`) and saves it alongside the
+ * preset shot as `<type>-<size>-full.png`. The `-full` file's mere existence
+ * is the deterministic "this panel hides content at this preset size"
+ * signal; a combo that stops clipping has its stale `-full` file deleted so
+ * orphans can't linger. The preset screenshot above is always taken first,
+ * before any of this mutates the DOM, so it stays byte-for-byte unaffected.
  */
 for (const [type, spec] of Object.entries(PANEL_REGISTRY)) {
   for (const size of SIZES) {
@@ -71,6 +92,43 @@ for (const [type, spec] of Object.entries(PANEL_REGISTRY)) {
       await expect(frame).toHaveCSS('height', `${height}px`)
 
       await frame.screenshot({ path: resolve(SCREENSHOT_DIR, `${type}-${size}.png`) })
+
+      const fullPath = resolve(SCREENSHOT_DIR, `${type}-${size}-full.png`)
+      const content = page.locator('[data-panel-content]')
+      const { scrollHeight, clientHeight } = await content.evaluate((el) => ({
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight
+      }))
+      const clips = scrollHeight - clientHeight > 1
+
+      if (!clips) {
+        if (existsSync(fullPath)) unlinkSync(fullPath)
+        return
+      }
+
+      // Give the frame room to grow past the default 900px viewport before
+      // measuring/capturing its natural height, so Playwright never has to
+      // stitch or clip the capture itself.
+      await page.setViewportSize({ width: 1280, height: MAX_FULL_HEIGHT_PX + 200 })
+      await frame.evaluate((el) => {
+        ;(el as HTMLElement).style.height = 'auto'
+      })
+      await content.evaluate((el) => {
+        const style = (el as HTMLElement).style
+        style.flex = 'none'
+        style.height = 'auto'
+        style.overflow = 'visible'
+      })
+      const naturalHeight = await frame.evaluate((el) => el.getBoundingClientRect().height)
+      const cappedHeight = Math.min(naturalHeight, MAX_FULL_HEIGHT_PX)
+      await frame.evaluate((el, h) => {
+        ;(el as HTMLElement).style.height = `${h}px`
+      }, cappedHeight)
+
+      // `frame` keeps its own `overflow-hidden`, so if `naturalHeight`
+      // exceeded the cap the capped frame still visually clips at
+      // MAX_FULL_HEIGHT_PX rather than spilling the screenshot past it.
+      await frame.screenshot({ path: fullPath })
     })
   }
 }
