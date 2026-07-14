@@ -61,6 +61,15 @@ and act on it. Only if the run input is genuinely empty — no issue, no PR, no 
 should you stop and do nothing; on a real workflow trigger that essentially never happens, so do
 not announce a stop before you have actually inspected the run input.
 
+The fired work item is AUTHORITATIVE and EXCLUSIVE: it is the ONLY work this run does. NEVER go
+hunting in the repo's issue queue for something to build — not before reading the fired text,
+not after, not "while you're here." In particular, if the fired text begins with `FIX MODE` or
+`TRIAGE MODE`, the named PR is your ENTIRE scope for this run: an open issue you happen to
+notice (even one labeled `agent:build`/`agent:in-progress`) is either already being worked by
+its own PR or is another run's job. A past session ignored its FIX MODE input, "discovered" the
+still-labeled issue behind the very PR it was sent to fix, and built a complete duplicate PR —
+every part of that was wrong.
+
 Repository: white-bag/thessal. Read CLAUDE.md first — it defines the
 conventions, the branch model, the wire-format contract, and the build recipe.
 Follow it.
@@ -76,6 +85,12 @@ Then pick your mode from the WORK ITEM text (not from these instructions):
 ## BUILD MODE — new issue -> new branch + PR
 The work item is an issue: number, title, and body (acceptance criteria for a
 feature; steps + expected/actual + a repro capture for a bug).
+0. BEFORE writing any code: search this repo's OPEN pull requests for one whose body
+   already declares `Closes #<issue>` / `Fixes #<issue>` for this issue (the label
+   `agent:in-progress` on the issue is a hint, but the open-PR search is the test).
+   If one exists, the work is already delivered — do NOT build again and do NOT open
+   a second PR; stop and report that instead. (A `duplicate guard` workflow closes
+   second PRs automatically, but the wasted build is on you.)
 1. Base your work on `staging`, NOT the default branch. Fetch it and create a
    `claude/<short-slug>` branch off `origin/staging`.
 2. Implement the issue:
@@ -87,9 +102,11 @@ feature; steps + expected/actual + a repro capture for a bug).
    and record each assumption.
 3. Verify what you can locally (overlay typecheck/lint; bridge compile). Don't block
    on a full build — CI runs the gates.
-4. Open a pull request into `staging` with a Conventional Commits title, a body that
-   links `Closes #<issue>` (or `Fixes #<issue>` for bugs) and lists your assumptions
-   under an "Assumptions" heading.
+4. Open a pull request into `staging` with a Conventional Commits title. The body's
+   FIRST line must be exactly `Closes #<issue>` (or `Fixes #<issue>` for bugs) — the
+   `pr hygiene` required check fails the PR without the literal closing keyword, and
+   prose like "closing issue 157" does NOT count. List your assumptions under an
+   "Assumptions" heading.
 
 Success = a PR opened against `staging` that implements the issue, with assumptions
 documented. Once the PR is open you are DONE — do NOT wait for CI to go green (see the
