@@ -109,17 +109,23 @@ jobs:
           if [ "$VERDICT" = "failure" ]; then
             MODE=fix
           elif [ "$VERDICT" = "success" ]; then
-            # The reviewer's inline comments on THIS head are its unaddressed findings, each tagged
-            # `**[low|medium|high|critical]**` as the body's leading PREFIX (scribe builds
-            # `"**[" + severity + "]** " + body`) — so match severity with `startswith`, not
-            # `contains`, which a finding that quotes `**[low]**` in its own text would fool.
-            # Triage only MEDIUM-and-up (high/critical
-            # already fail the verdict, so on a pass "medium+" just means "a medium"); `low` findings
-            # are informational — posted on the PR but never triaged or gated (the gatekeeper/sweep
-            # gates apply the same non-low filter, so a low-only PR isn't held). Count with the
-            # `... | .id | wc -l` idiom, not `-q length`, which miscounts under --paginate.
-            FINDINGS="$(gh api --paginate "repos/$REPO/pulls/$PR/comments" \
-                          -q ".[] | select(.user.login==\"github-actions[bot]\" and .commit_id==\"$SHA\" and (.body | startswith(\"**[low]**\") | not)) | .id" 2>/dev/null | wc -l | tr -d ' ')"
+            # Triage only MEDIUM-and-up findings on THIS head (high/critical already fail the
+            # verdict, so on a pass "medium+" just means "a medium"); `low` is informational —
+            # never triaged or gated (gatekeeper/sweep apply the same non-low filter, so a
+            # low-only PR isn't held). Read the count from the AUTHORITATIVE `review-findings`
+            # status the scribe stamps on this sha — immune to whether a finding could be anchored
+            # as an inline comment (the #161 off-diff gap, and no-line findings). Fall back to
+            # counting the reviewer's non-low inline comments (tagged `**[sev]**` as the body's
+            # leading PREFIX; `startswith`, not `contains`, so a finding quoting `**[low]**` in its
+            # text can't fool it; `... | .id | wc -l`, not `-q length`, which miscounts under
+            # --paginate) only when that status is absent — a pre-fix head or a rare status-post hiccup.
+            FINDINGS="$(gh api "repos/$REPO/commits/$SHA/status" \
+                          -q '.statuses[] | select(.context=="review-findings") | .description' 2>/dev/null \
+                          | head -n1 | grep -oE '[0-9]+' | head -n1 || true)"
+            if [ -z "${FINDINGS:-}" ]; then
+              FINDINGS="$(gh api --paginate "repos/$REPO/pulls/$PR/comments" \
+                            -q ".[] | select(.user.login==\"github-actions[bot]\" and .commit_id==\"$SHA\" and (.body | startswith(\"**[low]**\") | not)) | .id" 2>/dev/null | wc -l | tr -d ' ')"
+            fi
             if [ "${FINDINGS:-0}" -eq 0 ]; then
               echo "review-verdict success on $SHA with no medium+ findings (any lows are informational) — the gatekeeper owns it."
               exit 0
