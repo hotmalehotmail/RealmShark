@@ -119,6 +119,32 @@ const RELEVANT_TYPES = [
   'QuestObjectIdPacket'
 ] as const
 
+/**
+ * Every envelope type `ingest()`'s switch handles, including the
+ * bridge-synthesized ones (`objectNames`/`dps`) that `RELEVANT_TYPES` above
+ * omits since those aren't raw game packets. Read by the capture-allowlist
+ * tripwire test (`test/allowlist.test.ts`) so a switch case added here
+ * without a matching `CAPTURE_ALLOWED_TYPES` entry (`src/shared/capture.ts`)
+ * fails a test instead of silently producing a capture the type can never
+ * appear in - see PRD §6.2 / docs/overlay-testing.md.
+ *
+ * NOT derived from the switch below - it's a second, hand-maintained list.
+ * The tripwire only catches a missing allowlist entry for a type declared
+ * *here*; a switch case added without also updating this list passes the
+ * tripwire silently (see the reminder comment on `ingest()` below).
+ */
+export const CONSUMED_ENVELOPE_TYPES = [
+  'CreateSuccessPacket',
+  'MapInfoPacket',
+  'UpdatePacket',
+  'objectNames',
+  'dps',
+  'ServerPlayerShootPacket',
+  'EnemyHitPacket',
+  'DamagePacket',
+  'QuestObjectIdPacket'
+] as const
+
 function dlog(...args: unknown[]): void {
   if (DPS_DEBUG) console.log('[dps]', ...args)
 }
@@ -245,6 +271,12 @@ export class DpsTracker {
   private history: DpsHistoryEntry[] = []
   private historySeq = 0
 
+  // NOTE: adding/removing a `case` here also means updating
+  // `CONSUMED_ENVELOPE_TYPES` above - it's a separate, hand-maintained list
+  // (not derived from this switch), so the allowlist tripwire test only
+  // catches a missing `CAPTURE_ALLOWED_TYPES` entry for a type this switch
+  // AND that list both agree the tracker consumes. See CONSUMED_ENVELOPE_TYPES's
+  // own doc comment.
   ingest(packets: PacketEnvelope[]): void {
     for (const envelope of packets) {
       if (DPS_DEBUG) this.countAndDump(envelope)

@@ -49,13 +49,15 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/loot/LootTracker.ts` | Framework-agnostic class ingesting packets → a session-scoped log of white/orange bags that dropped near the player, incl. per-item enchants (§7). |
 | `overlay/src/renderer/src/loot/useLootTracker.ts` | React hook wrapping `LootTracker` (event-driven on `onPacketBatch`, re-renders only when `ingest` reports a change). |
 | `overlay/src/renderer/src/loot/types.ts` | Packet-field shapes the loot tracker reads, incl. the synthetic `lootBagTypes` envelope. |
+| `overlay/src/renderer/src/harness/*` | The browser renderer harness (no Electron) - dev-flag-gated, out of the production bundle. See `docs/overlay-harness.md`. |
 
 ---
 
 ## 1. Bootstrap & data intake
 
-`main.tsx` is tiny: it installs console capture, then renders **one of two
-top-level components** by URL hash (`main.tsx:11-15`):
+`main.tsx` is tiny: it installs console capture, then (async, so it can
+dynamically import the harness first when needed - see below) renders **one
+of two top-level components** by URL hash:
 
 ```
 window.location.hash === '#config'  →  <ConfigWindow/>   (the settings window)
@@ -65,11 +67,24 @@ otherwise                           →  <App/>            (the HUD overlay)
 Both run in the same bundle; the main process opens the config window with
 `#config` appended. Everything else in this doc is the `<App/>` tree.
 
+Before that render, `main.tsx`'s `bootstrap()` checks one thing: if
+`window.overlay` is undefined **and** `import.meta.env.VITE_HARNESS` is set,
+it dynamically imports `harness/mount.tsx` and lets it install a
+non-Electron `window.overlay` shim (and, for the `?panel=` mount mode, render
+directly instead of `<App/>`). Neither side of that check is ever true in a
+packaged build (`window.overlay` always exists there, and `VITE_HARNESS` is
+never defined for the electron-vite build), so this branch - and everything
+under `harness/` it imports - is dead code Rollup strips entirely; see
+`docs/overlay-harness.md` for the harness itself.
+
 ### The preload bridge is the only data source
 
 The renderer never touches Electron, sockets, or files directly. Its **entire**
-window onto the outside world is `window.overlay`, the object
-`contextBridge.exposeInMainWorld('overlay', …)` publishes in
+window onto the outside world is `window.overlay`: an `OverlayApi`
+(`overlay/src/shared/overlayApi.ts` - extracted as an explicit interface, not
+just `typeof` the preload's object literal, precisely so the harness shim can
+implement the same contract without importing anything Electron-specific) the
+preload's `contextBridge.exposeInMainWorld('overlay', …)` publishes in
 `overlay/src/preload/index.ts:15-79`. Two shapes:
 
 - **`invoke`-style** one-shot getters returning a Promise

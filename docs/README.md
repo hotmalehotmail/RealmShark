@@ -61,6 +61,16 @@ moving parts, each with its own doc below.
   shared `ui/` primitives (`Button`, `MeterRow`, `GearRow`, …), the type
   scale, and the conventions the PR review agent enforces. **Read before
   writing any panel UI.**
+- **[overlay-testing.md](overlay-testing.md)** — the vitest suite
+  (`overlay/test/`): the capture-replay harness (`loadCapture`/`replay`, fake-
+  timer anchoring), the fixtures convention, the capture-allowlist tripwire,
+  and the contract for turning a future bug capture into a regression test.
+- **[overlay-harness.md](overlay-harness.md)** — the browser renderer harness
+  (`overlay/src/renderer/src/harness/`): hosting the React renderer in
+  headless Chromium with no Electron process behind it, the live-fake and
+  fixture data sources, the `?panel=&size=` single-panel mount mode, and the
+  `npm run shots` deterministic screenshot pipeline that produces the
+  committed gallery at `docs/screenshots/panels/`.
 
 ## Build, run & release
 
@@ -93,6 +103,14 @@ moving parts, each with its own doc below.
 - **[build-agent-routine.md](build-agent-routine.md)** — how a labeled issue
   becomes a PR: `implement.yml` fires the build-agent Routine over its `/fire`
   endpoint, and the one-time account-side setup.
+- **[prd-agent-observability.md](prd-agent-observability.md)** — PRD: closing the
+  see-and-verify loop for cloud agents. Evidence from the soak history (all
+  failures are visual or real-game-data gaps invisible to a headless agent), the
+  locked design decisions, and the technical design for the renderer screenshot
+  harness, capture-replay test suite, ground-truth corpus, and asset-facts file —
+  plus the agent/human ownership split and the phased issue plan. A styled,
+  viewable version is at
+  [prd-agent-observability.html](prd-agent-observability.html) (same content).
 
 ---
 

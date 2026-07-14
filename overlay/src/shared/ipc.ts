@@ -27,7 +27,7 @@ export const IPC = {
 
 /** Result of an IPC.reportBug call: where the capture bundle was written on disk. */
 export interface BugReportResult {
-  /** Absolute path of the JSON capture (version + recent packets + logs) to attach. */
+  /** Absolute path of the gzipped JSON capture (version + recent packets + logs) to attach. */
   file: string
 }
 

@@ -1,6 +1,7 @@
 import { app, BrowserWindow, globalShortcut, ipcMain, Menu, nativeImage, shell } from 'electron'
 import { join } from 'path'
 import { writeFile } from 'fs/promises'
+import { gzipSync } from 'zlib'
 import { electronApp, is } from '@electron-toolkit/utils'
 import { OverlayController, OVERLAY_WINDOW_OPTS } from 'electron-overlay-window'
 import icon from '../../resources/icon.png?asset'
@@ -11,6 +12,7 @@ import {
   type PacketEnvelope,
   type SaveSettingsResult
 } from '../shared/ipc'
+import { CaptureRing } from '../shared/capture'
 import type { PanelInstance } from '../shared/panels'
 import type { OverlaySettings } from '../shared/settings'
 import { startBridgeClient, stopBridgeClient } from './bridgeClient'
@@ -244,38 +246,15 @@ app.whenReady().then(() => {
   void ensureBridgeRunning(!supportsAttach)
 
   // Rolling window of recent packets kept for the "Report bug" capture, so a
-  // bug found against the live game ships with a replayable trace. The capture is
-  // attached to a PUBLIC issue, so only gameplay packet types useful for
-  // FakePacketSource repro are retained - an allowlist (default-deny) so a new or
-  // unexpected packet type can't leak. This drops chat (TextPacket, incl. DMs),
-  // account lists, and connection/auth packets (Hello/Reconnect). Credential
-  // FIELDS are separately stripped bridge-side (PacketSerializer); this drops the
-  // whole sensitive packet TYPES.
-  const RECENT_PACKETS_MAX = 300
-  const CAPTURE_ALLOWED_TYPES = new Set<string>([
-    // gameplay / combat / world state (what DPS + panels replay)
-    'UpdatePacket',
-    'NewTickPacket',
-    'DamagePacket',
-    'EnemyHitPacket',
-    'ServerPlayerShootPacket',
-    'PlayerShootPacket',
-    'MapInfoPacket',
-    'CreateSuccessPacket',
-    'QuestObjectIdPacket',
-    'MovePacket',
-    'GotoPacket',
-    'GotoAckPacket',
-    'UpdateAckPacket',
-    'ClientStatPacket',
-    'ShowEffectPacket',
-    'NotificationPacket',
-    // bridge-synthesized envelopes the overlay consumes (non-sensitive)
-    'objectNames',
-    'dps',
-    'lootBagTypes'
-  ])
-  const recentPackets: PacketEnvelope[] = []
+  // bug found against the live game ships with a replayable trace. Filtered
+  // through CAPTURE_ALLOWED_TYPES (src/shared/capture.ts, default-deny) so a
+  // new or unexpected packet type can't leak into the capture attached to a
+  // PUBLIC issue - this drops chat (TextPacket, incl. DMs), account lists, and
+  // connection/auth packets (Hello/Reconnect). Credential FIELDS are
+  // separately stripped bridge-side (PacketSerializer); this drops the whole
+  // sensitive packet TYPES. See docs/overlay-testing.md for the ring's
+  // capacity/quota model and the replay tests that consume its output shape.
+  const captureRing = new CaptureRing()
 
   startBridgeClient({
     onStatus: (status) => {
@@ -289,14 +268,10 @@ app.whenReady().then(() => {
       if (overlayWindow && !overlayWindow.isDestroyed()) {
         overlayWindow.webContents.send(IPC.packetBatch, packets)
       }
-      // Retain only allowlisted gameplay types in the shareable capture buffer.
-      // The live overlay above still receives the full batch; only the bug-report
-      // trace is filtered.
+      // The live overlay above still receives the full batch; only the
+      // bug-report trace is filtered and ring-bounded.
       for (const p of packets as PacketEnvelope[]) {
-        if (CAPTURE_ALLOWED_TYPES.has(p.type)) recentPackets.push(p)
-      }
-      if (recentPackets.length > RECENT_PACKETS_MAX) {
-        recentPackets.splice(0, recentPackets.length - RECENT_PACKETS_MAX)
+        captureRing.push(p)
       }
     },
     onConnected: requestSpritePack,
@@ -325,11 +300,11 @@ app.whenReady().then(() => {
       capturedAt: new Date().toISOString(),
       bridgeStatus: currentBridgeStatus,
       gameWindowTitle: settings.gameWindowTitle,
-      recentPackets,
+      recentPackets: captureRing.snapshot(),
       mainLogs: getBufferedMainLogs()
     }
-    const file = join(app.getPath('temp'), `realmshark-bug-${Date.now()}.json`)
-    await writeFile(file, JSON.stringify(capture, null, 2), 'utf8')
+    const file = join(app.getPath('temp'), `realmshark-bug-${Date.now()}.json.gz`)
+    await writeFile(file, gzipSync(JSON.stringify(capture)))
     shell.showItemInFolder(file)
     const version = encodeURIComponent(app.getVersion())
     await shell.openExternal(

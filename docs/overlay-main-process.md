@@ -28,6 +28,7 @@ shapes on the bridge socket, `bridge-server.md` for the Java side,
 | `overlay/src/main/updater.ts` | GitHub-release self-updater (brief here; see `build-and-release.md`). |
 | `overlay/src/preload/index.ts` (+ `index.d.ts`) | `window.overlay` contextBridge API. |
 | `overlay/src/shared/ipc.ts` | `IPC` channel names + shared types (`SpritePack`, `PacketEnvelope`, …). |
+| `overlay/src/shared/capture.ts` | `CaptureRing` + `CAPTURE_ALLOWED_TYPES`/quotas backing the bug-report capture (below), importable by both main and the test suite. |
 | `overlay/src/shared/settings.ts` | `OverlaySettings` model + `DEFAULT_SETTINGS`. |
 | `overlay/src/shared/panels.ts` | `PanelInstance` layout model (owned by the renderer). |
 
@@ -185,13 +186,13 @@ was lost (`index.ts:212`).
 > in particular it must not run the bridge supervisor, whose reaper would
 > force-kill the *first* instance's healthy bridge (leaving it bridgeless with no
 > respawn). Hence `will-quit` only calls `stopBridge()` when
-> `gotSingleInstanceLock` is true (`index.ts:330`). The `second-instance` event
-> (`index.ts:205`) just does `overlayWindow?.showInactive()` to surface the
+> `gotSingleInstanceLock` is true (`index.ts:391`). The `second-instance` event
+> (`index.ts:214`) just does `overlayWindow?.showInactive()` to surface the
 > existing overlay.
 
 ### IPC handlers registered here
 
-All registered inside `whenReady` (`index.ts:256-319`). `handle` = renderer
+All registered inside `whenReady` (`index.ts:281-380`). `handle` = renderer
 `invoke` request/response; the pushes (`webContents.send`) are set up alongside.
 
 | Channel (`IPC.*`) | Kind | Behaviour |
@@ -208,14 +209,53 @@ All registered inside `whenReady` (`index.ts:256-319`). `handle` = renderer
 | `relaunch` | handle | `app.relaunch()` + `app.exit(0)` |
 | `getPanelLayout` | handle | `loadPanelLayout()` |
 | `savePanelLayout` | handle | `persistPanelLayout(panels)` |
+| `reportBug` | handle | gzips `{version, …, recentPackets: captureRing.snapshot(), mainLogs}` to a temp file, reveals it, opens the prefilled bug-report issue form (see below) |
 
 Pushes to the renderer set up in the same block: `mainLogEntry`, `spritePack`,
 `bridgeStatus`, `packetBatch`, `attachSuccess`, `overlayDetach`,
 `interactiveChange`, `updateAvailable`, `updateProgress`.
 
+### The bug-report capture ring
+
+`onBatch` (inside `startBridgeClient`, `index.ts`) feeds every incoming packet
+into a module-scoped `CaptureRing` (`shared/capture.ts`) alongside forwarding
+the full batch to the renderer via `IPC.packetBatch` - the ring only filters
+what gets *retained* for a bug report, never what the live overlay sees.
+
+- **Allowlist.** `CAPTURE_ALLOWED_TYPES` is default-deny: a packet type not
+  listed is dropped from the ring outright, regardless of quota. This keeps
+  chat (`TextPacket`, incl. DMs), account lists, and connection/auth packets
+  (`Hello`/`Reconnect`) out of a capture that's attached to a **public**
+  GitHub issue. Credential *fields* are separately stripped bridge-side
+  (`PacketSerializer`, Java) - this drops whole packet *types* instead.
+  `overlay/test/allowlist.test.ts` asserts every gameplay tracker's declared
+  `CONSUMED_ENVELOPE_TYPES` (`DpsTracker`/`LootTracker`/`EntityRegistry`) is a
+  subset of this allowlist, so a tracker that starts reading a new envelope
+  type without extending the allowlist fails a test instead of silently
+  shipping a capture the new type can never appear in.
+- **Capacity: 10,000 envelopes total**, with per-type quotas
+  (`CAPTURE_TYPE_QUOTAS`) for high-frequency "spam" types that would
+  otherwise dominate a plain count-based ring and starve wall-clock coverage
+  of everything else: `MovePacket` 500, `NewTickPacket` 1,000,
+  `UpdateAckPacket`/`GotoAckPacket` 300 each. Every other allowlisted type
+  shares whatever's left (`CAPTURE_SHARED_BUDGET` = 10,000 minus the sum of
+  the quotas above). Implementation: `CaptureRing` keeps one bounded
+  sub-buffer per quota'd type plus one shared sub-buffer for everything else
+  (each a simple push-then-shift-if-over-cap queue), and `snapshot()` merges
+  and re-sorts them by `envelope.time` since the sub-buffers fill
+  independently and would otherwise interleave out of chronological order.
+- **Serialization.** `reportBug` writes **compact** JSON (no pretty-print)
+  through `zlib.gzipSync` to `realmshark-bug-<ts>.json.gz` - GitHub accepts
+  `.gz` issue attachments, and gzip keeps a full 10k-envelope capture under
+  its 25 MB limit (typically a few MB).
+- **Replay.** The written file's shape (`{version, recentPackets, …}`) is
+  exactly what `overlay/test/replay.ts`'s `loadCapture()` reads - see
+  `docs/overlay-testing.md` for the test suite that turns a capture into a
+  regression test.
+
 ### Quit / teardown
 
-`will-quit` (`index.ts:322`): `globalShortcut.unregisterAll()`, then
+`will-quit` (`index.ts:383`): `globalShortcut.unregisterAll()`, then
 `stopBridgeClient()` **before** `stopBridge()`.
 
 > **Non-obvious fact.** Order matters: `stopBridge()` drops the bridge socket,
@@ -223,7 +263,7 @@ Pushes to the renderer set up in the same block: `mainLogEntry`, `spritePack`,
 > the already-destroyed overlay window. Severing the client first removes its
 > listeners so that can't happen. `stopBridge()` itself is skipped for a losing
 > second instance (see above). `window-all-closed` quits except on darwin
-> (`index.ts:333`).
+> (`index.ts:394`).
 
 ---
 
@@ -249,7 +289,7 @@ wire stdout/stderr → console.*, error, exit handlers
   `jarPath()` (`bridgeSupervisor.ts:38`) is
   `process.resourcesPath/bridge.jar` when packaged, else
   `<__dirname>/../../../build/libs/bridge.jar` in dev.
-- **`--fake` on non-Windows.** `index.ts:237` calls
+- **`--fake` on non-Windows.** `index.ts:246` calls
   `ensureBridgeRunning(!supportsAttach)`, so on macOS/others the bridge runs with
   `--fake` (synthetic packets, no packet sniffing) — the same platforms that use
   simulated attach.
@@ -319,7 +359,7 @@ the socket closed (`bridgeClient.ts:77`).
 | `msg.type === 'spritePack'` | `onSpritePack(msg)` → `spritePack.ts` (§6) |
 | `Array.isArray(msg.batch)` | `onBatch(msg.batch)` → `IPC.packetBatch` |
 
-The `onConnected` hook is used by `index.ts:252` to fire `requestSpritePack`, so
+The `onConnected` hook is used by `index.ts:277` to fire `requestSpritePack`, so
 each (re)connect re-requests the pack. Wire shapes for `batch`, `dps`, sprite
 pack, etc. live in `architecture.md` and `bridge-server.md`.
 
@@ -353,7 +393,7 @@ toggleHotkey, textileAnimMs }`, with `DEFAULT_SETTINGS = { gameWindowTitle:
 defaults), and falls back to defaults on parse error. `persistSettings()` writes
 pretty-printed JSON.
 
-**`saveSettings` handler** (`index.ts:287`) is where settings changes take effect
+**`saveSettings` handler** (`index.ts:337`) is where settings changes take effect
 at runtime:
 
 - If `gameWindowTitle` changed → `needsRestart = true` in the result (attach
@@ -437,7 +477,7 @@ unchanged version is a cheap no-op instead of re-shipping a multi-MB payload.
 warn/error` to also record a `MainLogEntry { level, time, message }` into a
 ring buffer (`MAX_ENTRIES = 300`) and push it to the registered sink. It's
 installed at the very top of `index.ts` so pre-window logs (like the bridge spawn
-line) are captured. `setMainLogSink(sink)` (`index.ts:218`) wires live entries to
+line) are captured. `setMainLogSink(sink)` (`index.ts:227`) wires live entries to
 `IPC.mainLogEntry`; `getBufferedMainLogs()` backfills the panel on mount via
 `IPC.getBufferedMainLogs`.
 
@@ -459,7 +499,7 @@ re-renders the menu with the mapped label.
 A lightweight self-updater that polls GitHub releases of
 `white-bag/thessal` for a newer `vX.Y.Z[-alpha]` (or legacy
 `overlay-test-vX.Y.Z`) tag with a `*-setup.exe` asset. **What triggers it:**
-`startUpdatePolling` (`index.ts:266`) runs one check ~10 s after launch then every
+`startUpdatePolling` (`index.ts:316`) runs one check ~10 s after launch then every
 6 h, and is a **no-op when unpackaged** (`app.isPackaged`); the config UI can also
 call `checkForUpdate`/`downloadUpdate` on demand. On download it streams
 `updateProgress`, then `installAndRestart` launches the NSIS installer detached
@@ -474,7 +514,13 @@ can overwrite `bridge.jar`). Deliberately not `electron-updater`; the tradeoffs
 `preload/index.ts` exposes a single object as `window.overlay` via
 `contextBridge.exposeInMainWorld('overlay', overlayApi)` (`preload/index.ts:79`).
 `index.d.ts` augments `Window` with `overlay: OverlayApi` so the renderer is
-typed. The renderer may touch **nothing** outside this surface.
+typed. The renderer may touch **nothing** outside this surface. `OverlayApi`
+itself is defined in `overlay/src/shared/overlayApi.ts` (an explicit
+interface, not inferred via `typeof overlayApi`) precisely so a *second*
+implementation - the browser renderer harness's shim, `docs/overlay-harness.md`
+- can satisfy the same contract without importing this file, which pulls in
+`electron`'s `contextBridge`/`ipcRenderer` and won't bundle for a plain
+browser page.
 
 Two shapes of method:
 

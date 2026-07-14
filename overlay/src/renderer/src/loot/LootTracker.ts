@@ -29,6 +29,21 @@ const MAX_PENDING_NEW_OBJECTS = 64
 export const TRACKED_BAG_TYPES = [6, 8] as const
 export type TrackedBagType = (typeof TRACKED_BAG_TYPES)[number]
 
+/**
+ * Every envelope type `ingest()`'s switch handles. Read by the
+ * capture-allowlist tripwire test (`test/allowlist.test.ts`) - see
+ * DpsTracker.ts's `CONSUMED_ENVELOPE_TYPES` for why this exists.
+ *
+ * NOT derived from the switch below - a case added there must also be added
+ * here by hand (see the reminder comment on `ingest()` below).
+ */
+export const CONSUMED_ENVELOPE_TYPES = [
+  'lootBagTypes',
+  'UpdatePacket',
+  'NewTickPacket',
+  'MapInfoPacket'
+] as const
+
 function isTrackedBagType(n: number): n is TrackedBagType {
   return (TRACKED_BAG_TYPES as readonly number[]).includes(n)
 }
@@ -118,7 +133,11 @@ export class LootTracker {
   private entries: LootEntry[] = []
   private nextEntryId = 1
 
-  /** Ingests a batch of packet envelopes. Returns true if display-relevant state changed. */
+  /**
+   * Ingests a batch of packet envelopes. Returns true if display-relevant
+   * state changed. NOTE: adding/removing an `env.type ===` branch here also
+   * means updating `CONSUMED_ENVELOPE_TYPES` above.
+   */
   ingest(packets: PacketEnvelope[]): boolean {
     let changed = false
     for (const env of packets) {
