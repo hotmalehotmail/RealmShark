@@ -514,7 +514,13 @@ can overwrite `bridge.jar`). Deliberately not `electron-updater`; the tradeoffs
 `preload/index.ts` exposes a single object as `window.overlay` via
 `contextBridge.exposeInMainWorld('overlay', overlayApi)` (`preload/index.ts:79`).
 `index.d.ts` augments `Window` with `overlay: OverlayApi` so the renderer is
-typed. The renderer may touch **nothing** outside this surface.
+typed. The renderer may touch **nothing** outside this surface. `OverlayApi`
+itself is defined in `overlay/src/shared/overlayApi.ts` (an explicit
+interface, not inferred via `typeof overlayApi`) precisely so a *second*
+implementation - the browser renderer harness's shim, `docs/overlay-harness.md`
+- can satisfy the same contract without importing this file, which pulls in
+`electron`'s `contextBridge`/`ipcRenderer` and won't bundle for a plain
+browser page.
 
 Two shapes of method:
 

@@ -10,6 +10,7 @@ import {
   type UpdateInfo,
   type UpdateProgress
 } from '../shared/ipc'
+import type { OverlayApi } from '../shared/overlayApi'
 import type { PanelInstance } from '../shared/panels'
 import type { OverlaySettings } from '../shared/settings'
 
@@ -54,7 +55,7 @@ ipcRenderer.on(IPC.interactiveChange, (_: unknown, interactive: boolean) => {
 })
 ipcRenderer.on(IPC.overlayDetach, () => setPacketBatchSuspended(false))
 
-const overlayApi = {
+const overlayApi: OverlayApi = {
   onBridgeStatus: (cb: (status: BridgeStatus) => void) => {
     const listener = (_: unknown, status: BridgeStatus): void => cb(status)
     ipcRenderer.on(IPC.bridgeStatus, listener)
@@ -124,6 +125,6 @@ const overlayApi = {
   reportBug: (): Promise<BugReportResult> => ipcRenderer.invoke(IPC.reportBug)
 }
 
-export type OverlayApi = typeof overlayApi
+export type { OverlayApi }
 
 contextBridge.exposeInMainWorld('overlay', overlayApi)

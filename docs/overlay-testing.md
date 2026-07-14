@@ -137,6 +137,7 @@ follow (see also `CLAUDE.md`'s FIX MODE instructions):
   replay of an attribution bug reproduces the *display* of wrong data, not the
   bug itself. A `CaptureReplay.java` mirror that feeds decoded packets through
   `DpsEngine` directly is a separate, later issue.
-- **Renderer screenshot harness** (PRD §5, Phase 2 issue): visual bugs aren't
-  covered by this suite at all.
+- **Renderer screenshot harness**: visual bugs aren't covered by this vitest
+  suite - see `docs/overlay-harness.md` for the separate browser harness +
+  `npm run shots` pipeline that renders and screenshots every panel instead.
 - **Capture-now button / session recorder** (PRD §7, Phase 3 issue).
