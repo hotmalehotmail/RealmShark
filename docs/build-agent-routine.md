@@ -101,7 +101,8 @@ feature; steps + expected/actual + a repro capture for a bug).
    Make reasonable assumptions where the issue is ambiguous — do NOT stop to ask —
    and record each assumption.
 3. Verify what you can locally (overlay typecheck/lint and `npm test`; bridge
-   compile). Don't block on a full build — CI runs the gates.
+   compile). Don't block on a full build — CI runs the gates. If your change is
+   visible, also follow "Visible changes" below.
 4. Open a pull request into `staging` with a Conventional Commits title. The body's
    FIRST line must be exactly `Closes #<issue>` (or `Fixes #<issue>` for bugs) — the
    `pr hygiene` required check fails the PR without the literal closing keyword, and
@@ -125,6 +126,7 @@ new branch and do NOT open a new PR.
      wrong, REPLY to that review comment explaining why instead of editing code.
    - Rebase/conflict: merge `origin/staging` into the branch and resolve the conflicts.
 4. Verify what you can locally (overlay typecheck/lint and `npm test`; bridge compile).
+   If your change is visible, also follow "Visible changes" below.
 5. PUSH your commits to the SAME head branch. The push re-runs CI + review
    automatically — that is how your fix gets re-evaluated. Never open a new PR.
 
@@ -167,6 +169,18 @@ the fix — a capture that stays attached to an issue rots; a committed fixture 
 forever. For Java-side bugs (bridge/DPS attribution), reproduce via `FakePacketSource` and a
 JUnit test instead — the TS replay harness covers only the overlay's trackers.
 
+## Visible changes (BUILD & FIX modes) — shots or it didn't happen
+If your change affects anything a user can SEE (anything under `overlay/src/renderer/`, sprites,
+panel layout, styling): run `npm run shots` (the harness screenshot pipeline —
+`docs/overlay-harness.md`), then READ the changed PNGs under `docs/screenshots/panels/` and
+actually look at them. Iterate until they match the issue's acceptance criteria — a screenshot
+you didn't look at is a screenshot that lies. Commit the changed PNGs (same stable paths,
+overwritten in place) in the SAME PR, and embed each changed image in the PR body via a raw URL
+pinned to your head SHA
+(`https://raw.githubusercontent.com/<repo>/<head-sha>/docs/screenshots/panels/<name>.png`) so
+the reviewer and the maintainer see what you saw. A renderer change with no updated shots is
+stale evidence — the review agent is told to treat it as drift.
+
 ## Finishing (ALL modes) — stop when your deliverable is done
 When you have produced your deliverable — the PR opened (BUILD), or your commits/`session-triaged`
 marker pushed (FIX/TRIAGE) — STOP and end the run. The pipeline is fully EVENT-DRIVEN: CI, the
@@ -198,9 +212,15 @@ Never touch `bridge` directly, never publish a release, never edit
   (`agent:needs-human`); and (2) `resume.yml` when a maintainer applies `agent:retry` to
   a frozen PR — it resets the budget (deletes fixloop's re-fire markers) and re-fires.
   All paths share the same `ROUTINE_FIRE_URL` / `ROUTINE_FIRE_TOKEN`.
-- **Identity:** routine commits/PRs carry **your** GitHub user (not a separate bot),
-  from a `claude/*` head branch. That `claude/*` prefix is the signal we'll use when
-  we scope the review agent to pipeline PRs.
+- **Identity:** cloud-routine actions are attributed to the **`craig-the-intern-bot`** GitHub App,
+  not your user, via two `SessionStart` hooks (`CLAUDE_CODE_REMOTE`-guarded, so your local CLI is
+  untouched): `session-identity.sh` sets the commit author/committer, and `session-bot-token.sh`
+  mints an App installation token so the **PRs you open and comments you post** are the bot too —
+  see `docs/dev-loop-mechanisms.md §7.2b`. Requires `BOT_APP_ID` / `BOT_APP_PRIVATE_KEY` as routine
+  env secrets; if a platform-injected `GH_TOKEN` shadows `gh`, prefix GitHub API calls with the
+  minted token: `GH_TOKEN="$(cat "${XDG_CACHE_HOME:-$HOME/.cache}/craig-bot-gh-token")" gh …`.
+  Work still happens from a `claude/*` head branch — that prefix (not the author) is the signal the
+  review agent uses to scope pipeline PRs.
 - **Watchability:** the `/fire` response includes a session URL; `implement.yml`
   posts it on the issue so you can watch or steer the run.
 - **Session interlock (`SessionEnd` hook).** The gatekeeper won't auto-merge a PR until the

@@ -30,7 +30,11 @@ on:
   push:
     branches: ['session-done/**'] # a SessionEnd marker landing -> (re)evaluate arming
   pull_request:
-    types: [synchronize] # head moved -> disarm until the new head has a marker
+    # synchronize: head moved -> disarm until the new head has a marker.
+    # labeled: `ui:approved` landing on the PR (directly or via signoff.yml's sync)
+    # (re)evaluates arming IMMEDIATELY — without this, a signoff release would wait
+    # for the next sweep cycle (§7.4). Other labels are filtered to a no-op in-script.
+    types: [synchronize, labeled]
   issue_comment:
     types: [created] # a session-triaged marker comment -> (re)evaluate arming (triage gate, §7.3)
 
@@ -94,6 +98,8 @@ jobs:
           PUSH_REF: ${{ github.ref }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_ACTION: ${{ github.event.action }}
+          PR_LABEL: ${{ github.event.label.name }}
           ISSUE_NUM: ${{ github.event.issue.number }}
         run: |
           set -euo pipefail
@@ -123,13 +129,23 @@ jobs:
               fi ;;
           esac
 
+          # ---- pull_request labeled: only `ui:approved` is arming-relevant (§7.4) — it
+          #      releases the UI-signoff hold, so fall through to the full gate evaluation
+          #      below (which re-checks EVERY hold, not just signoff). Any other label is a
+          #      no-op here: holds are enforced by the gate checks, not by label events. ----
+          if [ "$EVT" = "pull_request" ] && [ "${PR_ACTION:-}" = "labeled" ]; then
+            if [ "${PR_LABEL:-}" != "ui:approved" ]; then
+              echo "Label '${PR_LABEL:-}' on PR is not arming-relevant; nothing to do."
+              exit 0
+            fi
+            echo "ui:approved landed — re-evaluating all arming gates for $HEAD."
           # ---- pull_request synchronize: the head just moved. Preserve the interlock
           #      invariant "auto-merge is armed only while the current head has a marker":
           #      if the PR is armed and the new head has no session-done marker yet (its
           #      authoring session hasn't ended), DISARM. Re-arming happens when the marker
           #      lands (push trigger) or ci/review completes (workflow_run). This closes the
           #      window native auto-merge's persistent arming would otherwise leave open. ----
-          if [ "$EVT" = "pull_request" ]; then
+          elif [ "$EVT" = "pull_request" ]; then
             SNUM="$(gh pr list --repo "$REPO" --head "$HEAD" --base staging --state open --json number -q '.[0].number' 2>/dev/null || true)"
             if [ -z "$SNUM" ] || [ "$SNUM" = "null" ]; then
               echo "No open claude/* -> staging PR for $HEAD; nothing to do."
@@ -278,6 +294,17 @@ jobs:
                 echo "PR #$NUM: $FINDINGS unaddressed review finding(s) on head $PR_HEAD_OID and no session-triaged marker — holding for the triage pass (its marker comment re-triggers arming)."
                 exit 0
               fi
+            fi
+            # ---- UI-signoff gate (§7.4 / PRD §5.4). Opt-in HUMAN visual gate: the issue
+            #      carried `ui:signoff` (synced onto this PR by signoff.yml, or applied to
+            #      the PR directly). Hold until `ui:approved`. DELIBERATELY no crash/timeout
+            #      backstop, unlike the triage gate — a human gate waits indefinitely; the
+            #      `ui:approved` label event itself re-triggers arming (pull_request:labeled).
+            #      Reject-with-steer: comment + `agent:retry` (resume.yml, §6.3). ----
+            if printf '%s' "$PR" | jq -e '.labels[]? | select(.name == "ui:signoff")' >/dev/null \
+               && ! printf '%s' "$PR" | jq -e '.labels[]? | select(.name == "ui:approved")' >/dev/null; then
+              echo "PR #$NUM: ui:signoff without ui:approved — holding for the maintainer's visual approval (applying ui:approved re-arms)."
+              exit 0
             fi
             echo "PR #$NUM: gates satisfied — proceeding to arm."
             # --- Bot app token preflight (LOUD). Arm with the craig-the-intern-bot installation

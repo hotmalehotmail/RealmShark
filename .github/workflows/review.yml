@@ -1,7 +1,9 @@
 name: review
 
 # Independent agent review (full-spec §02, net 2). Reviews every PR for correctness,
-# code quality, and docs freshness, posts findings onto the PR (inline comments + a
+# code quality, docs freshness, and — when the diff touches renderer/screenshot
+# surface — visual correctness (the judge is multimodal and Reads the committed
+# panel gallery, mechanisms §5). Posts findings onto the PR (inline comments + a
 # summary), AND publishes the machine-readable `review-verdict` commit status (success
 # / failure) — the gate the gatekeeper/fix-loop read. If the review skips or the judge
 # errors, NO status is posted, so the required `review-verdict` check fails closed
@@ -209,7 +211,8 @@ jobs:
             The repo is checked out: use Read/Grep/Glob to read surrounding files for context
             and consult CLAUDE.md for the project's conventions and the wire-format contract.
 
-            Review for ALL THREE, weighted equally:
+            Review for ALL FOUR, weighted equally (4 applies only when the diff touches
+            visual surface; otherwise it is a fast no-op):
             1. Correctness — bugs, wrong logic, unhandled edge cases, race conditions, broken
                contracts (e.g. Java packet fields vs. the TS types that consume them).
             2. Code quality — readability, maintainability, clear naming, right-sized
@@ -226,6 +229,18 @@ jobs:
                size; do NOT require docs for another instance of an existing pattern (a new
                panel type, packet consumer, or dye) or an internal refactor with no new
                concept.
+            4. Visual correctness — if the diff touches `overlay/src/renderer/` or
+               `docs/screenshots/`, use Read on the committed screenshots under
+               `docs/screenshots/panels/` (you are multimodal — actually LOOK at every PNG the
+               diff changes, and at the shots for any panel whose component the diff edits) and
+               evaluate them against the linked issue's visual/acceptance criteria. A clear
+               visual defect — placeholder text, clipped or overlapping elements, unreadable
+               contrast, an empty panel that should show data, obviously wrong proportions — is
+               a finding like any other, at the severity it deserves (anchor it on the code
+               that draws it, or file-level on the PNG). Stale evidence is also a finding: a
+               diff that changes what a panel renders WITHOUT refreshing its shots (the agent
+               contract says run `npm run shots` and commit the changed PNGs) means the
+               committed gallery now lies — flag it `medium`, naming the affected panels.
 
             Acceptance criteria: if `review-inputs/issue.txt` contains acceptance criteria,
             check the diff against EACH one and put any this PR does not satisfy into
