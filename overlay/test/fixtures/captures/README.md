@@ -39,7 +39,7 @@ type).
 (`UpdatePacket.newObjects` / `NewTickPacket` for an objectType present in
 `lootBagObjectTypes`) - never a player's own equip slots - so this fixture
 exercises that structural guarantee: replaying it produces **zero** loot
-entries. `allowlist-regression.test.ts`'s second case appends one bag-entity
+entries. `loot-replay.test.ts`'s second case appends one bag-entity
 drop envelope on top of this same fixture in-test (a "mutated/synthesized
 true-drop variant") and asserts exactly **one** entry appears, showing the
 zero-entry result isn't just "nothing was ever ingested."
