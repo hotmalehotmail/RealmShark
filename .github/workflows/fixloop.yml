@@ -58,10 +58,21 @@ jobs:
       github.event.workflow_run.head_repository.full_name == github.repository &&
       startsWith(github.event.workflow_run.head_branch, 'claude/')
     steps:
+      # Short-lived craig-the-intern-bot installation token — a non-GITHUB_TOKEN "member identity"
+      # so the auto-accept marker comment's issue_comment event triggers the gatekeeper (GitHub's
+      # recursion guard suppresses that trigger for a GITHUB_TOKEN-authored comment). No long-lived
+      # personal PAT. continue-on-error so a mint failure just falls back to GITHUB_TOKEN below.
+      - name: Mint bot app token
+        id: bot-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
       - name: Re-fire the build agent in FIX MODE, or escalate when the budget is spent
         env:
           GH_TOKEN: ${{ github.token }}
-          MERGE_PAT: ${{ secrets.MERGE_PAT }} # post the auto-accept marker as a member identity so its issue_comment triggers the gatekeeper
+          BOT_TOKEN: ${{ steps.bot-token.outputs.token }}
           REPO: ${{ github.repository }}
           HEAD: ${{ github.event.workflow_run.head_branch }}
           SHA: ${{ github.event.workflow_run.head_sha }}
@@ -137,18 +148,18 @@ jobs:
             TATTEMPT=$((PRIOR_TRIAGE + 1))
             if [ "$PRIOR_TRIAGE" -ge "$MAX_TRIAGE_ROUNDS" ]; then
               echo "Triage budget spent ($PRIOR_TRIAGE >= $MAX_TRIAGE_ROUNDS) — auto-accepting the remaining findings so the PR can merge."
-              # Post the marker via MERGE_PAT (a member identity), NOT GITHUB_TOKEN: GitHub's
-              # recursion guard suppresses the issue_comment trigger for a GITHUB_TOKEN-authored
-              # comment, so a bot-posted marker would NOT wake the gatekeeper — the PR would then
-              # merge only via the next sweep (~30 min) instead of promptly (observed on #138).
-              # Fall back to GITHUB_TOKEN (sweep still catches it) if the PAT is missing/failing.
+              # Post the marker via the bot App token (a member identity), NOT GITHUB_TOKEN:
+              # GitHub's recursion guard suppresses the issue_comment trigger for a GITHUB_TOKEN-
+              # authored comment, so a bot-posted marker would NOT wake the gatekeeper — the PR
+              # would then merge only via the next sweep (~30 min) instead of promptly (observed on
+              # #138). Fall back to GITHUB_TOKEN (sweep still catches it) if the token didn't mint.
               ACCEPT_BODY="🧿 Triage budget spent after ${MAX_TRIAGE_ROUNDS} pass(es); the remaining medium/low review findings are accepted as-is so the PR isn't blocked on non-blocking nits. <!-- session-triaged: $SHA -->"
               POSTED=0
-              if [ -n "${MERGE_PAT:-}" ]; then
-                GH_TOKEN="$MERGE_PAT" gh pr comment "$PR" --repo "$REPO" --body "$ACCEPT_BODY" && POSTED=1 || true
+              if [ -n "${BOT_TOKEN:-}" ]; then
+                GH_TOKEN="$BOT_TOKEN" gh pr comment "$PR" --repo "$REPO" --body "$ACCEPT_BODY" && POSTED=1 || true
               fi
               if [ "$POSTED" = 0 ]; then
-                echo "::warning::Auto-accept marker posted via GITHUB_TOKEN (MERGE_PAT unset or failed) — the recursion guard suppresses its gatekeeper trigger, so PR #$PR merges via the next sweep rather than promptly."
+                echo "::warning::Auto-accept marker posted via GITHUB_TOKEN (bot App token unset or failed) — the recursion guard suppresses its gatekeeper trigger, so PR #$PR merges via the next sweep rather than promptly."
                 gh pr comment "$PR" --repo "$REPO" --body "$ACCEPT_BODY"
               fi
               exit 0

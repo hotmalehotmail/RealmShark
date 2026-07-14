@@ -45,10 +45,21 @@ jobs:
       # Only to obtain .github/scripts/rebase-refire.sh for the DIRTY branch below.
       - uses: actions/checkout@v4
 
+      # Short-lived craig-the-intern-bot installation token — a non-GITHUB_TOKEN "member identity"
+      # so a swept merge fires post-merge, WITHOUT a long-lived personal PAT. continue-on-error so
+      # a mint failure surfaces in the LOUD preflight below (and only when there's actual work).
+      - name: Mint bot app token
+        id: bot-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+
       - name: Merge stranded agent PRs (no soak, green, same-repo)
         env:
           GH_TOKEN: ${{ github.token }}
-          MERGE_PAT: ${{ secrets.MERGE_PAT }}
+          BOT_TOKEN: ${{ steps.bot-token.outputs.token }}
           REPO: ${{ github.repository }}
           FIRE_URL: ${{ secrets.ROUTINE_FIRE_URL }}
           FIRE_TOKEN: ${{ secrets.ROUTINE_FIRE_TOKEN }}
@@ -87,16 +98,12 @@ jobs:
             exit 0
           fi
 
-          # 3) There is work, so the merge needs MERGE_PAT (a member identity, so the merge fires
-          #    post-merge). LOUD preflight — fail the run on a missing/expired PAT rather than
-          #    silently doing nothing. (Only reached when there's an actual PR to merge, so an
-          #    idle sweep never fails on the PAT.)
-          if [ -z "${MERGE_PAT:-}" ]; then
-            echo "::error::MERGE_PAT is empty/unset — required to merge swept PRs. Add the fine-grained PAT (this repo · Contents + Pull requests: R/W) as MERGE_PAT."
-            exit 1
-          fi
-          if ! GH_TOKEN="$MERGE_PAT" gh api "repos/$REPO/pulls?per_page=1" >/dev/null 2>/tmp/pat_err; then
-            echo "::error::MERGE_PAT failed (expired, revoked, or missing Contents/Pull-requests access) — rotate it. gh: $(tr '\n' ' ' </tmp/pat_err)"
+          # 3) There is work, so the merge needs the bot App token (a member identity, so the merge
+          #    fires post-merge). LOUD preflight — fail the run if the token failed to mint rather
+          #    than silently doing nothing. (Only reached when there's an actual PR to merge, so an
+          #    idle sweep never fails on it.)
+          if [ -z "${BOT_TOKEN:-}" ]; then
+            echo "::error::Bot app token is empty — the craig-the-intern-bot App token failed to mint. Check the BOT_APP_ID / BOT_APP_PRIVATE_KEY secrets and that the App is installed on this repo (Contents + Pull requests: R/W)."
             exit 1
           fi
 
@@ -155,8 +162,8 @@ jobs:
                   fi
                 fi
                 if [ "$GATED_OK" = 1 ]; then
-                  # Merge via the PAT with NO --admin, so branch protection still governs.
-                  if GH_TOKEN="$MERGE_PAT" gh pr merge "$P" --repo "$REPO" --squash 2>/tmp/merge_err; then
+                  # Merge via the bot App token with NO --admin, so branch protection still governs.
+                  if GH_TOKEN="$BOT_TOKEN" gh pr merge "$P" --repo "$REPO" --squash 2>/tmp/merge_err; then
                     echo "Swept: merged stranded green PR #$P ($REASON)."
                   else
                     echo "::warning::#$P is CLEAN but the merge failed: $(tr '\n' ' ' </tmp/merge_err)"
