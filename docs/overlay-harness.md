@@ -35,6 +35,7 @@ overlay/
     gallery.json.gz      # standard fixture populating every panel (for the shots)
     spritePack.json      # a small synthetic atlas (fixture-mode sprites)
 docs/screenshots/panels/ # committed gallery: <type>-<size>.png, overwritten in place
+                          # (+ <type>-<size>-full.png where content clips - see below)
 ```
 
 ### The shim (`harness/shim.ts`)
@@ -206,6 +207,47 @@ command with no manual dev-server step. `npm run dev` (electron-vite) is
 completely untouched - the harness's plain-vite config is a separate file
 that happens to reuse the same `root`/`index.html`/`main.tsx`/`@renderer`
 alias/Tailwind plugin.
+
+### The `-full` variant: below-the-fold blind spot
+
+A panel's content wrapper (`data-panel-content` on the scrollable div in
+`PanelMount.tsx`) uses `overflow-auto` at its preset size, so any content
+below the fold is real but invisible in the preset shot - discovered on PR
+#177, where a new Status-panel button produced zero pixel diff in the
+gallery because it landed below the fold. The preset shot is still
+legitimate evidence (it's exactly what the user sees at that preset size),
+but it's silently *incomplete* whenever content clips.
+
+After taking the normal `<type>-<size>.png` shot, each test measures the
+content wrapper's `scrollHeight` against its `clientHeight`. When
+`scrollHeight` exceeds `clientHeight` (clipping), the test re-renders the
+same mount with the wrapper expanded to its natural content height - capped
+at `MAX_FULL_HEIGHT_PX` (2000px, `e2e/shots.spec.ts`) so unbounded content
+like a long console log can't blow the shot up arbitrarily - and saves a
+*second* screenshot to `docs/screenshots/panels/<type>-<size>-full.png`.
+
+- **The existence of a `-full` file is itself the signal**: "this panel
+  hides content at this preset size." There's no separate manifest or flag -
+  a reviewer or the review judge just checks whether `<type>-<size>-full.png`
+  is present.
+- **Emitted only when clipping is real.** A combo whose content fits at its
+  preset size never gets a `-full` file.
+- **Orphan pruning.** Every `(panel type, size)` combo is re-checked on every
+  `npm run shots` run; if a combo that previously clipped no longer does
+  (e.g. a layout fix), its stale `-full` file is deleted in the same run - a
+  `-full` file can never outlive the clipping it documents.
+- **The preset shot is untouched.** The `<type>-<size>.png` screenshot is
+  always taken first, before anything expands the DOM, so this entirely
+  additive step never changes the preset gallery.
+- **Determinism** holds the same way as the preset shots (frozen clock/heap,
+  same fixture) - re-running `npm run shots` reproduces the same `-full`
+  files byte-for-byte, and produces the same set of `-full` files every time
+  for a given codebase.
+
+No workflow, review-prompt, or gallery-consumer change is needed for this:
+the soak gallery diffs any PNG under `docs/screenshots/panels/`, the review
+judge reads the whole directory, and "changed PNGs" in the agent contract
+already covers new files.
 
 ### Determinism
 
