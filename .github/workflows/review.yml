@@ -26,8 +26,10 @@ name: review
 #   3. scribe — plain bash. Reads verdict.json, computes the pass/fail verdict as a
 #               deterministic function of the findings + the stage facts (any high/
 #               critical finding, an agent PR touching `.github/`, or unmet acceptance
-#               criteria => fail), posts the review, and posts the `review-verdict`
-#               status. Fail-closed: no valid verdict.json => no status posted.
+#               criteria => fail), posts the review, and posts two commit statuses: the
+#               `review-verdict` gate AND `review-findings` (the authoritative medium+
+#               count the triage gate reads — see docs/dev-loop-mechanisms.md §7.3, the
+#               #161 fix). Fail-closed: no valid verdict.json => no status posted.
 #               The `.github/` tripwire MUST live here and not in hygiene.yml:
 #               `pull_request` workflows run from the PR's merge ref, so hygiene.yml is
 #               self-certifiable by the PR under test — this file is not, because
@@ -242,10 +244,12 @@ jobs:
                 { "path": "<file>", "line": <line number in the NEW file, on an added/changed line>, "severity": "<critical|high|medium|low>", "body": "<the issue and a concrete suggested fix>" }
               ]
             }
-            Put a finding's `line` only on an added/changed line in the diff; omit it (or use
-            null) for a file-level note. ALWAYS include `docs_line`, even when nothing is
-            wrong, so the documentation check is visibly performed. Do not run or post
-            anything — the file IS your output.
+            Put a finding's `line` ONLY on a line this diff ADDS or CHANGES — GitHub rejects an
+            inline comment on any other line. If the concern is really about a nearby UNCHANGED
+            line, anchor on the closest added/changed line instead; if none fits, omit `line`
+            (or use null) for a file-level note — never point `line` at an unchanged line.
+            ALWAYS include `docs_line`, even when nothing is wrong, so the documentation check is
+            visibly performed. Do not run or post anything — the file IS your output.
 
       # 3. SCRIBE — deterministic. Compute the verdict from the judge's findings + the
       #    stage facts, post the review, and post the review-verdict status. `always()`
@@ -275,6 +279,12 @@ jobs:
           . "$IN/meta.env" # IS_AGENT, TOUCHES_GITHUB, HAS_CLOSING, ISSNUM
 
           HIGHCRIT="$(jq '[.findings[]? | select(.severity=="high" or .severity=="critical")] | length' "$VJ")"
+          # MEDPLUS = medium-and-up findings. This is the AUTHORITATIVE triage-gate count, stamped
+          # below as the `review-findings` status so the fix loop / gatekeeper / sweep read it
+          # directly instead of scraping inline comments — which silently undercounts a finding
+          # whose line falls outside the diff (the #161 gap) or that has no line at all. On a pass
+          # high/critical are 0, so this is just the medium count.
+          MEDPLUS="$(jq '[.findings[]? | select(.severity=="high" or .severity=="critical" or .severity=="medium")] | length' "$VJ")"
           UNMET="$(jq '((.acceptance_unmet // []) | length)' "$VJ")"
 
           # Verdict is a deterministic function of the findings + the stage facts.
@@ -302,9 +312,11 @@ jobs:
           # Build the review payload deterministically from the judge's JSON + the gate
           # notes. jq constructs the JSON (untrusted strings never hit the shell).
           # Inline comments carry only line-anchored findings; a file-level finding (no line)
-          # would otherwise be invisible on the happy path — failing the gate with no
-          # explanation, and giving the fix loop (which relays the review body) nothing to act
-          # on. So list those in the body too, guaranteeing every finding is surfaced somewhere.
+          # is listed in the body instead. NOTE: whether a finding lands as an inline comment,
+          # a file-level comment, or body text no longer affects the TRIAGE GATE — that reads the
+          # authoritative medium+ count from the `review-findings` status posted below, not these
+          # comments. The inline/body split is purely how findings are surfaced to humans and the
+          # triage agent; every finding is still surfaced somewhere.
           jq -n --slurpfile v "$VJ" --arg event "$EVENT" --arg notes "$NOTES" '
             ( [ $v[0].findings[]? | select(.line == null)
                 | "- **[" + (.severity // "note") + "]** "
@@ -320,20 +332,52 @@ jobs:
                               body: ("**[" + (.severity // "note") + "]** " + (.body // "")) } ]
             }' > /tmp/review.json
 
-          # Post the review; on 422 (e.g. an inline line falls outside the diff, which
-          # rejects the whole review) fall back to one plain comment so nothing is lost.
+          # Post the review. A single inline finding whose line falls outside the diff makes
+          # GitHub 422 the WHOLE review (every finding, not just the bad one), so on failure DON'T
+          # collapse everything into one plain comment — that stranded each finding as un-reply-able
+          # body text the triage counters never saw (the #161 gap). Instead post the summary once,
+          # then post each line-anchored finding as its OWN review comment on the head sha, retrying
+          # a rejected line as a FILE-LEVEL comment (subject_type=file) so it still lands as a real,
+          # reply-able review comment. (The gate itself no longer depends on any of this — it reads
+          # the review-findings count below — but keeping findings as comments preserves the human +
+          # triage-agent flow, which replies-to-decline.)
           if ! gh api --method POST "repos/$REPO/pulls/$PR_NUMBER/reviews" --input /tmp/review.json 2>/tmp/rev_err; then
-            echo "::warning::POST /reviews failed ($(tr '\n' ' ' </tmp/rev_err)); falling back to a single comment."
-            {
-              jq -r '(.summary // "(no summary)") + "\n\n" + (.docs_line // "")
-                     + "\n\n" + ( [ .findings[]?
-                         | "- **[" + (.severity // "note") + "]** "
-                           + (.path // "?") + (if .line then ":" + (.line|tostring) else "" end)
-                           + " — " + (.body // "") ] | join("\n") )' "$VJ"
-              printf '%s\n' "$NOTES"
-            } > /tmp/review.md
+            echo "::warning::POST /reviews failed ($(tr '\n' ' ' </tmp/rev_err)); posting the summary + each finding individually."
+            # Summary + any no-line (file-level) findings in one comment; line-anchored findings
+            # are posted individually below so they stay inline/reply-able.
+            jq -r '(.summary // "(no summary)") + "\n\n" + (.docs_line // "")
+                   + ( [ .findings[]? | select(.line == null)
+                         | "\n- **[" + (.severity // "note") + "]** "
+                           + (if .path then .path + " — " else "" end) + (.body // "") ]
+                       | if length > 0 then "\n\n**File-level findings** (no line anchor):" + join("") else "" end )' "$VJ" > /tmp/review.md
+            printf '%s\n' "$NOTES" >> /tmp/review.md
             gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/review.md || true
+            NF="$(jq '[.findings[]? | select(.line != null and .path != null)] | length' "$VJ")"
+            i=0
+            while [ "$i" -lt "${NF:-0}" ]; do
+              jq -n --slurpfile v "$VJ" --arg sha "$SHA" --argjson i "$i" '
+                ([ $v[0].findings[]? | select(.line != null and .path != null) ][$i]) as $f
+                | { commit_id: $sha, path: $f.path, line: $f.line, side: "RIGHT",
+                    body: ("**[" + ($f.severity // "note") + "]** " + ($f.body // "")) }' > /tmp/fc.json
+              if ! gh api --method POST "repos/$REPO/pulls/$PR_NUMBER/comments" --input /tmp/fc.json >/dev/null 2>&1; then
+                jq -n --slurpfile v "$VJ" --arg sha "$SHA" --argjson i "$i" '
+                  ([ $v[0].findings[]? | select(.line != null and .path != null) ][$i]) as $f
+                  | { commit_id: $sha, path: $f.path, subject_type: "file",
+                      body: ("**[" + ($f.severity // "note") + "]** " + ($f.body // "")) }' > /tmp/fc.json
+                gh api --method POST "repos/$REPO/pulls/$PR_NUMBER/comments" --input /tmp/fc.json >/dev/null 2>&1 || true
+              fi
+              i=$((i+1))
+            done
           fi
+
+          # Post the AUTHORITATIVE medium+ count as the `review-findings` status FIRST (always
+          # success — it's an informational signal the triage gate reads, never itself a merge
+          # gate). Posting it BEFORE review-verdict guarantees that whenever review-verdict=success
+          # is visible on this sha, review-findings is already present, so the counters never see a
+          # passing verdict without its count. This is what closes the #161 gap: the fix loop /
+          # gatekeeper / sweep read this number instead of scraping inline comments.
+          gh api --method POST "repos/$REPO/statuses/$SHA" \
+            -f state="success" -f context="review-findings" -f description="medium+: ${MEDPLUS:-0}"
 
           # ALWAYS post the verdict status LAST — this is the machine-readable gate, and it
           # is posted independently of whether the review body posted, so a review-post
@@ -347,4 +391,4 @@ jobs:
           fi
           gh api --method POST "repos/$REPO/statuses/$SHA" \
             -f state="$STATE" -f context="review-verdict" -f description="${DESC:0:140}"
-          echo "Posted review-verdict=$STATE ($DESC) on $SHA."
+          echo "Posted review-verdict=$STATE ($DESC) on $SHA (medium+: ${MEDPLUS:-0})."
