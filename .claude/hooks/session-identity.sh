@@ -6,10 +6,11 @@
 # author/committer identity at the bot's noreply address, so every commit the routine makes is
 # attributed to craig-the-intern-bot[bot] on GitHub (GitHub matches the App bot's user id + slug
 # in the address for attribution) instead of a human account. This hook supplies only the commit
-# IDENTITY (author/committer metadata — free, no auth). The API credential for the agent's OWN
-# actions (the PRs it opens, the comments it posts) is minted by the companion
-# `session-bot-token.sh` SessionStart hook; the merge/promotion workflows mint their own via
-# actions/create-github-app-token. See docs/dev-loop-mechanisms.md §7.2b.
+# IDENTITY (author/committer metadata — free, no auth). The agent's OWN API actions (the PRs it
+# opens, the comments it posts) go through the platform-provisioned GitHub MCP credential, so they
+# stay the MAINTAINER's — that isn't overridable from here (no gh CLI, no repo MCP token). The
+# merge/promotion workflows mint their own App token via actions/create-github-app-token. See
+# docs/dev-loop-mechanisms.md §7.2b.
 #
 # BLAST RADIUS: no-op anywhere but a remote pipeline session.
 #   Guard (CLAUDE_CODE_REMOTE): unset in the local CLI -> a maintainer's terminal is untouched,

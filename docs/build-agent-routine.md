@@ -212,15 +212,13 @@ Never touch `bridge` directly, never publish a release, never edit
   (`agent:needs-human`); and (2) `resume.yml` when a maintainer applies `agent:retry` to
   a frozen PR — it resets the budget (deletes fixloop's re-fire markers) and re-fires.
   All paths share the same `ROUTINE_FIRE_URL` / `ROUTINE_FIRE_TOKEN`.
-- **Identity:** cloud-routine actions are attributed to the **`craig-the-intern-bot`** GitHub App,
-  not your user, via two `SessionStart` hooks (`CLAUDE_CODE_REMOTE`-guarded, so your local CLI is
-  untouched): `session-identity.sh` sets the commit author/committer, and `session-bot-token.sh`
-  mints an App installation token so the **PRs you open and comments you post** are the bot too —
-  see `docs/dev-loop-mechanisms.md §7.2b`. Requires `BOT_APP_ID` / `BOT_APP_PRIVATE_KEY` as routine
-  env secrets; if a platform-injected `GH_TOKEN` shadows `gh`, prefix GitHub API calls with the
-  minted token: `GH_TOKEN="$(cat "${XDG_CACHE_HOME:-$HOME/.cache}/craig-bot-gh-token")" gh …`.
-  Work still happens from a `claude/*` head branch — that prefix (not the author) is the signal the
-  review agent uses to scope pipeline PRs.
+- **Identity:** cloud-routine **commits** are attributed to the **`craig-the-intern-bot`** GitHub
+  App via the `session-identity.sh` `SessionStart` hook (`CLAUDE_CODE_REMOTE`-guarded, so your local
+  CLI is untouched) — it points git's author/committer at the bot's noreply address. The **PRs you
+  open and comments you post stay YOUR user**: those go through the platform-provisioned GitHub MCP
+  credential, which isn't overridable from the routine (no `gh` CLI, no repo MCP token) — see
+  `docs/dev-loop-mechanisms.md §7.2b`. Work happens from a `claude/*` head branch — that prefix (not
+  the author) is the signal the review agent uses to scope pipeline PRs.
 - **Watchability:** the `/fire` response includes a session URL; `implement.yml`
   posts it on the issue so you can watch or steer the run.
 - **Session interlock (`SessionEnd` hook).** The gatekeeper won't auto-merge a PR until the
