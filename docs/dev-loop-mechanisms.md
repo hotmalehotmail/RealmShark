@@ -673,23 +673,35 @@ merge its own agent's PRs.
 
 **Why.** `review-verdict` is a *deterministic* function of the findings: it fails only on a
 **high/critical** finding (plus the `.github` tripwire and the missing-issue-link check).
-**Medium/low findings always produce `success`** — they're posted as inline `COMMENT` findings
-but, before this, nothing ever acted on them: the fix loop fired only on `failure`, so a PR
-merged with them silently unaddressed. The triage gate makes the agent **decide** each one
-first. (`review.yml` is untouched — the workflow-parity guard requires it byte-identical to the
-default branch — so triage reads its *existing* outputs.)
+**Medium/low findings always produce `success`** — they're posted as `COMMENT` findings but,
+before the triage gate, nothing ever acted on them: the fix loop fired only on `failure`, so a PR
+merged with them silently unaddressed. The triage gate makes the agent **decide** each one first.
 
-**Detecting "passed with findings."** The reviewer posts each line-anchored finding as an inline
-review comment (`/pulls/{n}/comments`) at the reviewed head sha, severity-tagged `**[low|medium|
-high|critical]**` in the body. The fix loop, gatekeeper, and sweep all count `github-actions[bot]`
-inline comments whose `commit_id` == the current head **and that are NOT `**[low]**`** — i.e.
-**medium-and-up** only (high/critical already fail the verdict, so on a pass that means "a
-medium"). **`low` findings are informational: posted on the PR for the record, but never triaged
-and never gated** — the reviewer stays comprehensive (its thoroughness is what caught the #129
-`sweep` bypass as a *high*), while nit-level lows don't cost a triage run or hold a merge. All
-three counters apply the identical non-low filter, so a low-only PR is never held waiting for a
-`session-triaged` marker that would never come. (Known gap: a *file-level* finding with no line
-anchor lives only in the review body, so it isn't counted — rare, and never blocking.)
+**Detecting "passed with findings."** The scribe computes the **authoritative medium+ count** from
+the judge's `verdict.json` and stamps it on the reviewed head sha as a dedicated **`review-findings`
+commit status** (`description: "medium+: N"`, always `state=success` — an informational signal, never
+itself a merge gate), posted *before* `review-verdict` so a passing verdict is never visible without
+its count. The fix loop, gatekeeper, and sweep read **N from that status** — high/critical already
+fail the verdict, so on a pass N is just the medium count; `low` findings are excluded from N. **`low`
+findings are informational: posted on the PR for the record, but never triaged and never gated** — the
+reviewer stays comprehensive (its thoroughness is what caught the #129 `sweep` bypass as a *high*),
+while nit-level lows don't cost a triage run or hold a merge. When the status is absent (a head
+reviewed before this mechanism, or a rare status-post hiccup) all three counters fall back to their
+prior behavior: counting `github-actions[bot]` inline `/pulls/{n}/comments` whose `commit_id` == head
+and that are NOT `**[low]**`.
+
+Reading the count from a status rather than the inline comments is what closes the **#161 gap.** A
+finding only becomes an inline comment if its `line` lands on an added/changed line in the diff. On
+#161 the reviewer anchored a genuine *medium* on `loot-replay.test.ts:20` — a context line just above
+the sole diff hunk (24–50) — so GitHub 422'd the entire review and the scribe's fallback dumped every
+finding into one plain issue comment; the inline-comment counters saw **zero**, skipped triage, and
+the PR auto-merged ~2 min after its verdict, untriaged. The `review-findings` count is derived from
+`verdict.json`, so it is immune to whether any finding could be anchored inline — which also subsumes
+the old *file-level (no-line) finding* gap, now counted too. Two supporting fixes ship alongside: the
+scribe's 422 path now posts each finding as its **own** review comment (retrying a rejected line as a
+`subject_type=file` comment) instead of collapsing all of them into one un-reply-able body comment, so
+the triage agent's reply-to-decline flow still works; and the judge prompt now forbids anchoring
+`line` on an unchanged line (anchor the nearest changed line, or emit a null/file-level note).
 
 **The loop (`fixloop.yml`).** On `review-verdict = success` with unaddressed findings on the head
 and no `session-triaged` marker for it yet, the fix loop re-fires the agent in **TRIAGE MODE**
@@ -725,7 +737,10 @@ Routine run (TRIAGE MODE is a new routine-prompt mode; the prompt lives in the r
 
 **What must be built for §7.3.** ✅ fixloop TRIAGE branch (detect findings, separate budget,
 auto-accept); ✅ gatekeeper triage gate + `issue_comment` trigger; ✅ **sweep triage gate + crash
-backstop** (mirror, so the second merge path can't bypass the hold); ✅ routine-prompt TRIAGE MODE.
+backstop** (mirror, so the second merge path can't bypass the hold); ✅ routine-prompt TRIAGE MODE;
+✅ **`review-findings` authoritative count** (scribe stamps the medium+ count as a status; all three
+counters read it, inline-scrape fallback only when absent — the #161 fix, where a medium anchored on
+a context line outside the diff 422'd the review and slipped past inline-comment counting).
 ⏳ re-paste the routine prompt; ⏳ live validation on a Routine run.
 
 ---
