@@ -11,6 +11,22 @@ const CLOTHING_DYE_STAT = 32 // TEX1 - clothing dye objectType
 const ACCESSORY_DYE_STAT = 33 // TEX2 - accessory dye objectType
 const UNIQUE_DATA_STRING_STAT = 80 // per-equipped-slot encoded enchant data - see sprites/enchantRarity.ts
 
+/**
+ * Every envelope type the provider's `onPacketBatch` handler switches on.
+ * Read by the capture-allowlist tripwire test (`test/allowlist.test.ts`) -
+ * see DpsTracker.ts's `CONSUMED_ENVELOPE_TYPES` for why this exists.
+ *
+ * NOT derived from the handler below - a branch added there must also be
+ * added here by hand (see the reminder comment on `onPacketBatch` below).
+ */
+export const CONSUMED_ENVELOPE_TYPES = [
+  'UpdatePacket',
+  'NewTickPacket',
+  'CreateSuccessPacket',
+  'EnemyHitPacket',
+  'MapInfoPacket'
+] as const
+
 interface StatEntry {
   statTypeNum: number
   statValue?: number
@@ -165,6 +181,8 @@ export function EntityRegistryProvider({
       return changed
     }
 
+    // NOTE: adding/removing an `env.type ===` branch here also means
+    // updating `CONSUMED_ENVELOPE_TYPES` above.
     const offBatch = window.overlay.onPacketBatch((packets: PacketEnvelope[]) => {
       let changed = false
       for (const env of packets) {

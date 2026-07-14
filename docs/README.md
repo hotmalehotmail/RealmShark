@@ -61,6 +61,10 @@ moving parts, each with its own doc below.
   shared `ui/` primitives (`Button`, `MeterRow`, `GearRow`, …), the type
   scale, and the conventions the PR review agent enforces. **Read before
   writing any panel UI.**
+- **[overlay-testing.md](overlay-testing.md)** — the vitest suite
+  (`overlay/test/`): the capture-replay harness (`loadCapture`/`replay`, fake-
+  timer anchoring), the fixtures convention, the capture-allowlist tripwire,
+  and the contract for turning a future bug capture into a regression test.
 
 ## Build, run & release
 
