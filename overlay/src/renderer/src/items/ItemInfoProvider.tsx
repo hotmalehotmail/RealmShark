@@ -14,6 +14,13 @@ import type { EnchantNamesData, ItemInfoData } from './types'
  * latest snapshot each render; the one state bump per received table is only
  * to trigger that re-render, not a general change-notification API.
  */
+/**
+ * Every envelope type the provider's `onPacketBatch` handler branches on.
+ * Used by the allowlist tripwire test (`test/allowlist.test.ts`) to assert
+ * this is a subset of `CAPTURE_ALLOWED_TYPES` - see shared/capture.ts.
+ */
+export const CONSUMED_ENVELOPE_TYPES = ['itemInfo', 'enchantNames'] as const
+
 export function ItemInfoProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
   const itemRef = useRef<ItemInfoData>({})
   const enchantRef = useRef<EnchantNamesData>({})

@@ -30,6 +30,7 @@ shapes on the bridge socket, `bridge-server.md` for the Java side,
 | `overlay/src/shared/ipc.ts` | `IPC` channel names + shared types (`SpritePack`, `PacketEnvelope`, …). |
 | `overlay/src/shared/settings.ts` | `OverlaySettings` model + `DEFAULT_SETTINGS`. |
 | `overlay/src/shared/panels.ts` | `PanelInstance` layout model (owned by the renderer). |
+| `overlay/src/shared/capture.ts` | The "Report bug" capture ring's allowlist, per-type quotas, and eviction logic — imported by `index.ts` and by the test suite's allowlist tripwire. |
 
 ## The big picture
 
@@ -191,7 +192,7 @@ was lost (`index.ts:212`).
 
 ### IPC handlers registered here
 
-All registered inside `whenReady` (`index.ts:256-319`). `handle` = renderer
+All registered inside `whenReady` (`index.ts:283-384`). `handle` = renderer
 `invoke` request/response; the pushes (`webContents.send`) are set up alongside.
 
 | Channel (`IPC.*`) | Kind | Behaviour |
@@ -208,14 +209,44 @@ All registered inside `whenReady` (`index.ts:256-319`). `handle` = renderer
 | `relaunch` | handle | `app.relaunch()` + `app.exit(0)` |
 | `getPanelLayout` | handle | `loadPanelLayout()` |
 | `savePanelLayout` | handle | `persistPanelLayout(panels)` |
+| `reportBug` | handle | dumps the capture ring (below) + main logs to a gzipped JSON file, reveals it, opens the prefilled bug-report form; returns `BugReportResult` (`{file}`) |
 
 Pushes to the renderer set up in the same block: `mainLogEntry`, `spritePack`,
 `bridgeStatus`, `packetBatch`, `attachSuccess`, `overlayDetach`,
 `interactiveChange`, `updateAvailable`, `updateProgress`.
 
+### The "Report bug" capture ring
+
+Every batch the bridge client delivers (`onBatch`, `index.ts`) is fanned out
+two ways: pushed to the renderer as-is (`IPC.packetBatch`), and filtered into
+`recentPackets`, an in-memory array that backs the `reportBug` handler. The
+filtering/eviction logic (`pushCapturePacket`) and its policy constants
+(`CAPTURE_ALLOWED_TYPES`, `CAPTURE_TYPE_QUOTAS`, `CAPTURE_RING_CAPACITY`) live
+in `../shared/capture.ts`, not `index.ts` itself — it's imported by the
+overlay's test suite too (the allowlist tripwire in
+`test/allowlist.test.ts`; see [overlay-test-suite.md](overlay-test-suite.md)).
+
+- **Default-deny allowlist.** Only types in `CAPTURE_ALLOWED_TYPES` are kept
+  at all — the capture is attached to a **public** GitHub issue, so chat
+  (`TextPacket`), account lists, and connection/auth packets never enter it,
+  even though they still flow to the live overlay via `packetBatch`. See the
+  bug-report privacy note in [bridge-server.md](bridge-server.md).
+- **Ring capacity 10,000**, with per-type quotas (`CAPTURE_TYPE_QUOTAS`:
+  `MovePacket` 500, `NewTickPacket` 1,000, `UpdateAckPacket`/`GotoAckPacket`
+  300 each) so high-frequency "spam" types can't crowd out everything else
+  and shrink the ring's wall-clock coverage; every other allowlisted type
+  shares the remaining headroom under the overall cap. `pushCapturePacket`
+  evicts oldest-of-that-type first for a quota-exceeding push, then
+  oldest-of-any-type if the overall cap is still exceeded.
+- **Output format.** `reportBug` serializes `{version, platform, arch,
+  capturedAt, bridgeStatus, gameWindowTitle, recentPackets, mainLogs}` as
+  compact (non-pretty-printed) JSON, gzips it (`zlib.gzipSync`), and writes
+  `realmshark-bug-<ts>.json.gz` to the OS temp dir — comfortably under
+  GitHub's 25 MB attachment limit even at full ring capacity.
+
 ### Quit / teardown
 
-`will-quit` (`index.ts:322`): `globalShortcut.unregisterAll()`, then
+`will-quit` (`index.ts:387`): `globalShortcut.unregisterAll()`, then
 `stopBridgeClient()` **before** `stopBridge()`.
 
 > **Non-obvious fact.** Order matters: `stopBridge()` drops the bridge socket,

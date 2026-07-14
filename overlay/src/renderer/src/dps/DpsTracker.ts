@@ -119,6 +119,15 @@ const RELEVANT_TYPES = [
   'QuestObjectIdPacket'
 ] as const
 
+/**
+ * Every envelope type `ingest`'s switch handles, including the two
+ * bridge-synthesized types (`objectNames`, `dps`) that aren't part of
+ * `RELEVANT_TYPES`'s debug-summary list. Used by the allowlist tripwire test
+ * (`test/allowlist.test.ts`) to assert this is a subset of
+ * `CAPTURE_ALLOWED_TYPES` - see shared/capture.ts.
+ */
+export const CONSUMED_ENVELOPE_TYPES = [...RELEVANT_TYPES, 'objectNames', 'dps'] as const
+
 function dlog(...args: unknown[]): void {
   if (DPS_DEBUG) console.log('[dps]', ...args)
 }

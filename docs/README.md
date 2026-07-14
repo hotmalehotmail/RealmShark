@@ -61,6 +61,13 @@ moving parts, each with its own doc below.
   shared `ui/` primitives (`Button`, `MeterRow`, `GearRow`, …), the type
   scale, and the conventions the PR review agent enforces. **Read before
   writing any panel UI.**
+- **[overlay-test-suite.md](overlay-test-suite.md)** — the vitest suite
+  (`overlay/test/`): the capture-replay harness (`loadCapture`/`replay`, fake-timer
+  anchoring so a replayed capture's `Date.now()`-based logic behaves as it did
+  live), the committed fixture corpus of real soak-failure captures, the
+  allowlist tripwire keeping `CAPTURE_ALLOWED_TYPES` honest against what the
+  trackers actually consume, and the "Report bug" capture buffer's ring/quota/gzip
+  format.
 
 ## Build, run & release
 

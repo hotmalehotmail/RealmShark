@@ -11,6 +11,19 @@ const CLOTHING_DYE_STAT = 32 // TEX1 - clothing dye objectType
 const ACCESSORY_DYE_STAT = 33 // TEX2 - accessory dye objectType
 const UNIQUE_DATA_STRING_STAT = 80 // per-equipped-slot encoded enchant data - see sprites/enchantRarity.ts
 
+/**
+ * Every envelope type the provider's `onPacketBatch` handler branches on.
+ * Used by the allowlist tripwire test (`test/allowlist.test.ts`) to assert
+ * this is a subset of `CAPTURE_ALLOWED_TYPES` - see shared/capture.ts.
+ */
+export const CONSUMED_ENVELOPE_TYPES = [
+  'UpdatePacket',
+  'NewTickPacket',
+  'CreateSuccessPacket',
+  'EnemyHitPacket',
+  'MapInfoPacket'
+] as const
+
 interface StatEntry {
   statTypeNum: number
   statValue?: number

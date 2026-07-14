@@ -319,9 +319,11 @@ named `data` would still serialize); the credential rule keys on the field **nam
 > **Bug-report privacy (defense in depth).** Credential *fields* are stripped
 > here so they never reach the wire. Separately, the overlay's "Report bug"
 > capture — attached to public issues — retains only an **allowlist** of gameplay
-> packet *types* (`overlay/src/main/index.ts`, `CAPTURE_ALLOWED_TYPES`), so whole
-> sensitive types (chat/`TextPacket`, account lists, `HelloPacket`) never enter a
-> shared dump even though they still flow to the live overlay.
+> packet *types* (`overlay/src/shared/capture.ts`, `CAPTURE_ALLOWED_TYPES`), so
+> whole sensitive types (chat/`TextPacket`, account lists, `HelloPacket`) never
+> enter a shared dump even though they still flow to the live overlay. See
+> [overlay-test-suite.md](overlay-test-suite.md) for the capture buffer's
+> ring/quota/gzip format and how the allowlist is kept honest by a test.
 
 > **Wire-format gotcha.** Because the `data` object is a direct reflection of
 > Java field names, any TypeScript consumer must match the Java class's public
