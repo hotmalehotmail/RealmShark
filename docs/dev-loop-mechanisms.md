@@ -124,8 +124,10 @@ so the same agent can push fixes to the PR under review. Specified in §6.
 
 **Drives.** `.github/workflows/ci.yml` runs `on: pull_request: branches: [staging, bridge]`.
 Two jobs: `overlay — typecheck + lint` (Node 22, `npm ci --ignore-scripts`,
-`npm run typecheck`, `npm run lint`) and `bridge — compile + fat jar`
-(`gradle bridgeJar`, Gradle pinned 7.4.2 via `gradle/actions/setup-gradle@v4`).
+`npm run typecheck`, `npm run lint`, `npm test` — the vitest suite: capture-replay
+regression tests + the allowlist tripwire, see `docs/overlay-testing.md`) and
+`bridge — compile + fat jar` (`gradle bridgeJar`, Gradle pinned 7.4.2 via
+`gradle/actions/setup-gradle@v4`).
 
 **Enforces.** Branch protection on `staging` and `bridge` lists both job names as
 **required status checks** (verified: contexts `overlay — typecheck + lint` and
@@ -134,7 +136,12 @@ Two jobs: `overlay — typecheck + lint` (Node 22, `npm ci --ignore-scripts`,
 **Status.** 🟢 Built. **PR #18** landed the JUnit DPS test module and added a `gradle
 test` step to the `bridge` job. It runs inside the existing `bridge — compile + fat
 jar` context, so the required-check list is unchanged — the ground-truth gate now
-includes behavioral tests, on both `staging` and `bridge`.
+includes behavioral tests, on both `staging` and `bridge`. The overlay vitest suite
+(PRD Phase 1, #157/#158) is wired the same way: `npm test` runs inside the existing
+`overlay — typecheck + lint` context (no required-check rename). Landed staging-first
+(not bridge-first like review.yml changes — ci.yml has no parity guard, and the test
+suite only exists on `staging`; a bridge-based PR would fail its own `npm test`);
+`bridge` picks it up at the next promotion.
 
 ---
 

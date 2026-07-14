@@ -96,12 +96,12 @@ feature; steps + expected/actual + a repro capture for a bug).
 2. Implement the issue:
    - Feature: satisfy every acceptance criterion. A new overlay panel is one
      registry.ts entry plus a component.
-   - Bug: if the issue includes a repro capture, replay it through FakePacketSource
-     to reproduce, write a FAILING test first, then fix until it passes.
+   - Bug: follow the "Repro captures" contract below — reproduce FIRST (a failing
+     test), then fix until it passes.
    Make reasonable assumptions where the issue is ambiguous — do NOT stop to ask —
    and record each assumption.
-3. Verify what you can locally (overlay typecheck/lint; bridge compile). Don't block
-   on a full build — CI runs the gates.
+3. Verify what you can locally (overlay typecheck/lint and `npm test`; bridge
+   compile). Don't block on a full build — CI runs the gates.
 4. Open a pull request into `staging` with a Conventional Commits title. The body's
    FIRST line must be exactly `Closes #<issue>` (or `Fixes #<issue>` for bugs) — the
    `pr hygiene` required check fails the PR without the literal closing keyword, and
@@ -124,7 +124,7 @@ new branch and do NOT open a new PR.
    - Review changes: address every unresolved finding. If you believe a finding is
      wrong, REPLY to that review comment explaining why instead of editing code.
    - Rebase/conflict: merge `origin/staging` into the branch and resolve the conflicts.
-4. Verify what you can locally (overlay typecheck/lint; bridge compile).
+4. Verify what you can locally (overlay typecheck/lint and `npm test`; bridge compile).
 5. PUSH your commits to the SAME head branch. The push re-runs CI + review
    automatically — that is how your fix gets re-evaluated. Never open a new PR.
 
@@ -145,7 +145,7 @@ are informational only). Do NOT create a new branch or a new PR.
      brief reason. Do not silently ignore any finding. When unsure, prefer declining — these
      are already non-blocking (medium/low), and needless churn costs more than the nit.
    Do all of it in ONE pass, then finish; do not iterate.
-3. Verify what you can locally (overlay typecheck/lint; bridge compile).
+3. Verify what you can locally (overlay typecheck/lint and `npm test`; bridge compile).
 4. Finish based on what you did:
    - If you **pushed fixes**: just push to the same branch. The re-review re-evaluates the
      new head — do NOT post the marker below. Never open a new PR.
@@ -156,6 +156,16 @@ are informational only). Do NOT create a new branch or a new PR.
 
 Success = every finding fixed or explicitly declined, and either your fixes pushed OR the
 `session-triaged` marker posted.
+
+## Repro captures (ALL modes) — every capture becomes a fixture + a test
+If the work item includes or links a repro capture (a `.json`/`.json.gz` packet capture from a
+bug report or a failed soak): download it, commit it under
+`overlay/test/fixtures/captures/<slug>.json.gz`, write a FAILING test that replays it through
+the harness in `overlay/test/replay.ts` (see `docs/overlay-testing.md`) and asserts the expected
+behavior from the report, then fix until green. The fixture and the test ship in the SAME PR as
+the fix — a capture that stays attached to an issue rots; a committed fixture guards the fix
+forever. For Java-side bugs (bridge/DPS attribution), reproduce via `FakePacketSource` and a
+JUnit test instead — the TS replay harness covers only the overlay's trackers.
 
 ## Finishing (ALL modes) — stop when your deliverable is done
 When you have produced your deliverable — the PR opened (BUILD), or your commits/`session-triaged`
