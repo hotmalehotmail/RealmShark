@@ -14,18 +14,30 @@ interface CaptureFile {
 }
 
 /**
- * Loads a bug-report capture fixture: `.json` or `.json.gz` (detected by
+ * Loads a bug-report capture fixture: `.json`/`.json.gz` (detected by
  * extension, falling back to gzip-magic-byte sniffing so a misnamed file
- * still loads), containing either a full capture object (`{recentPackets,
+ * still loads) containing either a full capture object (`{recentPackets,
  * ...}`, the shape `IPC.reportBug` writes - see main/index.ts) or a bare
- * `PacketEnvelope[]`. Returns envelopes sorted chronologically by
- * `envelope.time`, since `replay()`'s fake-timer anchoring depends on
- * strictly non-decreasing time.
+ * `PacketEnvelope[]`; or a session recording's `.ndjson`/`.ndjson.gz` (one
+ * `PacketEnvelope` JSON object per line - the shape
+ * `SessionRecordingWriter`/`overlay/src/main/sessionRecorder.ts` writes),
+ * so a slice of a recording can become a fixture with no conversion step.
+ * Returns envelopes sorted chronologically by `envelope.time`, since
+ * `replay()`'s fake-timer anchoring depends on strictly non-decreasing time.
  */
 export function loadCapture(filePath: string): PacketEnvelope[] {
   const raw = readFileSync(filePath)
   const isGzip = filePath.endsWith('.gz') || (raw.length >= 2 && raw[0] === 0x1f && raw[1] === 0x8b)
   const text = (isGzip ? gunzipSync(raw) : raw).toString('utf8')
+
+  if (filePath.endsWith('.ndjson') || filePath.endsWith('.ndjson.gz')) {
+    const envelopes = text
+      .split('\n')
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as PacketEnvelope)
+    return envelopes.sort((a, b) => a.time - b.time)
+  }
+
   const parsed = JSON.parse(text) as PacketEnvelope[] | CaptureFile
   const envelopes = Array.isArray(parsed) ? parsed : (parsed.recentPackets ?? [])
   return [...envelopes].sort((a, b) => a.time - b.time)

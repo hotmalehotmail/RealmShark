@@ -109,6 +109,23 @@ function ConfigWindow(): React.JSX.Element {
         </p>
       </div>
 
+      <div>
+        <label className="flex items-center gap-2 text-fg-muted">
+          <input
+            type="checkbox"
+            checked={settings.recordSessionToDisk}
+            onChange={(e) => setSettings({ ...settings, recordSessionToDisk: e.target.checked })}
+          />
+          Record session to disk
+        </label>
+        <p className="mt-1 text-xs text-fg-faint">
+          Appends every packet batch to a rolling, gzipped NDJSON file under the app&apos;s data
+          folder (rotates at ~50 MB, keeps the last 10 files) - lets a bug be captured after the
+          fact instead of requiring the Capture-now button to be pressed in time. Off by default.
+          Applies on Save.
+        </p>
+      </div>
+
       <div className="mt-auto flex items-center gap-3">
         <Button variant="primary" size="md" onClick={save}>
           Save

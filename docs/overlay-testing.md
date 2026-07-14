@@ -35,12 +35,16 @@ transcription step exists between "what a user attached to an issue" and
 
 ## `overlay/test/replay.ts`
 
-- **`loadCapture(filePath)`** - reads a `.json` or `.json.gz` file (gzip
-  detected by extension, falling back to magic-byte sniffing so a misnamed
-  file still loads), accepting either the full capture object `IPC.reportBug`
-  writes (`{version, recentPackets, …}` - see `docs/overlay-main-process.md`'s
-  capture-ring section) or a bare `PacketEnvelope[]`. Returns envelopes sorted
-  by `time`.
+- **`loadCapture(filePath)`** - reads either a bug-report capture
+  (`.json`/`.json.gz`, gzip detected by extension, falling back to
+  magic-byte sniffing so a misnamed file still loads) - the full capture
+  object `IPC.reportBug`/`IPC.captureNow` write (`{version, recentPackets,
+  …}` - see `docs/overlay-main-process.md`'s capture-ring section) or a bare
+  `PacketEnvelope[]` - or a session recording (`.ndjson`/`.ndjson.gz`, one
+  `PacketEnvelope` JSON object per line - the format
+  `SessionRecordingWriter`/`main/sessionRecorder.ts` writes, see
+  `docs/overlay-main-process.md`'s Session recorder section), detected by
+  extension. Either way, returns envelopes sorted by `time`.
 - **`replay(trackers, envelopes, opts?)`** - feeds envelopes into one or more
   `Ingestable`s (anything with `ingest(packets: PacketEnvelope[])`) using
   **vitest fake timers anchored to each envelope's own `time`**
@@ -77,6 +81,36 @@ fixtures README's per-fixture "Why still synthetic" notes. If a real capture
 ever surfaces (or a fresh one is recorded, PRD §7.3) that does contain the
 needed envelope, it can replace the matching fixture without touching the
 tests - they assert on tracker *behavior*, not on capture bytes.
+
+`session-recording-sample.ndjson.gz` demonstrates the fourth fixture source
+below: a slice of a session recording, committed as-is.
+
+## Slicing a session recording into a fixture
+
+The session recorder (Settings → "Record session to disk", PRD §7.2 - see
+`docs/overlay-main-process.md`'s Session recorder section) writes rolling
+`userData/captures/session-<timestamp>-<counter>.ndjson.gz` files: one
+`PacketEnvelope` JSON object per line, gzip-compressed, allowlist-filtered
+identically to the bug-report ring. Because it's line-delimited, cutting a
+scenario out of a recording is a text operation, not a conversion step:
+
+1. `gunzip` the file (or read it with any gzip-aware tool) to get plain NDJSON
+   text - one envelope per line.
+2. Select the lines spanning the scenario you want (by eyeballing `type`/`time`
+   fields, or grepping for a marker envelope like `MapInfoPacket` /
+   `CreateSuccessPacket`). Standard line tools work: `head`/`tail`/`sed`/`grep`,
+   or a short script if the boundary needs `time`-range logic.
+3. Write the selected lines back out, gzip them, and commit under
+   `overlay/test/fixtures/captures/<slug>.ndjson.gz` (or `.ndjson`
+   uncompressed, also supported).
+4. `loadCapture()` reads it exactly like a `.json.gz` bug-report capture (see
+   above) - no conversion, no reshaping. Write the regression test the same
+   way as any other fixture (see "Writing a new regression test from a
+   capture" below).
+
+No in-app editor exists for this by design (PRD §7 out-of-scope) - slicing
+NDJSON is already trivial with text tools, and an editor would be scope this
+issue's `docs/prd-agent-observability.md` deliberately deferred.
 
 ## The allowlist tripwire (`overlay/test/allowlist.test.ts`)
 
@@ -140,4 +174,3 @@ follow (see also `CLAUDE.md`'s FIX MODE instructions):
 - **Renderer screenshot harness**: visual bugs aren't covered by this vitest
   suite - see `docs/overlay-harness.md` for the separate browser harness +
   `npm run shots` pipeline that renders and screenshots every panel instead.
-- **Capture-now button / session recorder** (PRD §7, Phase 3 issue).

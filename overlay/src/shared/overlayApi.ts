@@ -47,4 +47,6 @@ export interface OverlayApi {
   onUpdateProgress: (cb: (progress: UpdateProgress) => void) => () => void
   /** Capture a bug report (version + recent packets + logs) and open the issue form. */
   reportBug: () => Promise<BugReportResult>
+  /** Same capture-ring dump as `reportBug`, minus opening the issue form - just write the file and reveal it. */
+  captureNow: () => Promise<BugReportResult>
 }

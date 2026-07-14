@@ -21,6 +21,7 @@ import { openConfigWindow } from './configWindow'
 import { getBufferedMainLogs, installMainConsoleCapture, setMainLogSink } from './consoleCapture'
 import { loadPanelLayout, persistPanelLayout } from './panelLayout'
 import { getSpritePack, initSpritePack, onSpritePackMessage, requestSpritePack } from './spritePack'
+import { recordBatch, startRecording, stopRecording } from './sessionRecorder'
 import { loadSettings, persistSettings } from './settings'
 import { createTray, setTrayStatus } from './tray'
 import {
@@ -232,9 +233,53 @@ app.whenReady().then(() => {
 
   registerHotkey(settings.toggleHotkey)
 
+  // Rolling window of recent packets kept for the "Report bug"/"Capture now"
+  // capture, so a bug found against the live game ships with a replayable
+  // trace. Filtered through CAPTURE_ALLOWED_TYPES (src/shared/capture.ts,
+  // default-deny) so a new or unexpected packet type can't leak into the
+  // capture attached to a PUBLIC issue - this drops chat (TextPacket, incl.
+  // DMs), account lists, and connection/auth packets (Hello/Reconnect).
+  // Credential FIELDS are separately stripped bridge-side (PacketSerializer);
+  // this drops the whole sensitive packet TYPES. See docs/overlay-testing.md
+  // for the ring's capacity/quota model and the replay tests that consume its
+  // output shape.
+  const captureRing = new CaptureRing()
+
+  // Shared by both capture entry points (IPC.reportBug/IPC.captureNow and the
+  // tray's "Capture now" item) - the only difference is whether the
+  // prefilled GitHub issue form also opens. See docs/overlay-main-process.md.
+  async function dumpCaptureRing(openForm: boolean): Promise<BugReportResult> {
+    const capture = {
+      version: app.getVersion(),
+      platform: process.platform,
+      arch: process.arch,
+      capturedAt: new Date().toISOString(),
+      bridgeStatus: currentBridgeStatus,
+      gameWindowTitle: settings.gameWindowTitle,
+      recentPackets: captureRing.snapshot(),
+      mainLogs: getBufferedMainLogs()
+    }
+    const file = join(app.getPath('temp'), `realmshark-bug-${Date.now()}.json.gz`)
+    await writeFile(file, gzipSync(JSON.stringify(capture)))
+    shell.showItemInFolder(file)
+    if (openForm) {
+      const version = encodeURIComponent(app.getVersion())
+      await shell.openExternal(
+        `https://github.com/white-bag/thessal/issues/new?template=bug_report.yml&version=${version}`
+      )
+    }
+    return { file }
+  }
+
+  // Session recorder (PRD §7.2): resume on launch if it was left enabled.
+  if (settings.recordSessionToDisk) startRecording()
+
   createTray(nativeImage.createFromPath(icon), {
     onToggleOverlay: toggleInteractive,
-    onOpenSettings: openConfigWindow
+    onOpenSettings: openConfigWindow,
+    onCaptureNow: () => {
+      void dumpCaptureRing(false)
+    }
   })
 
   initSpritePack((pack) => {
@@ -244,17 +289,6 @@ app.whenReady().then(() => {
   })
 
   void ensureBridgeRunning(!supportsAttach)
-
-  // Rolling window of recent packets kept for the "Report bug" capture, so a
-  // bug found against the live game ships with a replayable trace. Filtered
-  // through CAPTURE_ALLOWED_TYPES (src/shared/capture.ts, default-deny) so a
-  // new or unexpected packet type can't leak into the capture attached to a
-  // PUBLIC issue - this drops chat (TextPacket, incl. DMs), account lists, and
-  // connection/auth packets (Hello/Reconnect). Credential FIELDS are
-  // separately stripped bridge-side (PacketSerializer); this drops the whole
-  // sensitive packet TYPES. See docs/overlay-testing.md for the ring's
-  // capacity/quota model and the replay tests that consume its output shape.
-  const captureRing = new CaptureRing()
 
   startBridgeClient({
     onStatus: (status) => {
@@ -269,10 +303,11 @@ app.whenReady().then(() => {
         overlayWindow.webContents.send(IPC.packetBatch, packets)
       }
       // The live overlay above still receives the full batch; only the
-      // bug-report trace is filtered and ring-bounded.
+      // bug-report trace and the session recording are filtered and bounded.
       for (const p of packets as PacketEnvelope[]) {
         captureRing.push(p)
       }
+      recordBatch(packets as PacketEnvelope[])
     },
     onConnected: requestSpritePack,
     onSpritePack: onSpritePackMessage
@@ -292,26 +327,12 @@ app.whenReady().then(() => {
   // it so the user can drag it into the issue's repro field, and open the
   // prefilled bug-report form. The capture is the linchpin — it lets a headless
   // fix agent reproduce a live-game bug via FakePacketSource.
-  ipcMain.handle(IPC.reportBug, async (): Promise<BugReportResult> => {
-    const capture = {
-      version: app.getVersion(),
-      platform: process.platform,
-      arch: process.arch,
-      capturedAt: new Date().toISOString(),
-      bridgeStatus: currentBridgeStatus,
-      gameWindowTitle: settings.gameWindowTitle,
-      recentPackets: captureRing.snapshot(),
-      mainLogs: getBufferedMainLogs()
-    }
-    const file = join(app.getPath('temp'), `realmshark-bug-${Date.now()}.json.gz`)
-    await writeFile(file, gzipSync(JSON.stringify(capture)))
-    shell.showItemInFolder(file)
-    const version = encodeURIComponent(app.getVersion())
-    await shell.openExternal(
-      `https://github.com/white-bag/thessal/issues/new?template=bug_report.yml&version=${version}`
-    )
-    return { file }
-  })
+  ipcMain.handle(IPC.reportBug, (): Promise<BugReportResult> => dumpCaptureRing(true))
+
+  // Capture now (PRD §7.1): same dump, minus the issue form - for building up
+  // a ground-truth corpus without a bug to report. Reachable from the Status
+  // panel and the tray menu (see createTray() above).
+  ipcMain.handle(IPC.captureNow, (): Promise<BugReportResult> => dumpCaptureRing(false))
 
   startUpdatePolling((info) => {
     if (overlayWindow && !overlayWindow.isDestroyed()) {
@@ -337,6 +358,7 @@ app.whenReady().then(() => {
   ipcMain.handle(IPC.saveSettings, (_event, next: OverlaySettings): SaveSettingsResult => {
     const titleChanged = next.gameWindowTitle !== settings.gameWindowTitle
     const hotkeyChanged = next.toggleHotkey !== currentHotkey
+    const recordingChanged = next.recordSessionToDisk !== settings.recordSessionToDisk
 
     let hotkeyRegistered = true
     if (hotkeyChanged) {
@@ -358,6 +380,14 @@ app.whenReady().then(() => {
       textileRotateSpeed: Math.min(3, Math.max(0.01, next.textileRotateSpeed)) || 0.15
     }
     persistSettings(settings)
+
+    // Session recorder (PRD §7.2): start/stop to match the toggle, applying
+    // on Save like the rest of this handler. Stopping closes the current file
+    // cleanly rather than leaving it truncated mid-gzip-stream.
+    if (recordingChanged) {
+      if (settings.recordSessionToDisk) startRecording()
+      else stopRecording()
+    }
 
     // Push live so the overlay renderer picks up e.g. the textile animation
     // rate without a restart.
@@ -382,6 +412,8 @@ app.whenReady().then(() => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
+  // Close the session recording file cleanly, if one is open.
+  stopRecording()
   // Sever the bridge client BEFORE killing the bridge: stopBridge() drops the
   // socket, whose close event would otherwise fire onStatus back into the
   // already-destroyed overlay window.

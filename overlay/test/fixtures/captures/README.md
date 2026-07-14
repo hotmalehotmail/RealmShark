@@ -1,8 +1,13 @@
 # Capture fixtures
 
-Gzipped bug-report captures (`IPC.reportBug`'s output shape - see
-`overlay/src/main/index.ts`) that power the replay regression tests in
-`overlay/test/*.test.ts`. Load with `loadCapture()` (`overlay/test/replay.ts`).
+Gzipped bug-report captures (`IPC.reportBug`/`IPC.captureNow`'s output shape -
+see `overlay/src/main/index.ts`) or session recordings (`.ndjson`/`.ndjson.gz`
+- `SessionRecordingWriter`/`overlay/src/main/sessionRecorder.ts`'s output
+shape, PRD §7.2) that power the replay regression tests in
+`overlay/test/*.test.ts`. Load either with `loadCapture()`
+(`overlay/test/replay.ts`). See `docs/overlay-testing.md` for how to slice a
+session recording into a committed `.ndjson.gz` fixture like
+`session-recording-sample.ndjson.gz` below.
 
 ## Provenance
 
@@ -118,3 +123,17 @@ player's).
 surface every row the bridge sends, not just the local player's, for the
 locked quest-objective target. Guards against a future regression that
 filters or drops non-local rows in `ingestBridgeDps`/`snapshot`.
+
+### `session-recording-sample.ndjson.gz` (synthetic, demonstrates the recorder format)
+
+**Not a soak fixture** - a hand-built, session-recorder-shaped (NDJSON, one
+envelope per line, gzipped) fixture demonstrating that `loadCapture()` reads
+a session recording exactly like a `.json.gz` bug-report capture (issue
+#174). Contents mirror `soak-144-loot-empty.json.gz`'s bag-before-metadata
+scenario (`MapInfoPacket`, a bag `UpdatePacket` arriving before
+`lootBagTypes`, then `lootBagTypes` itself) so `session-recorder-replay.test.ts`
+can assert the same recovery behavior through this format. Future PRs that
+slice a real recorded session (PRD §7.3's `baseline-session` or a per-issue
+recording) should follow this fixture's naming/README pattern rather than
+replace it - it specifically exists to guard the NDJSON code path, independent
+of any particular real scenario.

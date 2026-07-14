@@ -10,6 +10,8 @@ const STATUS_LABEL: Record<BridgeStatus, string> = {
 export interface TrayCallbacks {
   onToggleOverlay: () => void
   onOpenSettings: () => void
+  /** "Capture now" (PRD §7.1) - dump the capture ring to disk without opening the bug-report issue form. */
+  onCaptureNow: () => void
 }
 
 let tray: Tray | undefined
@@ -38,6 +40,7 @@ function render(): void {
       { type: 'separator' },
       { label: 'Show/Hide Overlay', click: callbacks.onToggleOverlay },
       { label: 'Settings…', click: callbacks.onOpenSettings },
+      { label: 'Capture now', click: callbacks.onCaptureNow },
       { type: 'separator' },
       { label: 'Quit', click: () => app.quit() }
     ])
