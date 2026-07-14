@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PRD — Agent Observability</title>
+<style>
+  :root {
+    --bg: #F3F5F8; --surface: #FFFFFF; --surface-2: #EAEDF2; --border: #DCE0E8;
+    --border-strong: #C3CAD5; --ink: #191C22; --ink-2: #495060; --ink-3: #6C7484;
+    --accent: #3E63DD; --accent-ink: #2B44A8; --accent-soft: rgba(62,99,221,0.09);
+    --agent: #3E63DD; --agent-soft: rgba(62,99,221,0.11);
+    --human: #B7791F; --human-soft: rgba(183,121,31,0.13);
+    --ci: #1F9E63; --ci-soft: rgba(31,158,99,0.12);
+    --anthropic: #C2632E; --anthropic-soft: rgba(194,99,46,0.12);
+    --strong: #1F9E63; --mid: #B7791F; --weak: #C4472E;
+    --weak-soft: rgba(196,71,46,0.12);
+    --mono-bg: #EDEFF4; --mono-ink: #33405C;
+    --shadow: 0 1px 2px rgba(20,26,40,0.05), 0 6px 20px rgba(20,26,40,0.06);
+    --sans: -apple-system, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: "SF Mono", "JetBrains Mono", "Cascadia Code", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
+    --measure: 74ch; --maxw: 1140px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0F1116; --surface: #181B22; --surface-2: #20242D; --border: #2A2F3A;
+      --border-strong: #3A424F; --ink: #E6E9F0; --ink-2: #A7AFBE; --ink-3: #767E8D;
+      --accent: #6E8BEE; --accent-ink: #97ACF5; --accent-soft: rgba(110,139,238,0.14);
+      --agent: #6E8BEE; --agent-soft: rgba(110,139,238,0.15);
+      --human: #E0A94A; --human-soft: rgba(224,169,74,0.15);
+      --ci: #46C088; --ci-soft: rgba(70,192,136,0.15);
+      --anthropic: #E08A54; --anthropic-soft: rgba(224,138,84,0.15);
+      --strong: #46C088; --mid: #E0A94A; --weak: #E8705A; --weak-soft: rgba(232,112,90,0.16);
+      --mono-bg: #232833; --mono-ink: #B7C3DE;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 26px rgba(0,0,0,0.34);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #F3F5F8; --surface: #FFFFFF; --surface-2: #EAEDF2; --border: #DCE0E8;
+    --border-strong: #C3CAD5; --ink: #191C22; --ink-2: #495060; --ink-3: #6C7484;
+    --accent: #3E63DD; --accent-ink: #2B44A8; --accent-soft: rgba(62,99,221,0.09);
+    --agent: #3E63DD; --agent-soft: rgba(62,99,221,0.11); --human: #B7791F;
+    --human-soft: rgba(183,121,31,0.13); --ci: #1F9E63; --ci-soft: rgba(31,158,99,0.12);
+    --anthropic: #C2632E; --anthropic-soft: rgba(194,99,46,0.12);
+    --strong: #1F9E63; --mid: #B7791F; --weak: #C4472E; --weak-soft: rgba(196,71,46,0.12);
+    --mono-bg: #EDEFF4; --mono-ink: #33405C;
+    --shadow: 0 1px 2px rgba(20,26,40,0.05), 0 6px 20px rgba(20,26,40,0.06);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0F1116; --surface: #181B22; --surface-2: #20242D; --border: #2A2F3A;
+    --border-strong: #3A424F; --ink: #E6E9F0; --ink-2: #A7AFBE; --ink-3: #767E8D;
+    --accent: #6E8BEE; --accent-ink: #97ACF5; --accent-soft: rgba(110,139,238,0.14);
+    --agent: #6E8BEE; --agent-soft: rgba(110,139,238,0.15); --human: #E0A94A;
+    --human-soft: rgba(224,169,74,0.15); --ci: #46C088; --ci-soft: rgba(70,192,136,0.15);
+    --anthropic: #E08A54; --anthropic-soft: rgba(224,138,84,0.15);
+    --strong: #46C088; --mid: #E0A94A; --weak: #E8705A; --weak-soft: rgba(232,112,90,0.16);
+    --mono-bg: #232833; --mono-ink: #B7C3DE;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 26px rgba(0,0,0,0.34);
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans);
+    font-size: 16px; line-height: 1.62; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  header.site { position: sticky; top: 0; z-index: 20;
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    backdrop-filter: saturate(1.4) blur(10px); border-bottom: 1px solid var(--border); }
+  header.site .row { display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; padding: 13px 24px; max-width: var(--maxw); margin: 0 auto; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 640; letter-spacing: -0.01em; }
+  .brand .dot { width: 11px; height: 11px; border-radius: 3px; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  header.site .ctx { font-family: var(--mono); font-size: 0.78rem; color: var(--ink-3); }
+
+  .hero { padding: 52px 0 20px; }
+  .eyebrow { font-family: var(--mono); font-size: 0.72rem; text-transform: uppercase;
+    letter-spacing: 0.16em; color: var(--accent-ink); font-weight: 600; margin: 0 0 18px; }
+  h1 { font-size: clamp(2rem, 4.2vw, 2.9rem); line-height: 1.06; letter-spacing: -0.025em;
+    font-weight: 720; margin: 0 0 20px; text-wrap: balance; max-width: 24ch; }
+  .lede { font-size: 1.13rem; color: var(--ink-2); max-width: var(--measure); margin: 0; line-height: 1.55; }
+  .lede b { color: var(--ink); font-weight: 600; }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 28px 0 4px; }
+  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; box-shadow: var(--shadow); }
+  .stat .v { font-family: var(--mono); font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; color: var(--ink); }
+  .stat .v.bad { color: var(--weak); } .stat .v.good { color: var(--strong); }
+  .stat .k { font-size: 0.78rem; color: var(--ink-3); line-height: 1.35; margin-top: 2px; }
+
+  .toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 30px 0 4px; }
+  .toc a { font-family: var(--mono); font-size: 0.78rem; text-decoration: none; color: var(--ink-2);
+    border: 1px solid var(--border); background: var(--surface); padding: 6px 11px; border-radius: 20px; }
+  .toc a:hover { border-color: var(--accent); color: var(--accent-ink); }
+
+  section { padding: 40px 0; border-top: 1px solid var(--border); scroll-margin-top: 64px; }
+  .sec-head { display: flex; align-items: baseline; gap: 14px; margin: 0 0 6px; }
+  .sec-num { font-family: var(--mono); font-size: 0.82rem; color: var(--accent-ink); font-weight: 600; padding-top: 6px; }
+  h2 { font-size: clamp(1.4rem, 3vw, 1.85rem); line-height: 1.12; letter-spacing: -0.02em; font-weight: 680; margin: 0; text-wrap: balance; }
+  .sec-sub { color: var(--ink-2); max-width: var(--measure); margin: 12px 0 22px; }
+  p { max-width: var(--measure); color: var(--ink-2); }
+  p b, li b { color: var(--ink); font-weight: 600; }
+  h3 { font-size: 1.06rem; font-weight: 650; letter-spacing: -0.01em; margin: 26px 0 6px; color: var(--ink); }
+  ul, ol { max-width: var(--measure); } li { margin: 5px 0; color: var(--ink-2); }
+  a { color: var(--accent-ink); }
+
+  code { font-family: var(--mono); font-size: 0.85em; background: var(--mono-bg); color: var(--mono-ink);
+    padding: 0.12em 0.44em; border-radius: 5px; border: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+
+  /* pills */
+  .st { font-family: var(--mono); font-size: 0.66rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.05em; padding: 2px 8px; border-radius: 20px; white-space: nowrap; display: inline-flex; gap: 5px; align-items: center; }
+  .st::before { content: ""; width: 7px; height: 7px; border-radius: 50%; }
+  .st.agent { color: var(--agent); background: var(--agent-soft); } .st.agent::before { background: var(--agent); }
+  .st.human { color: var(--human); background: var(--human-soft); } .st.human::before { background: var(--human); }
+  .st.auto { color: var(--ci); background: var(--ci-soft); } .st.auto::before { background: var(--ci); }
+  .st.fail { color: var(--weak); background: var(--weak-soft); } .st.fail::before { background: var(--weak); }
+
+  .callout { border: 1px solid var(--border); border-left: 3px solid var(--accent); background: var(--accent-soft);
+    border-radius: 10px; padding: 14px 18px; margin: 18px 0; max-width: var(--measure); }
+  .callout .tag { font-family: var(--mono); font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent-ink); font-weight: 700; }
+  .callout p { margin: 6px 0 0; color: var(--ink); }
+  .callout.warn { border-left-color: var(--weak); background: var(--weak-soft); } .callout.warn .tag { color: var(--weak); }
+  .callout.human { border-left-color: var(--human); background: var(--human-soft); } .callout.human .tag { color: var(--human); }
+
+  .tablewrap { overflow-x: auto; margin: 18px 0; border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; min-width: 680px; background: var(--surface); font-size: 0.87rem; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  thead th { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-3); font-weight: 600; background: var(--surface-2); }
+  tbody tr:last-child td { border-bottom: none; }
+  td b { color: var(--ink); font-weight: 600; }
+
+  pre { font-family: var(--mono); font-size: 0.79rem; line-height: 1.55; background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; overflow-x: auto; margin: 14px 0; color: var(--ink); max-width: 100%; }
+  pre .cm { color: var(--ink-3); } pre .kw { color: var(--accent-ink); }
+
+  .steps { display: grid; gap: 0; margin: 14px 0; max-width: var(--measure); }
+  .step { display: grid; grid-template-columns: 40px 1fr; gap: 16px; padding: 14px 0; border-top: 1px dashed var(--border); }
+  .step:first-child { border-top: none; }
+  .step .n { font-family: var(--mono); font-size: 0.82rem; font-weight: 700; color: var(--accent-ink);
+    width: 34px; height: 34px; display: grid; place-items: center; border-radius: 9px; background: var(--accent-soft);
+    border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent); }
+  .step.h .n { color: var(--human); background: var(--human-soft); border-color: color-mix(in srgb, var(--human) 24%, transparent); }
+  .step .t { font-weight: 620; letter-spacing: -0.01em; font-size: 0.97rem; color: var(--ink); margin-bottom: 2px; }
+  .step p { margin: 0; font-size: 0.9rem; }
+
+  .path { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+  .path .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; box-shadow: var(--shadow); }
+  .path .card h4 { margin: 0 0 6px; font-size: 0.98rem; font-weight: 650; color: var(--ink); }
+  .path .card p { font-size: 0.9rem; margin: 6px 0; }
+  .path .card ul { margin: 6px 0; padding-left: 18px; } .path .card li { font-size: 0.88rem; }
+  .path .card.bad { border-left: 3px solid var(--weak); }
+  .path .card.goal { border-left: 3px solid var(--ci); }
+
+  footer { border-top: 1px solid var(--border); padding: 28px 0 60px; color: var(--ink-3); font-size: 0.85rem; }
+  @media (max-width: 720px) {
+    .path { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="row">
+    <div class="brand"><span class="dot"></span> RealmShark · Agent Observability PRD</div>
+    <div class="ctx">draft · 2026-07-14 &nbsp;|&nbsp; companion to prd-agent-observability.md</div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="hero">
+    <p class="eyebrow">PRD — closing the see-and-verify loop for cloud agents</p>
+    <h1>The agents aren't dumber than you. They're blind.</h1>
+    <p class="lede">Every soak failure on record falls into two classes a headless agent structurally cannot verify: <b>how the UI looks</b> and <b>what the real game's data actually is</b>. Local sessions win because the human closes the observe→act loop in seconds; the cloud loop closes it once per alpha, through the maintainer's hands. This PRD gives the agents their own loop closure — eyes for the UI, replayable reality for the data — and moves the human's visual check to the cheapest possible point.</p>
+
+    <div class="stats">
+      <div class="stat"><div class="v">24</div><div class="k">alpha soaks across ~8 release waves</div></div>
+      <div class="stat"><div class="v bad">2 / 8</div><div class="k">waves that passed their first soak</div></div>
+      <div class="stat"><div class="v bad">9</div><div class="k">explicit <code>soak:fail</code> reports — all visual or real-data</div></div>
+      <div class="stat"><div class="v good">0</div><div class="k">failures in anything CI can already measure</div></div>
+      <div class="stat"><div class="v bad">4</div><div class="k">live round-trips to fix one loot bug (#105 → #146)</div></div>
+    </div>
+
+    <nav class="toc">
+      <a href="#problem">1 Problem</a>
+      <a href="#goals">2 Goals</a>
+      <a href="#decisions">3 Decisions</a>
+      <a href="#f1">4 F1 · Eyes</a>
+      <a href="#f2">5 F2 · Replay</a>
+      <a href="#f3">6 F3 · Ground truth</a>
+      <a href="#owners">7 Ownership</a>
+      <a href="#phasing">8 Phasing</a>
+      <a href="#risks">9 Risks</a>
+      <a href="#open">10 Open</a>
+    </nav>
+  </div>
+
+  <!-- 1 PROBLEM -->
+  <section id="problem">
+    <div class="sec-head"><span class="sec-num">01</span><h2>Problem — the evidence, not the vibe</h2></div>
+    <p class="sec-sub">Verified against the full soak history (2026-07-11 → 2026-07-14). Both agents run Opus 4.8; the issues are well-specified. Model and issue quality are eliminated as causes — observability is what remains.</p>
+
+    <div class="path">
+      <div class="card bad">
+        <h4>Failure class A — visual / layout (~5 of 9)</h4>
+        <p>Things only an eye catches:</p>
+        <ul>
+          <li><code>{s.rotmg}</code> literal rendered in the DPS summary (#89)</li>
+          <li>Clipped / hidden pinned rows, jittering panel heights (#91, #93)</li>
+          <li>Bad contrast, wrong color coding (#113)</li>
+          <li>Sprite outline several pixels too thick (#147)</li>
+        </ul>
+      </div>
+      <div class="card bad">
+        <h4>Failure class B — real-game data contracts (~4 of 9)</h4>
+        <p>Things only live traffic / real assets reveal:</p>
+        <ul>
+          <li>Loot bags never recognized on real assets (#113, #144)</li>
+          <li>Equip/unequip counted as a drop (#122)</li>
+          <li>Realm boss damage misattributed (#98)</li>
+          <li>Other players' damage missing (#50)</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3>The canonical failure: the loot saga</h3>
+    <p>Issue #105 (well-written, clear acceptance criteria) → PR #106 → soak fails <b>#113, #122, #136, #144</b> → finally fixed in PR #146. The agent assumed bag entities self-report <code>Class=Bag</code>+<code>BagType</code>; on real assets that scan finds <b>nothing</b>. Its fake test data (<code>IdToAsset.registerFake</code>) was generated <em>from the same assumption under test</em> — circular validation. Four install-and-play round-trips for what one line of real data would have prevented.</p>
+
+    <div class="callout warn">
+      <span class="tag">The capture promise is aspirational</span>
+      <p>The bug form calls the repro capture "the linchpin," but the overlay has <b>no test runner at all</b>, nothing consumes a <code>realmshark-bug-*.json</code>, and the one Java test written from a capture was hand-transcribed by eye. Worse: #144's capture <em>couldn't</em> contain the evidence — the capture allowlist dropped the <code>lootBagTypes</code> envelope (fixed only as a side effect of PR #146).</p>
+    </div>
+  </section>
+
+  <!-- 2 GOALS -->
+  <section id="goals">
+    <div class="sec-head"><span class="sec-num">02</span><h2>Goals &amp; non-goals</h2></div>
+
+    <div class="path">
+      <div class="card goal">
+        <h4>Goals</h4>
+        <ul>
+          <li><b>G1</b> — the agent <b>sees its UI</b> before the PR opens (headless render + screenshot + look).</li>
+          <li><b>G2</b> — the maintainer sees screenshots <b>before installing anything</b> (soak-issue gallery).</li>
+          <li><b>G3</b> — every live-game bug becomes a <b>permanent replay test</b> (TS now, Java phase 2).</li>
+          <li><b>G4</b> — agents work from <b>real game data</b>, not self-fulfilling fakes (capture corpus + asset facts).</li>
+        </ul>
+      </div>
+      <div class="card bad">
+        <h4>Non-goals</h4>
+        <ul>
+          <li>No pixel-golden CI gating — humans and the multimodal reviewer judge images, not byte-diffs.</li>
+          <li>No blocking human signoff <b>by default</b> — hands-off stays; signoff is opt-in per issue.</li>
+          <li>No committed raw game assets — distilled facts and filtered captures only.</li>
+          <li>No live-game automation — the soak stays; the goal is first soaks that <em>pass</em>.</li>
+          <li>No <code>.github/</code> changes by agents — the guardrail and review tripwire stand.</li>
+        </ul>
+      </div>
+    </div>
+
+    <p><b>Success metrics</b> (baseline → target): soak first-pass rate <b>2/8 → most waves</b>; installs per shipped wave <b>up to 6–8 → 1–2</b>; every <code>soak:fail</code> with a capture yields a committed replay fixture in its fix PR.</p>
+  </section>
+
+  <!-- 3 DECISIONS -->
+  <section id="decisions">
+    <div class="sec-head"><span class="sec-num">03</span><h2>Locked decisions (ground truths)</h2></div>
+    <p class="sec-sub">Settled in design discussion 2026-07-14. These are the positions the features below implement.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>#</th><th>Decision</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr><td><b>D1</b></td><td><b>Three-eyes screenshot model, non-blocking by default.</b> Build agent must look → review agent (multimodal) scores images → maintainer reviews a before/after gallery <b>in the soak issue</b>. Opt-in <code>ui:signoff</code> label makes it blocking per issue.</td><td>Exhaust the cheap eyes before spending the human's. The soak issue is the already-designed human touchpoint — no new interruption. Blocking-by-default would human-gate the most common PR type.</td></tr>
+          <tr><td><b>D2</b></td><td><b>Capture ring ~10k envelopes, per-type quotas, compact JSON, gzipped.</b></td><td>Agent read cost is irrelevant (programmatic). Real constraints: GitHub's 25&nbsp;MB attachment limit (gzip solves) and spam-type eviction — <code>MovePacket</code>/<code>NewTickPacket</code> dominate a count-based ring; quotas stretch wall-clock coverage.</td></tr>
+          <tr><td><b>D3</b></td><td><b>Replay determinism via vitest fake timers + timestamp anchoring.</b> No production clock refactor.</td><td><code>DpsTracker.ts:609</code>, <code>useDpsTracker</code>, <code>LootTracker.ts:254</code> compare envelope time against <code>Date.now()</code>; last week's capture reads as "everything expired." <code>vi.setSystemTime</code> anchored to the capture's own timeline fixes it test-side.</td></tr>
+          <tr><td><b>D4</b></td><td><b>TS replay first; Java replay mirror is phase 2 but required.</b></td><td>Attribution is computed bridge-side (<code>DpsBroadcaster</code> runs <code>DpsEngine</code>, emits precomputed <code>type:"dps"</code> envelopes; TS only displays them). #50/#98-class bugs are Java bugs — TS replay of <code>dps</code> envelopes reproduces the <em>display of wrong data</em>, not the bug.</td></tr>
+          <tr><td><b>D5</b></td><td><b>Corpus grows organically; seed once.</b> Per-issue capture attachment is the primary habit; used captures are committed as fixtures by the agent's PR. One maintainer-recorded "kitchen-sink" session seeds the corpus. A session-record toggle makes recording free.</td><td>Pre-building a scenario matrix guesses at future needs; organic growth is targeted and self-maintaining.</td></tr>
+          <tr><td><b>D6</b></td><td><b>Asset facts = distilled JSON of only the consumed fields</b>, extracted by the maintainer per game update. Feeds headless tests and seeds <code>registerFake</code>.</td><td>Real asset semantics (bag entity classes, BagTypes, enchant strings) are exactly what agents keep guessing wrong. Facts-only data is small and defensible.</td></tr>
+          <tr><td><b>D7</b></td><td><b>Screenshots live at stable per-panel paths, overwritten in place</b> (<code>docs/screenshots/panels/&lt;type&gt;-&lt;size&gt;.png</code>).</td><td>Stable paths make before/after trivial (same path at <code>bridge</code> vs <code>staging</code> refs), bound repo growth, and let the PR body, reviewer, and soak issue reference the same artifacts.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 4 FEATURE 1 -->
+  <section id="f1">
+    <div class="sec-head"><span class="sec-num">04</span><h2>Feature 1 — Renderer harness &amp; screenshots ("eyes")</h2></div>
+    <p class="sec-sub">The renderer is plain React + Tailwind; its <b>only</b> Electron dependency is the <code>window.overlay</code> API (~25 methods in <code>overlay/src/preload/index.ts</code>). Anything that provides <code>window.overlay</code> can host the renderer in ordinary headless Chromium — window attachment is irrelevant to "does the panel render correctly."</p>
+
+<pre>overlay/
+  src/renderer/src/harness/
+    shim.ts            <span class="cm"># implements OverlayApi without Electron</span>
+    wsSource.ts        <span class="cm"># live-fake mode: WS straight to the --fake bridge (mirrors bridgeClient.ts)</span>
+    fixtureSource.ts   <span class="cm"># fixture mode: load + play a capture/fixture JSON</span>
+  vite.harness.config.ts   <span class="cm"># plain vite (npm run dev is electron-vite — spawns Electron; harness must not)</span>
+  e2e/
+    shots.spec.ts      <span class="cm"># Playwright: mount each panel x size, screenshot</span>
+  test/fixtures/
+    gallery.json       <span class="cm"># standard fixture that populates every panel — comparable shots</span>
+    spritePack.json    <span class="cm"># captured spritePack message (fixture-mode sprites)</span>
+docs/screenshots/panels/   <span class="cm"># committed gallery: &lt;type&gt;-&lt;size&gt;.png, overwritten in place (D7)</span></pre>
+
+    <p><b>Shim:</b> settings/layout → defaults + <code>localStorage</code>; <code>getBridgeStatus</code> → connected; attach/interactive events fire once with <code>interactive:&nbsp;true</code> so the canvas mounts; updater/<code>reportBug</code>/<code>relaunch</code> → no-ops. Installed by <code>main.tsx</code> <b>only when</b> <code>window.overlay</code> is undefined <em>and</em> <code>VITE_HARNESS</code> is set — production builds are behaviorally untouched.</p>
+
+    <div class="path">
+      <div class="card">
+        <h4>Data mode 1 — live-fake</h4>
+        <p>Page-side WebSocket to <code>127.0.0.1:47474</code> against <code>gradle runBridge -Pargs="--fake"</code>. Parses hello, <code>{"batch":[...]}</code>, and <code>spritePack</code> (~50 lines mirroring <code>bridgeClient.ts</code>). Real Java, real FakePacketSource, zero Electron.</p>
+      </div>
+      <div class="card">
+        <h4>Data mode 2 — fixture</h4>
+        <p><code>?fixture=&lt;name&gt;</code> loads a capture or hand-written scenario. Playback <b>rebases timestamps</b> (last batch ≈ now) so rolling windows render sensibly. Sprites from the committed <code>spritePack.json</code>. Deterministic → comparable shots.</p>
+      </div>
+    </div>
+
+    <p><b>Mount modes:</b> full panel canvas (default), or <code>?panel=&lt;type&gt;&amp;size=&lt;sm|md|lg&gt;</code> mounting a single panel from <code>registry.ts</code> — the unit for gallery shots. <b><code>npm run shots</code></b> iterates every registered panel × size against <code>gallery.json</code> into the committed gallery paths: fixed viewport, <code>deviceScaleFactor: 1</code>, animations disabled, one pinned Chromium (the agent's Linux sandbox is canonical; local shots are for viewing, not committing).</p>
+
+    <h3>The three eyes</h3>
+    <div class="steps">
+      <div class="step"><div class="n">1</div><div><div class="t">Build agent — must look before the PR <span class="st agent">agent</span></div>
+        <p>Routine prompt (BUILD &amp; FIX): if the change affects anything visible, run <code>npm run shots</code>, <b>Read the changed PNGs and look</b>, iterate until they match the acceptance criteria, commit them, embed the changed images in the PR body (raw URLs pinned to the head SHA).</p></div></div>
+      <div class="step"><div class="n">2</div><div><div class="t">Review agent — automated design review <span class="st auto">automated</span></div>
+        <p><code>review.yml</code> prompt addition (parity-guarded → <code>bridge</code> first): if the diff touches <code>overlay/src/renderer/</code> or the gallery, Read the committed screenshots and evaluate against the issue's visual acceptance criteria. A clear visual defect — placeholder text, clipping, unreadable contrast — is a finding like any other. The judge already has <code>Read</code> and is multimodal; no new tooling.</p></div></div>
+      <div class="step h"><div class="n">3</div><div><div class="t">Maintainer — swipe the soak gallery, then decide to install <span class="st human">human</span></div>
+        <p><code>release.yml</code>'s soak-issue builder diffs <code>docs/screenshots/panels/</code> over <code>origin/bridge..HEAD</code> and embeds a SHA-pinned before/after pair per changed panel. Visually broken ⇒ <code>soak:fail</code> + comment <b>without installing</b>. Looks right ⇒ install and behavior-test.</p></div></div>
+    </div>
+
+    <div class="callout human">
+      <span class="tag">Opt-in blocking signoff — ui:signoff</span>
+      <p>Maintainer labels the <b>issue</b> <code>ui:signoff</code>; a tiny <code>pull_request_target</code> label-sync job (no checkout) copies it to the PR via its <code>Closes #N</code>. <b>Gatekeeper and sweep both</b> hold a <code>ui:signoff</code> PR without <code>ui:approved</code> — one more hold beside soak-freeze / <code>session-done</code> / triage. Release: apply <code>ui:approved</code>. Reject with steer: comment + <code>agent:retry</code> (existing resume machinery). <b>No auto-release backstop</b> — unlike triage, this is a deliberate human gate; a held PR waits.</p>
+    </div>
+  </section>
+
+  <!-- 5 FEATURE 2 -->
+  <section id="f2">
+    <div class="sec-head"><span class="sec-num">05</span><h2>Feature 2 — Overlay test suite &amp; capture replay</h2></div>
+    <p class="sec-sub"><code>DpsTracker.ingest(packets)</code> and <code>LootTracker.ingest(packets)</code> consume <b>exactly</b> the array shape a bug capture's <code>recentPackets</code> holds. Replay is nearly literal — written against soak #144's capture, this test fails on every build since PR #106:</p>
+
+<pre><span class="kw">const</span> capture = loadCapture(<span class="cm">'soak-144-loot-empty'</span>)   <span class="cm">// handles .json and .json.gz</span>
+<span class="kw">const</span> tracker = <span class="kw">new</span> LootTracker()
+replay(tracker, capture)                                <span class="cm">// fake-timer-anchored ingest</span>
+expect(tracker.entries.map(e =&gt; e.itemName)).toContain(<span class="cm">'&lt;the white-bag item&gt;'</span>)</pre>
+
+    <h3>Components</h3>
+    <ul>
+      <li><b>vitest</b> + <code>"test": "vitest run"</code> in <code>overlay/package.json</code>, config reusing <code>tsconfig.web</code> paths.</li>
+      <li><b><code>test/replay.ts</code></b> — <code>loadCapture()</code> + <code>replay()</code>: <code>vi.useFakeTimers()</code>, <code>vi.setSystemTime(firstEnvelope.time)</code>, advance the fake clock to each envelope's <code>time</code> before ingesting (D3). Helpers to snapshot mid-replay for transient-state assertions.</li>
+      <li><b>Allowlist tripwire</b> — every stream consumer exports <code>CONSUMED_ENVELOPE_TYPES</code>; a test asserts <code>CONSUMED ⊆ CAPTURE_ALLOWED_TYPES</code> (the set moves to <code>src/shared/capture.ts</code> so main + tests import one definition). Forgetting to extend the allowlist becomes a red test instead of a silently useless capture — the #144/#146 class.</li>
+      <li><b>Capture buffer upgrade</b> (<code>overlay/src/main/index.ts</code>): 300 → <b>10,000</b> envelopes with per-type quotas (initial: <code>MovePacket</code> 500, <code>NewTickPacket</code> 1,000, ack types 300 each; measure a real session and tune) · compact JSON · gzip → <code>realmshark-bug-&lt;ts&gt;.json.gz</code> (est. 3–10&nbsp;MB, under the 25&nbsp;MB limit). Allowlist posture unchanged: default-deny, no chat/auth/credential types.</li>
+    </ul>
+
+    <div class="callout">
+      <span class="tag">Regression-test contract (routine prompt, FIX / soak-fail modes)</span>
+      <p>If the work item includes a repro capture: download it, commit it under <code>overlay/test/fixtures/captures/&lt;slug&gt;.json.gz</code>, write a <b>failing</b> test that replays it and asserts the reported expected behavior, then fix until green. Fixture and test ship in the same PR as the fix.</p>
+    </div>
+
+    <h3>Phase 2 — the Java mirror</h3>
+    <p><code>src/test/java/bridge/replay/CaptureReplay.java</code>: Gson-parse capture envelopes; map <code>type</code> (packet class simple name — the same strings the TS switch uses) → class via <code>PacketType</code>; <code>gson.fromJson(env.data, clazz)</code> (viable because <code>PacketSerializer</code> reflects field names verbatim; enums serialize as name strings; the raw <code>byte[]</code> is excluded and unneeded); feed <code>DpsEngine</code> exactly as <code>DpsBroadcaster</code> does; assert on the emitted snapshot. Covers the attribution class (#50, #98) and replaces hand-transcribing captures into Java by eye. Out of scope: RC4/reassembly — replay starts from decoded packets.</p>
+
+    <p><b>CI:</b> <code>ci.yml</code>'s overlay job adds <code>npm test</code> (human/local change); the Java mirror rides the existing <code>gradle test</code> step.</p>
+  </section>
+
+  <!-- 6 FEATURE 3 -->
+  <section id="f3">
+    <div class="sec-head"><span class="sec-num">06</span><h2>Feature 3 — Ground-truth corpus &amp; asset facts</h2></div>
+
+    <h3>Capture-now &amp; session recorder</h3>
+    <p><b>Capture-now</b>: the <code>reportBug</code> code path minus the issue form (parameterized IPC, not duplicated) — dump the ring to <code>.json.gz</code>, reveal in folder; exposed in tray + Status panel. <b>Session recorder</b>: a settings toggle appending every <b>allowlisted</b> batch as NDJSON to rolling <code>.ndjson.gz</code> files under <code>userData/captures/</code> (~50&nbsp;MB rotation). Recording becomes an afterthought, and it rescues the "bug happened before I pressed capture" case — the ring buffer's eternal weakness.</p>
+
+    <h3>The corpus — <code>overlay/test/fixtures/captures/</code></h3>
+    <div class="steps">
+      <div class="step"><div class="n">1</div><div><div class="t">Per-issue attachments <span class="st human">human attaches</span> <span class="st agent">agent commits</span></div>
+        <p>The primary habit (feature form gains a <b>Ground truth</b> field: "does this touch game data the overlay hasn't parsed before? attach a capture / facts"). Every used capture is committed as a fixture by the agent's PR — the corpus grows itself.</p></div></div>
+      <div class="step"><div class="n">2</div><div><div class="t">Soak-fail attachments <span class="st agent">agent commits</span></div>
+        <p>Same contract via FIX mode (§05 callout).</p></div></div>
+      <div class="step h"><div class="n">3</div><div><div class="t">One kitchen-sink seed session <span class="st human">human records once</span></div>
+        <p>~20–30 min of varied play: dungeon boss phase change, realm event chain, white/orange bag drops, equip/unequip churn, players joining/leaving. Its role: the agent's standing <b>documentation of wire reality</b> ("what does a real UpdatePacket bag entity look like?") plus baseline coverage when an issue arrives with no fresh capture.</p></div></div>
+    </div>
+    <p><b>Privacy:</b> allowlist filtering is automatic; the maintainer eyeballs files before they land in the public repo (player names are visible — maintainer's call).</p>
+
+    <h3>Asset facts — <code>assets/facts/asset-facts.json</code></h3>
+    <p><code>IdToAsset</code>/<code>LootBagTypes</code>/enchant parsing read the game's extracted XML from a real install at runtime — unobservable and untestable headless, which is precisely what produced the loot saga. <b><code>AssetFactsExtractor</code></b> (building on the existing <code>resextractor</code> machinery) runs on the maintainer's Windows PC and distills <b>only the fields the code consumes</b>:</p>
+
+<pre>{
+  <span class="kw">"gameBuild"</span>: "&lt;exalt build id&gt;", <span class="kw">"extractedAt"</span>: "2026-07-14",
+  <span class="kw">"items"</span>:    { "9064": { "name": "Sword of Acclaim", "bagType": 6, "tier": 12,
+                          "slotType": 1, "damage": [220, 275] } },   <span class="cm">// loot classification (#144) + tooltips</span>
+  <span class="kw">"entities"</span>: { "1292": { "id": "White Bag", "class": "&lt;real class name&gt;" },
+                "1295": { "id": "Orange Bag", "class": "…" } },      <span class="cm">// how bags REALLY self-describe — the Class=Bag assumption dies here, not in four soaks</span>
+  <span class="kw">"enchants"</span>: { "17": { "name": "Sharpened III", "rarity": 2, "desc": "+12% damage" } },  <span class="cm">// id → readable text (#113)</span>
+  <span class="kw">"classes"</span>:  { "782": { "name": "Wizard", "slotTypes": [2, 9, 5, 6] } }
+}</pre>
+
+    <p><b>Consumers:</b> (1) headless tests (<code>LootBagTypesTest</code>, <code>IdToAssetBagIconTest</code>, enchant parsing) run on real facts in CI; (2) <code>registerFake</code> is <b>seeded from the facts file</b> → FakePacketSource traffic uses real object types → <code>--fake</code> converges toward live behavior for free; (3) optionally the <code>--fake</code> bridge loads facts at runtime for realistic dev data without a game install. <b>Lifecycle:</b> rerun per game update; <code>gameBuild</code> makes staleness detectable; growing it is part of "new data area" feature prep.</p>
+  </section>
+
+  <!-- 7 OWNERSHIP -->
+  <section id="owners">
+    <div class="sec-head"><span class="sec-num">07</span><h2>Ownership split</h2></div>
+    <p class="sec-sub">Agents cannot touch <code>.github/</code> (routine guardrail + review tripwire) or the live routine config — a large fraction of the loop integration is therefore human/local work. Each agent issue also names its required <code>docs/</code> deliverable up front so docs-freshness never costs a review round.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Change</th><th>Where</th><th>Owner</th></tr></thead>
+        <tbody>
+          <tr><td>Harness, shim, Playwright, <code>npm run shots</code>, gallery fixture</td><td><code>overlay/</code></td><td><span class="st agent">agent · issue B</span></td></tr>
+          <tr><td>vitest, replay harness, tripwire, fixtures, capture-buffer upgrade</td><td><code>overlay/</code></td><td><span class="st agent">agent · issue A</span></td></tr>
+          <tr><td>Capture-now button, session recorder</td><td><code>overlay/</code></td><td><span class="st agent">agent · issue C</span></td></tr>
+          <tr><td>Asset-facts extractor + facts-seeded <code>registerFake</code> + facts tests</td><td><code>src/</code>, <code>assets/</code></td><td><span class="st agent">agent · issue D</span> — <b>only with real XML attached</b></td></tr>
+          <tr><td>Java <code>CaptureReplay</code> + attribution replay tests</td><td><code>src/test/</code></td><td><span class="st agent">agent · issue E</span></td></tr>
+          <tr><td><code>ci.yml</code> <code>npm test</code> step</td><td><code>.github/</code></td><td><span class="st human">human / local PR</span></td></tr>
+          <tr><td><code>review.yml</code> screenshot-check prompt (parity-guarded → <code>bridge</code> first)</td><td><code>.github/</code></td><td><span class="st human">human / local PR</span></td></tr>
+          <tr><td><code>release.yml</code> soak-issue gallery</td><td><code>.github/</code></td><td><span class="st human">human / local PR</span></td></tr>
+          <tr><td>Gatekeeper + sweep <code>ui:signoff</code> hold · label-sync job · labels</td><td><code>.github/</code> + settings</td><td><span class="st human">human / local PR</span></td></tr>
+          <tr><td>Issue-template Ground-truth field</td><td><code>.github/</code></td><td><span class="st human">human / local PR</span></td></tr>
+          <tr><td>Routine prompt updates (shots step, <code>npm test</code>, capture→fixture contract)</td><td>routine config @ claude.ai/code/routines</td><td><span class="st human">human — re-paste; doc edit alone doesn't take</span></td></tr>
+          <tr><td>Routine env: Playwright download domain</td><td>routine config</td><td><span class="st human">human</span></td></tr>
+          <tr><td>Kitchen-sink recording · extractor runs · capture eyeballing</td><td>Windows PC</td><td><span class="st human">human</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 8 PHASING -->
+  <section id="phasing">
+    <div class="sec-head"><span class="sec-num">08</span><h2>Phasing — one agent issue at a time</h2></div>
+    <p class="sec-sub">Sequential, one <code>agent:build</code> label at a time — these PRs overlap on <code>package.json</code>/<code>main.tsx</code>/docs, and parallel agent PRs would churn the rebase loop. Soak cost of each wave is near zero (shipped-behavior deltas are a dev-flag guard, a button, buffer sizing), and phases 2+ progressively make their own verdicts cheaper.</p>
+    <div class="steps">
+      <div class="step"><div class="n">A</div><div><div class="t">Test suite + replay + capture upgrade <span class="st agent">agent</span></div>
+        <p>vitest · <code>replay.ts</code> · fixtures committed from the <em>existing public</em> soak captures (#144, #122, #50 — URLs go in the issue) · one regression test per fixture · allowlist tripwire · ring 10k/quotas/compact/gzip · docs. <b>Human follow-ups:</b> <code>ci.yml</code> <code>npm test</code>; routine-prompt self-check + capture→fixture contract.</p></div></div>
+      <div class="step"><div class="n">B</div><div><div class="t">Harness + shots <span class="st agent">agent</span></div>
+        <p>Shim, both data sources, <code>?panel/?size</code>, Playwright, <code>npm run shots</code>, gallery + spritePack fixtures, initial committed gallery, docs. <b>Human follow-ups:</b> routine-prompt shots step; <code>review.yml</code> screenshot check; Playwright domain; then <code>release.yml</code> soak gallery + <code>ui:signoff</code> holds.</p></div></div>
+      <div class="step"><div class="n">C</div><div><div class="t">Capture-now + session recorder <span class="st agent">agent</span></div>
+        <p><b>Human:</b> record the kitchen-sink session; commit <code>baseline-session</code> (small follow-up issue or local session).</p></div></div>
+      <div class="step h"><div class="n">D</div><div><div class="t">Asset facts <span class="st agent">agent</span> <span class="st human">gated on human</span></div>
+        <p>Extractor + schema + facts-seeded <code>registerFake</code> + facts tests. <b>Hard gate: real XML fragments for every parsed element attached to the issue</b> (maintainer runs <code>resextractor</code> once) — otherwise this issue re-runs the loot saga. <b>Human:</b> run extractor, commit <code>asset-facts.json</code>.</p></div></div>
+      <div class="step"><div class="n">E</div><div><div class="t">Java CaptureReplay <span class="st agent">agent</span></div>
+        <p>Replay-based attribution tests over the by-then-existing corpus.</p></div></div>
+    </div>
+  </section>
+
+  <!-- 9 RISKS -->
+  <section id="risks">
+    <div class="sec-head"><span class="sec-num">09</span><h2>Risks &amp; mitigations</h2></div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Risk</th><th>Mitigation</th></tr></thead>
+        <tbody>
+          <tr><td>Playwright download blocked in the routine sandbox</td><td>Routine env domain (human); fallback to preinstalled Chromium; failure reported under PR "Assumptions," never silent</td></tr>
+          <tr><td>Screenshot nondeterminism → noisy before/afters</td><td>One pinned sandbox environment produces all committed shots; animations disabled; fixed viewport/DPR; humans + multimodal reviewer judge images — no byte-diff gating (non-goal)</td></tr>
+          <tr><td>Capture privacy on a public repo</td><td>Default-deny allowlist (unchanged) + maintainer eyeball before fixtures land; recorder writes allowlisted types only</td></tr>
+          <tr><td>Repo size growth (fixtures, PNGs)</td><td>Gz fixtures (MBs); gallery overwritten in place (D7); Git LFS as a later escape hatch</td></tr>
+          <tr><td>Asset-facts licensing</td><td>Facts-only interop data (ids/names/numeric fields), minimal, no asset binaries</td></tr>
+          <tr><td><code>ui:signoff</code> PR waits forever if the maintainer forgets</td><td>Acceptable by design — a deliberate human gate (same posture as <code>agent:needs-human</code>); the label is opt-in per issue</td></tr>
+          <tr><td>Fake-timer replay diverges from live timing subtleties</td><td>Anchor to <code>envelope.time</code> (the same clock live code keys damage on); the Java mirror cross-checks attribution independently</td></tr>
+          <tr><td>Harness code shipping to users</td><td><code>VITE_HARNESS</code> flag + tree-shaking + a build-time assertion that production bundles contain no harness module</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 10 OPEN -->
+  <section id="open">
+    <div class="sec-head"><span class="sec-num">10</span><h2>Open questions</h2></div>
+    <ol>
+      <li><b>Quota numbers</b> (§05) are initial guesses — validate against a real session's type histogram before locking.</li>
+      <li><b>Soak-gallery scope</b>: changed panels only, or a full sweep including unchanged panels? Start changed-only; revisit if unchanged-panel regressions slip through.</li>
+      <li><b>Corpus size vs CI time</b>: if replaying 10k envelopes per run gets slow, split into per-scenario slices; reserve the full session for targeted tests.</li>
+      <li><b>JDK in the routine sandbox</b> (needed for live-fake mode's bridge jar)? Fixture mode carries the harness regardless; confirm on Issue B's first run.</li>
+    </ol>
+  </section>
+
+  <footer>
+    RealmShark · PRD — Agent Observability · draft 2026-07-14 · source of truth: <code>docs/prd-agent-observability.md</code> (this page is the viewing companion) · evidence: soak issues #44–#154, PRs #106–#149
+  </footer>
+
+</div>
+
+</body>
+</html>
