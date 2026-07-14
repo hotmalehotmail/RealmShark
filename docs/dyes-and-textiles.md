@@ -103,9 +103,38 @@ sampling the dye's icon. The mask and base sprite are the **same 8×8 resolution
    (`mr > 0 && mr >= mg` → clothing; else `mg > 0` → accessory), take
    `shade = maskValue/255`, and write `colour × shade`, keeping the base pixel's
    alpha (silhouette). Non-region pixels pass the base sprite through.
-4. Scale the composite to the requested display size with **nearest-neighbour**
-   (`imageSmoothingEnabled = false`) to keep the pixel-art look; memoise by
+4. Scale the (un-outlined) composite to the requested display size with
+   **nearest-neighbour** (`imageSmoothingEnabled = false`) to keep the
+   pixel-art look, then bake in the black silhouette outline at that display
+   resolution (`sprites/outline.ts`'s `outlineAtDisplaySize` — see "Sprite
+   outline" below); memoise by
    `dye:${baseType}:${size}:${clothingDye}:${accessoryDye}:${clothingFrame}:${accessoryFrame}`.
+
+### Sprite outline
+
+Every sprite rendered through `getSprite`/`getDyedSprite`/`bakeDyedSprite` gets
+RotMG's thin black silhouette outline baked in at crop/bake time — see
+`overlay-renderer.md`'s "Silhouette outline" for the shared algorithm
+(`sprites/outline.ts`). `getSprite`/`getDyedSprite` scale their composite up to
+the requested display size *first* and only then dilate by exactly 1 pixel
+(`outlineAtDisplaySize`), so the line reads as 1 screen pixel no matter how
+large the sprite is displayed — mirroring the Swing desktop client's
+`getOutlinedIcon`, which scales before outlining for the same reason (see
+`asset-pipeline.md`). `bakeDyedSprite` (the continuous-motion path) can't do
+that: `renderDyeFrame` scales its whole accumulator (base + moving layers) up
+to display size every *frame* via a single canvas draw with no pixel readback
+(see dyeBake.ts's file header), so there's no per-bake point to insert a
+scale-then-outline step without breaking that no-readback invariant. It bakes
+a flat 1-composite-pixel dilation instead (`dilateSilhouette` with
+`thickness=1` on its own pre-padded buffer, independent of `SUB`) — thinner
+than a true 1-screen-pixel line at large display sizes, but far closer than
+dilating by `SUB` composite pixels ever was. It also has to keep its outline
+aligned with its animated dye
+layers: it writes `baseOut` and the `regionSelector`/`regionShade` layer masks
+directly into a pre-padded `(cw+2)×(ch+2)` buffer (shifting every write index
+by the 1px outline padding) rather than padding after the fact, so the moving
+cloth layers `renderDyeFrame` composites every frame land in the same padded
+coordinate space as the outlined base beneath them.
 
 ### Textile sub-pixel tiling
 
@@ -182,6 +211,7 @@ pixels exact, which matters both for the dye colour and the base sprite.
 | `overlay/src/renderer/src/sprites/EntityRegistry.tsx` | Tracks `clothingDye`(32)/`accessoryDye`(33) per objectId from the packet stream. |
 | `overlay/src/renderer/src/sprites/SpriteProvider.tsx` | `getDyedSprite`/`getSprite` — the static per-pixel compositor and per-frame lookup; `bakeAnimatedDye` — bakes a `DyeBake` for a dyeAnimated sprite. |
 | `overlay/src/renderer/src/sprites/dyeBake.ts` | `bakeDyedSprite`/`renderDyeFrame` — the continuous scroll/rotate compositor: bake once (`TEXTILE_SUB` lives here), redraw every frame via `CanvasPattern`/compositing ops, no per-frame readback or encode. |
+| `overlay/src/renderer/src/sprites/outline.ts` | `outlineImageData`/`dilateSilhouette` — bakes the shared silhouette outline into a cropped/composited sprite (see "Sprite outline" above). |
 | `overlay/src/renderer/src/sprites/animClock.ts` | `subscribeAnimClock` — the single shared `requestAnimationFrame` loop every animated-dye canvas subscribes to. |
 | `overlay/src/renderer/src/sprites/AnimatedDyeCanvas.tsx` | `<AnimatedDyeCanvas>` — subscribes a `<canvas>` to the shared clock and calls `renderDyeFrame` every tick. |
 | `overlay/src/renderer/src/sprites/Sprite.tsx` | `<Sprite>` — ticks its own *discrete*-frame clock (`isAnimated`) only when the sprite has idle/textile frames to cycle; routes a `dyeAnimated` dye to `<AnimatedDyeCanvas>` instead of `getDyedSprite`. |

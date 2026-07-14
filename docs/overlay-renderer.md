@@ -32,6 +32,7 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/ui/interactiveContext.ts` | `InteractiveContext` / `useInteractive()` - the click-through-mode flag, for `Tooltip` (§4.2). |
 | `overlay/src/renderer/src/assets/main.css` | Tailwind entry + the `@theme` design-token block — see `overlay-ui-style.md`. |
 | `overlay/src/renderer/src/sprites/SpriteProvider.tsx` | Loads/decodes the atlas pack; `getSprite` / `getDyedSprite`. |
+| `overlay/src/renderer/src/sprites/outline.ts` | `outlineImageData`/`dilateSilhouette` — bakes RotMG's thin black silhouette outline into a cropped/composited sprite. |
 | `overlay/src/renderer/src/sprites/Sprite.tsx` / `CharacterSprite.tsx` | `<Sprite objectType>` / `<CharacterSprite objectId>` components. |
 | `overlay/src/renderer/src/sprites/EntityRegistry.tsx` | objectId → name/skin/equipment/equipmentRarity/enchantSlots/dyes, built from the packet stream. |
 | `overlay/src/renderer/src/sprites/context.ts` | The two React contexts + `useSprites` / `useEntityRegistry` hooks. |
@@ -83,7 +84,14 @@ window onto the outside world is `window.overlay`, the object
 > `window.overlay.onPacketBatch(...)`: `StatusPanel` (counter), `EntityRegistry`,
 > `useDpsTracker`, and `useLootTracker` each register their own listener and
 > process the same `PacketEnvelope[]` batches. Ordering across consumers is not
-> coordinated.
+> coordinated. The preload side (`preload/index.ts`) fans a single
+> `ipcRenderer` subscription out to every registered listener and can suspend
+> that fan-out via `window.overlay.setPacketBatchSuspended(true)` — batches
+> keep arriving from the bridge but are buffered (not dropped) until delivery
+> resumes, when they're merged into one combined batch and delivered once.
+> `PanelFrame` calls this for the duration of a drag, so panel content
+> (DPS/loot/entity-registry re-renders) doesn't compete with the drag for the
+> main thread — see "Drag / reposition" below.
 
 A `PacketEnvelope` is `{ type, direction, time, data }` (`overlay/src/shared/ipc.ts:61-66`),
 with `data: unknown` — each consumer casts `data` to its own field shape. The
@@ -192,20 +200,41 @@ Dragging is manual (no library). `PanelFrame.startDrag` (`PanelFrame.tsx:35`)
 records the grab offset within the panel (so the panel doesn't snap its corner
 to the cursor), then attaches window `mousemove`/`mouseup` listeners. Each move
 calls `anchorFromPointer` (`anchor.ts:35-43`) to convert `(clientX - grabOffset)`
-into a **clamped 0-100 % anchor** and writes the resulting `panelStyle`
-**directly to the frame's DOM** (`left`/`top`/`width`/`height`) — *not* through
-React state. Routing every pointer event through `setPanels` instead would
-re-render `PanelCanvas` and every panel's (sprite-rendering) content 60-125×/sec,
-which is what made dragging lag. The final anchor is committed to state once, on
-`mouseup`, via `onDrag` → `updatePanel(id, { anchor:{ pos:'tl', x, y } })`
-(`PanelCanvas.tsx:108`) — that persists the move and triggers the debounced save
-below. `PanelCanvas` never re-renders during the move phase, so the direct DOM
-writes can't be clobbered by a reconcile, and the commit reasserts the identical
-position (no drop jump). Only the drag handle (the title bar) starts a drag, and
-only when `interactive`. The pin/size buttons `stopPropagation` on `mousedown` so
+into a **clamped 0-100 % anchor** and writes the resulting position **directly
+to the frame's DOM** — *not* through React state. Routing every pointer event
+through `setPanels` instead would re-render `PanelCanvas` and every panel's
+(sprite-rendering) content 60-125×/sec, which is what made dragging lag (#120).
+The final anchor is committed to state once, on `mouseup`, via `onDrag` →
+`updatePanel(id, { anchor:{ pos:'tl', x, y } })` (`PanelCanvas.tsx:108`) — that
+persists the move and triggers the debounced save below. `PanelCanvas` never
+re-renders during the move phase, so the direct DOM writes can't be clobbered
+by a reconcile, and the commit reasserts the identical position (no drop jump).
+Only the drag handle (the title bar) starts a drag, and only when
+`interactive`. The pin/size buttons `stopPropagation` on `mousedown` so
 clicking them never begins a drag (`PanelFrame.tsx:98,110`). Clicking anywhere on
 a panel raises it via `onBringToTop`, which bumps `zIndex` to `max+1`
 (`PanelCanvas.tsx:89-94`).
+
+**Per-frame cost during the move.** `left`/`top` stay at their rest values for
+the whole drag; position is applied via `transform: translate3d(...)` instead
+(a compositor-only property — no layout/repaint — unlike rewriting `left`/`top`
+every frame, which forces a full layout + repaint). `width`/`height` are still
+recomputed from `panelStyle` each move (for the near-an-edge clamp described
+above) but only written to the DOM when the clamped value actually changes,
+which is only near a canvas edge — the common frame does a transform-only
+write. On top of that, `document.documentElement` gets the `panel-dragging`
+class for the drag's duration, which suspends every panel's `backdrop-filter`
+blur + `box-shadow` (`main.css`) — hardware acceleration is off (required for
+overlay transparency, Electron #25153), so blur/shadow is otherwise
+recomposited on the CPU every frame a panel moves, which measured (#132) as
+the dominant per-frame cost. `window.overlay.setPacketBatchSuspended(true)` is
+also called for the drag's duration, so panel content isn't independently
+re-rendering off the packet stream at the same time (see the fan-out note
+above). `dragPerf.ts`'s `startDragPerf`/`stop` bracket every drag and, when
+the module's `DRAG_PERF_DEBUG` const is flipped to `true` (mirroring
+`DPS_DEBUG` in `DpsTracker.ts` — off by default, so a normal drag logs
+nothing), log a `[drag-perf]` frame-cadence summary to the Console panel, for
+catching a future regression in drag smoothness.
 
 ### Layout persistence round-trip
 
@@ -325,24 +354,52 @@ bitmaps go in `atlasesRef`; a `setGen` bump (`SpriteProvider.tsx:69`) re-renders
 consumers so a sprite that returned `null` before its atlas finished decoding is
 retried.
 
-`getSprite(objectType, size)` (`SpriteProvider.tsx:164-189`): look up the current frame's rect (from
+`getSprite(objectType, size)` (`SpriteProvider.tsx:217-249`): look up the current frame's rect (from
 `pack.animTable[objectType]` for an animated idle sprite, else `pack.table[objectType]`)
-→ `[atlasId,x,y,w,h]`, crop to a `size×size` canvas with
-`imageSmoothingEnabled=false` (nearest-neighbour, preserving the pixel-art look),
-return `canvas.toDataURL()`, memoised by `"objectType:size:frame"`. Returns `null` when
-the pack isn't ready, the objectType is absent, or the atlas hasn't decoded yet.
+→ `[atlasId,x,y,w,h]`, crop it to an `ImageData` at native resolution, scale
+that up to `size×size` with `imageSmoothingEnabled=false` (nearest-neighbour,
+preserving the pixel-art look) and bake in a 1-pixel black silhouette outline
+at that display resolution (`outline.ts`'s `outlineAtDisplaySize` — see
+"Silhouette outline" below), then `canvas.putImageData` the result and return
+`canvas.toDataURL()`, memoised by `"objectType:size:frame"`. Returns `null`
+when the pack isn't ready, the objectType is absent, or the atlas hasn't
+decoded yet.
 
 `getDyedSprite(baseType, size, clothingDye?, accessoryDye?)`
-(`SpriteProvider.tsx:204-361`) composites clothing/accessory dyes onto a character
+(`SpriteProvider.tsx:278-431`) composites clothing/accessory dyes onto a character
 sprite using the pack's `maskTable` + `dyeTable`. The full compositing model
 (mask channels = region + shade, textile sub-pixel tiling via `TEXTILE_SUB=5`,
 solid vs. textile `dyeTable` encoding) is documented in **`dyes-and-textiles.md`**
 — not repeated here. Key contract: it **falls back to `getSprite`** when the pack
-isn't ready, there's no dye, or the base type has no mask
-(`SpriteProvider.tsx:217,227`), and memoises by
+isn't ready, there's no dye, or the base type has no mask, and memoises by
 `"dye:baseType:size:clothingDye:accessoryDye:baseFrame:clothingFrame:accessoryFrame"`
 (the base frame only varies for an animated idle character; the dye frames only
 vary for animated textiles — see `dyes-and-textiles.md`).
+
+**Silhouette outline (`sprites/outline.ts`).** Every sprite drawn through this
+path gets RotMG's thin black outline hugging its opaque silhouette, baked in at
+crop/bake time (never recomputed per frame) — ports the same padded-dilation
+approach the Swing desktop client uses (`assets/ImageBuffer.java`'s
+`getOutlinedIcon`; see `asset-pipeline.md`). `outlineImageData(src, thickness)`
+pads an `ImageData` by `thickness` transparent pixels on every side, then
+`dilateSilhouette` grows the opaque region into that padding (`thickness`
+passes of 4-neighbour dilation) and paints newly-opaque pixels solid black —
+crisp/aliased, not a blurred glow. `getSprite`/`getDyedSprite` use
+`outlineAtDisplaySize`, which scales the composite up to the caller's display
+size *first* and only then calls `outlineImageData` with `thickness=1` — this
+mirrors `getOutlinedIcon`, which also scales before outlining, so the line
+reads as exactly 1 screen pixel regardless of the sprite's native resolution
+or how large it's displayed. `bakeDyedSprite` (`dyeBake.ts`) can't do that: its
+output is scaled to display size every *frame* by `renderDyeFrame` via a
+single canvas draw with no pixel readback, so it instead calls
+`dilateSilhouette` directly with a flat `thickness=1` on its own pre-padded
+buffer, in its (SUB-subdivided) composite resolution — thinner than a true
+1-screen-pixel line at large
+display sizes, but not blown up by `SUB` the way outlining at native
+resolution would be (see `dyes-and-textiles.md`'s "Sprite outline"). The
+outline shares the crop/bake caches, so cache entry counts and per-frame cost
+are unaffected; it composes with — sits *inside* — the CSS `ring` rarity
+border `Sprite.tsx` applies around the `<img>`/`<canvas>` element.
 
 Both functions (plus `isAnimated`/`frameMs`) are exposed via `SpriteContext` (`context.ts:6-37`); panels call
 them through `useSprites()` or the `<Sprite>` component.
@@ -420,10 +477,25 @@ emitted on every one of our hits, so it re-establishes identity continuously).
 Both guard on an actual id change, since `EnemyHitPacket` arrives every hit but
 should only count as a display change the first time it resolves. The registry
 **clears** on `MapInfoPacket` (instance change) and on `onOverlayDetach`
-(`EntityRegistry.tsx:77-81`). Individual records are **removed** when their
-objectId appears in `UpdatePacket.drops` (the entity left view / the instance),
-so the roster reflects players *leaving* as well as joining — if the local
-player's own id drops, `localPlayerRef` is forgotten too.
+(`EntityRegistry.tsx:77-81`).
+
+> **Two maps, not one — `recordsRef` (live) vs. `lastRecordRef` (last-known).**
+> `mergeStats` writes every merged record into *both* `recordsRef` (the live
+> roster) and `lastRecordRef` (never pruned). When an objectId appears in
+> `UpdatePacket.drops` (the entity left view / the instance), only its
+> `recordsRef` entry is deleted — if the local player's own id drops,
+> `localPlayerRef` is forgotten too. `lastRecordRef` keeps the same record
+> object indefinitely (until the next full `clear()`), so `objectType`,
+> `skin`, `equipment`, `equipmentRarity`, `clothingDye`, `accessoryDye`,
+> `enchantSlots`, and `name` all keep resolving a dropped entity's *last-seen*
+> values instead of `null` — e.g. the DPS list keeps showing a player's actual
+> gear/sprite after they leave the instance mid-fight, rather than an empty
+> silhouette. `characters()` deliberately reads `recordsRef` only, so the
+> *live* instance roster (`InstancePanel`) still drops a player who left. If an
+> objectId reappears after a drop (rejoin, or plain id reuse), `mergeStats`
+> re-seeds the new record from `lastRecordRef`'s prior entry rather than
+> starting blank, so a partial first packet (e.g. `NAME_STAT` only) doesn't
+> transiently wipe known equipment.
 
 **`subscribe(cb)`** (`EntityRegistry.tsx:59-64`) lets a panel register a
 callback instead of polling. Any batch that contains a display-relevant change
@@ -435,10 +507,12 @@ sets a local `changed` flag and calls `scheduleNotify()`
 Accessors (`objectType`, `skin`, `equipment`, `equipmentRarity`, `name`,
 `clothingDye`, `accessoryDye`, `enchantSlots`, `characters`, `localPlayerId`)
 are `useCallback`-stable and read the ref synchronously
-(`EntityRegistry.tsx:171-251`). `characters()` returns every objectId with a
-non-empty `name` — i.e. the instance's players. `enchantSlots(objectId)`
-returns the raw 4-element array (or `null` if this entity has never sent the
-stat) — see §4.2 for decoding it.
+(`EntityRegistry.tsx:171-251`) — all but `characters()`/`localPlayerId()` read
+`lastRecordRef` (see above), so they resolve for a since-dropped objectId too.
+`characters()` returns every *currently live* objectId with a non-empty `name`
+— i.e. the instance's present players. `enchantSlots(objectId)` returns the
+raw 4-element array (or `null` if this entity has never sent the stat) — see
+§4.2 for decoding it.
 
 ### 4.1 Enchant rarity borders (`sprites/enchantRarity.ts`, issue #107)
 
@@ -965,6 +1039,20 @@ objectId in an in-view map. A loot bag's 8 slots are `INVENTORY_0..7` (wire
 `statTypeNum` **8-15**) — the container's own slots, a different range from the
 `INVENTORY_4..11` (12-19) *held* slots a player carries, so a player entity is
 never mistaken for a bag.
+
+**Startup race.** The bridge's `lootBagTypes` broadcast has a ~2s startup delay
+(`bridge-server.md` §6), so a bag can spawn before `bagEntityTypes` is
+populated — its `newObjects` entry would otherwise fail the lookup and be lost
+for good, since a later `NewTickPacket` delta only resolves a bag already in
+the in-view map. `LootTracker` queues any `newObjects` entry it can't yet
+classify in `pendingNewObjects` and replays the queue once the first
+`lootBagTypes` envelope arrives (a one-time catch-up; the queue is also
+dropped on `resetPerInstance` since a map change invalidates those objectIds).
+The queue is bounded (`MAX_PENDING_NEW_OBJECTS`, oldest evicted first) as a
+memory bound rather than a correctness guarantee — every `newObjects` entry
+queues pre-meta, not just bags, so unusually heavy non-bag traffic in that
+window could in principle evict the earliest-queued (and thus race-triggering)
+bag before meta arrives.
 
 **Reading contents + enchants.** For each bag slot holding an item id, the item
 is categorized by *its own* `BagType` (from `bagTypeTable`), so a lower-tier

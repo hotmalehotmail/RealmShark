@@ -127,7 +127,7 @@ Tracing one incoming packet (say a `DamagePacket`) from wire to render:
    ▼
  handlers.onBatch(batch)  →  webContents.send(IPC.packetBatch, batch)
    │                                                  index.ts:247
-   ▼   preload: window.overlay.onPacketBatch(cb)      preload/index.ts:21
+   ▼   preload: window.overlay.onPacketBatch(cb)      preload/index.ts:63
  ── TIER 3: renderer (React) ────────────────────────────────────────────────
    ▼
  DpsTracker.ingest(batch)   switch(env.type){ … }     DpsTracker.ts:82
@@ -330,7 +330,11 @@ pickupable items). `lootBagObjectTypes` is the complement: every `Class=Bag`
 **entity** objectType for the tracked colors (regular *and* boosted variants),
 mapped to its BagType — the set the Loot panel's drop tracker watches for in
 `UpdatePacket.newObjects` to read a dropped bag's contents (its
-`INVENTORY_0..7` items + `UNIQUE_DATA_STRING` enchants). `lootBagIcons` is a
+`INVENTORY_0..7` items + `UNIQUE_DATA_STRING` enchants). This always includes
+each tracked color's `findBagIconObjectType` result too (soak #144) — on real
+assets the `Class=Bag`+own-`BagType` scan alone finds nothing (soak #113), so
+without this fallback the drop tracker had no entity to watch for at all.
+`lootBagIcons` is a
 single representative bag entity per color — the sprite the Loot panel renders
 as a category header, resolved through the same `objectType → atlas rect` path
 as any other sprite (`sprites/Sprite.tsx`, no special-casing). `itemNames` is

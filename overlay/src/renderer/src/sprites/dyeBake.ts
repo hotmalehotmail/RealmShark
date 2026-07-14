@@ -13,6 +13,8 @@
  * with, and docs/dyes-and-textiles.md for the full mask/shade model.
  */
 
+import { dilateSilhouette, imageDataToCanvas } from './outline'
+
 // A textile (cloth) dye's woven pattern renders finer than the low-res body
 // sprite - its weave is smaller than a body pixel. So for textile dyes we
 // subdivide each body pixel this many times and tile the pattern in that finer
@@ -35,15 +37,6 @@ export function regionImageData(
   ctx.imageSmoothingEnabled = false
   ctx.drawImage(img, x, y, w, h, 0, 0, w, h)
   return ctx.getImageData(0, 0, w, h)
-}
-
-function imageDataToCanvas(data: ImageData): HTMLCanvasElement {
-  const c = document.createElement('canvas')
-  c.width = data.width
-  c.height = data.height
-  const ctx = c.getContext('2d')
-  ctx?.putImageData(data, 0, 0)
-  return c
 }
 
 function cropToCanvas(
@@ -173,8 +166,25 @@ export function bakeDyedSprite(params: {
   const accessoryAnimated = accessory?.kind === 'textile' && accessory.motion != null
 
   const SUB = clothing?.kind === 'textile' || accessory?.kind === 'textile' ? TEXTILE_SUB : 1
-  const ow = Math.max(w, mw) * SUB
-  const oh = Math.max(h, mh) * SUB
+  // Outline thickness in this bake's own pixel grid: always exactly 1
+  // composite pixel, independent of the SUB texture subdivision. renderDyeFrame
+  // scales this whole accumulator (base + moving layers) up to the caller's
+  // display size every frame via a single canvas draw, so whatever thickness
+  // is baked in here gets magnified by that same display-size/composite-size
+  // ratio - using SUB (multiple composite pixels) made the line several times
+  // too thick at typical display sizes. This can't do SpriteProvider.tsx's
+  // getSprite/getDyedSprite trick of scaling to display size *before*
+  // outlining (that needs a pixel readback, which the per-frame path here
+  // deliberately avoids - see the file header), so 1 composite pixel is the
+  // closest approximation to a thin on-screen line without one.
+  // The layers below (regionSelector/regionShade/tile) are sized and written
+  // into this same padded (cw+2t)×(ch+2t) grid so they stay aligned with the
+  // base once padding shifts its content - see docs/dyes-and-textiles.md.
+  const thickness = 1
+  const cw = Math.max(w, mw) * SUB
+  const ch = Math.max(h, mh) * SUB
+  const ow = cw + thickness * 2
+  const oh = ch + thickness * 2
 
   const baseOut = new ImageData(ow, oh)
   const clothingSelector = clothingAnimated ? new ImageData(ow, oh) : null
@@ -182,19 +192,19 @@ export function bakeDyedSprite(params: {
   const accessorySelector = accessoryAnimated ? new ImageData(ow, oh) : null
   const accessoryShade = accessoryAnimated ? new ImageData(ow, oh) : null
 
-  for (let py = 0; py < oh; py++) {
-    const byp = Math.min(h - 1, Math.floor((py * h) / oh))
-    const myp = Math.min(mh - 1, Math.floor((py * mh) / oh))
-    for (let px = 0; px < ow; px++) {
-      const oi = (py * ow + px) * 4
-      const bxp = Math.min(w - 1, Math.floor((px * w) / ow))
+  for (let py = 0; py < ch; py++) {
+    const byp = Math.min(h - 1, Math.floor((py * h) / ch))
+    const myp = Math.min(mh - 1, Math.floor((py * mh) / ch))
+    for (let px = 0; px < cw; px++) {
+      const oi = ((py + thickness) * ow + (px + thickness)) * 4
+      const bxp = Math.min(w - 1, Math.floor((px * w) / cw))
       const bi = (byp * w + bxp) * 4
       const baseA = base.data[bi + 3]
 
       let region: 'clothing' | 'accessory' | null = null
       let shade = 0
       if (baseA > 0) {
-        const mxp = Math.min(mw - 1, Math.floor((px * mw) / ow))
+        const mxp = Math.min(mw - 1, Math.floor((px * mw) / cw))
         const mi = (myp * mw + mxp) * 4
         const mr = mask.data[mi]
         const mg = mask.data[mi + 1]
@@ -250,6 +260,11 @@ export function bakeDyedSprite(params: {
       baseOut.data[oi + 3] = baseA
     }
   }
+
+  // Bake the silhouette outline directly into baseOut, into the transparent
+  // padding reserved above - never recomputed per frame (renderDyeFrame just
+  // draws this baked base + the live motion layers on top every frame).
+  dilateSilhouette(baseOut, thickness)
 
   const layers: DyeLayerBake[] = []
   if (

@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import type { PanelInstance, PanelSize } from '../../../shared/panels'
 import { Button } from '../ui/Button'
 import { anchorFromPointer, panelStyle, type SizePx } from './anchor'
@@ -6,6 +6,9 @@ import { startDragPerf } from './dragPerf'
 import type { PanelSpec } from './registry'
 
 const SIZE_CYCLE: Record<PanelSize, PanelSize> = { sm: 'md', md: 'lg', lg: 'sm' }
+
+/** Toggled on <html> for the duration of any panel drag - see main.css. */
+const DRAGGING_CLASS = 'panel-dragging'
 
 interface PanelFrameProps {
   panel: PanelInstance
@@ -32,31 +35,66 @@ function PanelFrame({
   const Content = spec.component
   const draggingRef = useRef(false)
   const frameRef = useRef<HTMLDivElement>(null)
+  // Set to the in-flight drag's handleUp while dragging, so an external abort
+  // (see the effect below) can end it the same way a mouseup would.
+  const endDragRef = useRef<(() => void) | null>(null)
+
+  // The preload-side packet-suspend failsafe (interactive-change=false /
+  // overlay-detach) guards against a drag whose mouseup never reaches the
+  // renderer (hotkey toggle mid-drag can setIgnoreMouseEvents before the
+  // mouseup lands; the game closing mid-drag is the detach case). Mirror it
+  // here for the renderer-side visual drag state - otherwise `panel-dragging`
+  // would stay on <html> (blur/shadow suspended at rest) and the dragged
+  // frame would keep a stale transform, both self-healing only on the next
+  // completed drag.
+  useEffect(() => {
+    const offInteractive = window.overlay.onInteractiveChange((stillInteractive) => {
+      if (!stillInteractive) endDragRef.current?.()
+    })
+    const offDetach = window.overlay.onOverlayDetach(() => endDragRef.current?.())
+    return () => {
+      offInteractive()
+      offDetach()
+    }
+  }, [])
 
   const startDrag = (e: React.MouseEvent): void => {
     e.preventDefault()
     onBringToTop(panel.id)
     draggingRef.current = true
 
-    // TEMPORARY DIAGNOSTIC (drag-perf) — measures per-frame cadence for this
-    // drag; Shift-drag also suspends panel blur/shadow as an A/B. See dragPerf.ts.
-    const perf = startDragPerf(e.shiftKey)
+    const perf = startDragPerf()
+
+    // Suspend every panel's blur/shadow and the packet-stream content updates
+    // (DPS/loot/entity-registry re-renders) for the drag's duration - both
+    // compete with the drag for the main thread. Restored/flushed in handleUp.
+    document.documentElement.classList.add(DRAGGING_CLASS)
+    window.overlay.setPacketBatchSuspended(true)
 
     // Keep the cursor over the same point of the panel it grabbed, instead
     // of snapping the panel's corner to wherever the cursor happens to be.
     const rect = frameRef.current!.getBoundingClientRect()
     const grabOffsetX = e.clientX - rect.left
     const grabOffsetY = e.clientY - rect.top
+    frameRef.current!.style.willChange = 'transform'
 
-    // Drag imperatively: write the moved panel's position straight to the DOM on
-    // each mousemove rather than round-tripping through React state. A state
-    // update per pointer event would re-render PanelCanvas and every panel's
-    // (sprite-rendering) content ~60-125x/sec, which is what made dragging lag.
-    // The position is committed to state once, on drop (handleUp) - that
-    // persists the move and triggers PanelCanvas's debounced layout save. During
-    // the move phase PanelCanvas never re-renders, so these direct writes are
-    // safe from being clobbered by a reconcile.
+    // Drag imperatively (#120): write the moved panel's position straight to
+    // the DOM on each mousemove rather than round-tripping through React
+    // state, which would re-render PanelCanvas and every panel's (sprite-
+    // rendering) content ~60-125x/sec. On top of that, move the panel with a
+    // `transform` instead of rewriting `left`/`top` every frame - transform
+    // is compositor-only (no layout/repaint), whereas left/top forces a full
+    // layout + repaint each frame even with blur/shadow suspended. `left`/
+    // `top` stay at their rest values for the whole drag; only `transform`
+    // (position) and, when a clamped edge actually changes them, `width`/
+    // `height` are written per frame. The position is committed to state
+    // once, on drop (handleUp) - that persists the move and triggers
+    // PanelCanvas's debounced layout save. During the move phase PanelCanvas
+    // never re-renders, so these direct writes are safe from being clobbered
+    // by a reconcile.
     let last = { x: panel.anchor.x, y: panel.anchor.y }
+    let lastWidth: string | undefined
+    let lastHeight: string | undefined
     const handleMove = (moveEvent: MouseEvent): void => {
       const el = frameRef.current
       if (!draggingRef.current || !el) return
@@ -70,18 +108,61 @@ function PanelFrame({
         spec.sizes[panel.size],
         canvasSize
       )
-      el.style.left = String(s.left)
-      el.style.top = String(s.top)
-      el.style.width = typeof s.width === 'number' ? `${s.width}px` : String(s.width ?? '')
-      el.style.height = typeof s.height === 'number' ? `${s.height}px` : String(s.height ?? '')
+      // panelStyle's declared type is CSSProperties (string | number for
+      // width/height, even though it only ever returns numbers) - narrow
+      // rather than assert, so a future string/percentage return can't
+      // silently turn into `NaNpx`.
+      const width = typeof s.width === 'number' ? `${s.width}px` : String(s.width ?? '')
+      const height = typeof s.height === 'number' ? `${s.height}px` : String(s.height ?? '')
+      if (width !== lastWidth) {
+        el.style.width = width
+        lastWidth = width
+      }
+      if (height !== lastHeight) {
+        el.style.height = height
+        lastHeight = height
+      }
+      const deltaX = ((last.x - panel.anchor.x) / 100) * canvasSize.width
+      const deltaY = ((last.y - panel.anchor.y) / 100) * canvasSize.height
+      el.style.transform = `translate3d(${deltaX}px, ${deltaY}px, 0)`
     }
     const handleUp = (): void => {
+      // A real mouseup and the interactive-change/detach abort are meant to
+      // be mutually exclusive, but guard idempotency anyway: a stray second
+      // invocation (of either) becomes a clean no-op instead of double-
+      // logging drag-perf or double-committing the drop position.
+      if (!draggingRef.current) return
       draggingRef.current = false
+      endDragRef.current = null
       window.removeEventListener('mousemove', handleMove)
       window.removeEventListener('mouseup', handleUp)
-      perf.stop() // TEMPORARY DIAGNOSTIC (drag-perf)
+      const el = frameRef.current
+      if (el) {
+        // Assert the committed rest position imperatively (matching what
+        // `onDrag`'s state update will render) in the same synchronous block
+        // as clearing the transform, rather than relying on React flushing
+        // that state update before the next paint - true today for a
+        // discrete native mouseup handler, but asserting it directly removes
+        // the dependency on that timing outright.
+        const finalStyle = panelStyle(
+          { ...panel.anchor, x: last.x, y: last.y },
+          spec.sizes[panel.size],
+          canvasSize
+        )
+        el.style.left = String(finalStyle.left)
+        el.style.top = String(finalStyle.top)
+        el.style.transform = ''
+        el.style.willChange = ''
+      }
+      document.documentElement.classList.remove(DRAGGING_CLASS)
+      window.overlay.setPacketBatchSuspended(false)
+      perf.stop()
       onDrag(panel.id, last.x, last.y)
     }
+
+    // Lets the interactive-change/detach effect above end this drag exactly
+    // as a mouseup would (same cleanup, commits the last known position).
+    endDragRef.current = handleUp
 
     window.addEventListener('mousemove', handleMove)
     window.addEventListener('mouseup', handleUp)

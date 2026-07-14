@@ -67,15 +67,15 @@ body,
 }
 
 /*
- * TEMPORARY DIAGNOSTIC (drag-perf) — remove with dragPerf.ts once the drag-lag
- * root cause is confirmed. Holding Shift while dragging a panel toggles this
- * class on <html> for the drag's duration, stripping every panel's
- * backdrop-filter + shadow. Since hardware acceleration is off (overlay
- * transparency), those are recomposited on the CPU each frame a panel moves;
- * if a Shift-drag is visibly smoother (and its [drag-perf] frame stats better),
- * software-composited backdrop blur is confirmed as the bottleneck.
+ * While any panel is being dragged, every panel's blur+shadow is suspended
+ * (restored on drop) - toggled on <html> by PanelFrame's drag handlers.
+ * Hardware acceleration is off (required for overlay transparency - Electron
+ * #25153), so backdrop-filter + box-shadow are recomposited on the CPU every
+ * frame a panel moves; measurements (issue #132) showed suspending them
+ * roughly halves frame time during a drag. Legibility over the game at rest
+ * is unaffected - this only applies while `panel-dragging` is set.
  */
-html.diag-suspend-blur [data-panel-frame] {
+html.panel-dragging [data-panel-frame] {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
   box-shadow: none !important;

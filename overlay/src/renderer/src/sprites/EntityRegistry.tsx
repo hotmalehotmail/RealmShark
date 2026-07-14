@@ -53,11 +53,14 @@ interface EntityRecord {
  * record rather than overwriting it. Also resolves the local player's objectId
  * from CreateSuccessPacket (one-shot, at map load) and EnemyHitPacket.mainID
  * (emitted on every one of our hits, so it re-establishes identity mid-instance).
- * Records are removed when their objectId appears in UpdatePacket.drops (the
- * entity left view / the instance), so the roster tracks players leaving as well
- * as joining - except objectType, which is kept separately and survives a drop,
- * so a panel still referencing a since-left objectId (e.g. the DPS panel showing
- * a just-killed enemy for its rolling damage window) doesn't lose its sprite.
+ * Records are removed from `recordsRef` when their objectId appears in
+ * UpdatePacket.drops (the entity left view / the instance), so the live roster
+ * (`characters()`) tracks players leaving as well as joining - but a full copy
+ * of every record is also kept in `lastRecordRef`, which is NEVER pruned on
+ * drop, so a panel still referencing a since-left objectId (e.g. the DPS panel
+ * showing a player's or enemy's last-seen loadout/sprite after they leave the
+ * instance or a just-killed enemy for its rolling damage window) keeps
+ * resolving their last-known sprite/gear instead of going blank.
  * Kept in refs (no re-render per packet); consumers read it during their own
  * render cycle (e.g. a polling interval). Cleared on map change / overlay detach.
  */
@@ -67,12 +70,9 @@ export function EntityRegistryProvider({
   children: React.ReactNode
 }): React.JSX.Element {
   const recordsRef = useRef<Map<number, EntityRecord>>(new Map())
-  // objectType survives a drop (unlike the rest of the record), so a panel that
-  // keeps referencing an objectId after it leaves view - e.g. the DPS panel,
-  // which shows a killed/out-of-view enemy for its rolling damage window - can
-  // still resolve a sprite instead of going blank. Cleared only on a full reset
-  // (instance change / overlay detach), same as recordsRef.
-  const lastObjectTypeRef = useRef<Map<number, number>>(new Map())
+  // Last-known full record per objectId, updated in lockstep with recordsRef
+  // but never pruned on drop - see the doc comment above.
+  const lastRecordRef = useRef<Map<number, EntityRecord>>(new Map())
   const localPlayerRef = useRef<number | null>(null)
   const listenersRef = useRef<Set<() => void>>(new Set())
   const notifyPending = useRef(false)
@@ -97,7 +97,7 @@ export function EntityRegistryProvider({
 
     const clear = (): void => {
       recordsRef.current.clear()
-      lastObjectTypeRef.current.clear()
+      lastRecordRef.current.clear()
       localPlayerRef.current = null
       scheduleNotify()
     }
@@ -116,11 +116,13 @@ export function EntityRegistryProvider({
       let rec = recordsRef.current.get(objectId)
       if (!rec) {
         if (objectType == null) return false
-        rec = { objectType }
-        lastObjectTypeRef.current.set(objectId, objectType)
+        // Re-seed from the last-known record (e.g. a player who left and
+        // rejoined) rather than starting blank, so a partial first packet
+        // (e.g. NAME_STAT only) doesn't transiently wipe known equipment.
+        const prior = lastRecordRef.current.get(objectId)
+        rec = prior ? { ...prior, objectType } : { objectType }
       } else if (objectType != null) {
         rec.objectType = objectType
-        lastObjectTypeRef.current.set(objectId, objectType)
       }
       let changed = false
       for (const s of stats ?? []) {
@@ -159,6 +161,7 @@ export function EntityRegistryProvider({
         }
       }
       recordsRef.current.set(objectId, rec)
+      lastRecordRef.current.set(objectId, rec)
       return changed
     }
 
@@ -171,9 +174,13 @@ export function EntityRegistryProvider({
             if (obj?.status)
               changed = mergeStats(obj.status.objectId, obj.objectType, obj.status.stats) || changed
           }
-          // Objects that have left view/the instance: drop their records so the
-          // roster (e.g. the Instance panel) reflects players leaving, not just
-          // joining. If the local player themselves drops, forget their id too.
+          // Objects that have left view/the instance: drop their live records so
+          // the roster (e.g. the Instance panel) reflects players leaving, not
+          // just joining - lastRecordRef is deliberately left untouched (see the
+          // provider's doc comment) so a panel like the DPS list that keeps
+          // referencing this objectId still resolves their last-seen gear/sprite
+          // instead of going blank. If the local player themselves drops, forget
+          // their id too.
           for (const droppedId of data?.drops ?? []) {
             if (recordsRef.current.delete(droppedId)) {
               if (localPlayerRef.current === droppedId) localPlayerRef.current = null
@@ -213,48 +220,50 @@ export function EntityRegistryProvider({
     }
   }, [])
 
+  // objectType/skin/equipment/etc. all read lastRecordRef rather than
+  // recordsRef: while an objectId is live the two maps hold the very same
+  // record object (see mergeStats), and once it's dropped only lastRecordRef
+  // still has it - which is exactly what lets a panel referencing a
+  // since-left objectId keep resolving its last-known sprite/gear/name (see
+  // the provider's doc comment) instead of going blank.
   const objectType = useCallback(
     (objectId: number | null | undefined): number | null =>
-      objectId == null
-        ? null
-        : (recordsRef.current.get(objectId)?.objectType ??
-          lastObjectTypeRef.current.get(objectId) ??
-          null),
+      objectId == null ? null : (lastRecordRef.current.get(objectId)?.objectType ?? null),
     []
   )
   const skin = useCallback(
     (objectId: number | null | undefined): number | null =>
-      objectId == null ? null : (recordsRef.current.get(objectId)?.skin ?? null),
+      objectId == null ? null : (lastRecordRef.current.get(objectId)?.skin ?? null),
     []
   )
   const equipment = useCallback(
     (objectId: number | null | undefined): number[] | null =>
-      objectId == null ? null : (recordsRef.current.get(objectId)?.equipment ?? null),
+      objectId == null ? null : (lastRecordRef.current.get(objectId)?.equipment ?? null),
     []
   )
   const equipmentRarity = useCallback(
     (objectId: number | null | undefined): number[] | null =>
-      objectId == null ? null : (recordsRef.current.get(objectId)?.equipmentRarity ?? null),
+      objectId == null ? null : (lastRecordRef.current.get(objectId)?.equipmentRarity ?? null),
     []
   )
   const name = useCallback(
     (objectId: number | null | undefined): string | null =>
-      objectId == null ? null : (recordsRef.current.get(objectId)?.name ?? null),
+      objectId == null ? null : (lastRecordRef.current.get(objectId)?.name ?? null),
     []
   )
   const clothingDye = useCallback(
     (objectId: number | null | undefined): number | null =>
-      objectId == null ? null : (recordsRef.current.get(objectId)?.clothingDye ?? null),
+      objectId == null ? null : (lastRecordRef.current.get(objectId)?.clothingDye ?? null),
     []
   )
   const accessoryDye = useCallback(
     (objectId: number | null | undefined): number | null =>
-      objectId == null ? null : (recordsRef.current.get(objectId)?.accessoryDye ?? null),
+      objectId == null ? null : (lastRecordRef.current.get(objectId)?.accessoryDye ?? null),
     []
   )
   const enchantSlots = useCallback(
     (objectId: number | null | undefined): string[] | null =>
-      objectId == null ? null : (recordsRef.current.get(objectId)?.enchantSlots ?? null),
+      objectId == null ? null : (lastRecordRef.current.get(objectId)?.enchantSlots ?? null),
     []
   )
   const characters = useCallback((): number[] => {

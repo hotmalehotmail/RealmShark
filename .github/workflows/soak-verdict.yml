@@ -18,7 +18,7 @@ on:
 permissions:
   contents: read
   issues: write # comment on / close the soak issue
-  pull-requests: write # PR list + thaw arming (the promotion create/merge use MERGE_PAT)
+  pull-requests: write # PR list + thaw arming (the promotion create/merge use the bot App token)
   statuses: write # stamp review-verdict on the promotion PR
 
 jobs:
@@ -26,10 +26,21 @@ jobs:
     if: github.event.label.name == 'soak:pass'
     runs-on: ubuntu-latest
     steps:
+      # Short-lived craig-the-intern-bot installation token — a non-GITHUB_TOKEN "member identity"
+      # so the promotion PR isn't parked by the external-contributor gate and its merge fires
+      # post-merge (cut-latest), WITHOUT a long-lived personal PAT. continue-on-error so a mint
+      # failure reaches the LOUD in-issue comment in the promote step below.
+      - name: Mint bot app token
+        id: bot-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
       - name: Promote staging -> bridge (PR + stamped verdict + auto-merge)
         env:
           GH_TOKEN: ${{ github.token }}
-          MERGE_PAT: ${{ secrets.MERGE_PAT }}
+          BOT_TOKEN: ${{ steps.bot-token.outputs.token }}
           REPO: ${{ github.repository }}
           ISSUE: ${{ github.event.issue.number }}
         run: |
@@ -39,27 +50,22 @@ jobs:
             echo "Issue #$ISSUE is not a soak issue — ignoring."
             exit 0
           fi
-          # --- MERGE_PAT preflight (LOUD). The promotion PR + auto-merge run as MERGE_PAT (a
-          #     member identity): a GITHUB_TOKEN-authored PR is parked by the external-contributor
-          #     approval gate, and a GITHUB_TOKEN merge won't fire post-merge (cut-latest). If the
-          #     PAT is missing/expired we FAIL the run — never silently fall back to github.token
-          #     (which would re-break both, invisibly). An expired PAT must be loud.
-          if [ -z "${MERGE_PAT:-}" ]; then
-            gh issue comment "$ISSUE" --repo "$REPO" --body "❌ \`soak:pass\` can't promote: the \`MERGE_PAT\` secret is missing. Add a fine-grained PAT (this repo · Contents + Pull requests: read/write) as \`MERGE_PAT\`, then re-apply the label." || true
-            echo "::error::MERGE_PAT is empty/unset — the promotion needs it."
+          # --- Bot app token preflight (LOUD). The promotion PR + auto-merge run as the
+          #     craig-the-intern-bot App (a member identity): a GITHUB_TOKEN-authored PR is parked
+          #     by the external-contributor approval gate, and a GITHUB_TOKEN merge won't fire
+          #     post-merge (cut-latest). If the token failed to mint we FAIL the run — never
+          #     silently fall back to github.token (which would re-break both, invisibly).
+          if [ -z "${BOT_TOKEN:-}" ]; then
+            gh issue comment "$ISSUE" --repo "$REPO" --body "❌ \`soak:pass\` can't promote: the bot App token failed to mint. Check the \`BOT_APP_ID\` / \`BOT_APP_PRIVATE_KEY\` secrets and that the App is installed on this repo (Contents + Pull requests: read/write), then re-apply the label." || true
+            echo "::error::Bot app token is empty — the craig-the-intern-bot App token failed to mint."
             exit 1
           fi
-          if ! GH_TOKEN="$MERGE_PAT" gh api "repos/$REPO/pulls?per_page=1" >/dev/null 2>/tmp/pat_err; then
-            gh issue comment "$ISSUE" --repo "$REPO" --body "❌ \`soak:pass\` can't promote: \`MERGE_PAT\` failed authentication (expired, revoked, or missing Contents/Pull-requests access). Rotate it and re-apply the label — details in the workflow run log." || true
-            echo "::error::MERGE_PAT preflight FAILED (expired/revoked/insufficient scope): $(tr '\n' ' ' </tmp/pat_err)"
-            exit 1
-          fi
-          echo "MERGE_PAT preflight OK."
+          echo "Bot app token preflight OK."
           # Open the promotion PR (or reuse an existing one). staging -> bridge, authored by the
-          # PAT so ci fires naturally (no dispatch) and the external-contributor gate doesn't apply.
+          # App so ci fires naturally (no dispatch) and the external-contributor gate doesn't apply.
           # Capture stderr so a genuine failure isn't masked as a benign "already exists"/"no diff".
           NOTHING_TO_PROMOTE=0
-          if ! ERR="$(GH_TOKEN="$MERGE_PAT" gh pr create --repo "$REPO" --base bridge --head staging \
+          if ! ERR="$(GH_TOKEN="$BOT_TOKEN" gh pr create --repo "$REPO" --base bridge --head staging \
                 --title "Promote staging -> bridge (soak #$ISSUE passed)" \
                 --body "Auto-opened by \`soak:pass\` on #$ISSUE. \`review-verdict\` is stamped from the soak approval; the agent review is skipped on staging->bridge promotions (review.yml). \`ci\` runs on this PR and, with workflow parity, gates the merge. A **latest** release auto-cuts when this lands." \
                 2>&1)"; then
@@ -97,12 +103,12 @@ jobs:
           # the (skipped) agent re-review. ci + parity still have to pass (dispatched next).
           gh api -X POST "repos/$REPO/statuses/$SHA" \
             -f state=success -f context=review-verdict -f description="soak:pass on #$ISSUE"
-          # Arm native auto-merge with the PAT so the eventual merge carries a member identity
+          # Arm native auto-merge with the App token so the eventual merge carries a member identity
           # -> pull_request:closed fires -> post-merge cut-latest runs. (--merge preserves
           # per-commit history + Closes #N.) Branch protection holds it until ci + review-verdict
-          # are green; ci runs naturally on the PAT-authored PR, so no dispatch is needed.
-          if ! MERR="$(GH_TOKEN="$MERGE_PAT" gh pr merge "$NUM" --repo "$REPO" --merge --auto 2>&1)"; then
-            gh issue comment "$ISSUE" --repo "$REPO" --body "⚠️ Promotion PR #$NUM is open and \`review-verdict\` is stamped, but arming auto-merge FAILED — merge #$NUM manually, or rotate \`MERGE_PAT\` if it expired. Error is in the run log." || true
+          # are green; ci runs naturally on the App-authored PR, so no dispatch is needed.
+          if ! MERR="$(GH_TOKEN="$BOT_TOKEN" gh pr merge "$NUM" --repo "$REPO" --merge --auto 2>&1)"; then
+            gh issue comment "$ISSUE" --repo "$REPO" --body "⚠️ Promotion PR #$NUM is open and \`review-verdict\` is stamped, but arming auto-merge FAILED — merge #$NUM manually, or check the bot App token (\`BOT_APP_ID\` / \`BOT_APP_PRIVATE_KEY\` / install) if minting failed. Error is in the run log." || true
             echo "::error::Failed to arm auto-merge on promotion #$NUM: $MERR"
             exit 1
           fi

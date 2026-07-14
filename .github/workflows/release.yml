@@ -56,33 +56,45 @@ jobs:
           LAST_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
           if [ -n "$LAST_TAG" ]; then RANGE="$LAST_TAG..HEAD"; else RANGE="HEAD"; fi
           echo "last_tag=${LAST_TAG:-(first release)}" >> "$GITHUB_OUTPUT"
-          # One bullet per non-merge commit subject -> the captain's raw material.
-          git log --no-merges --pretty=format:'- %s' "$RANGE" > "$GITHUB_WORKSPACE/commits.txt" || true
-          printf '\n' >> "$GITHUB_WORKSPACE/commits.txt"
-          # `grep -c .` exits non-zero on an empty file, so `|| true` (not `|| echo 0`,
-          # which would print a second 0 next to grep's own).
-          N="$(grep -c . "$GITHUB_WORKSPACE/commits.txt" || true)"
-          echo "Collected ${N:-0} commit(s) in range $RANGE."
-          # PR list for the SOAK issue (§9.1): the content PRs in THIS build not yet
-          # promoted to the stable branch (`bridge`) — i.e. what this soak is validating.
-          # NOT reused from commits.txt's git-describe range: `gh release create` tags
-          # the default branch (`bridge`) by default, so alpha tags DON'T advance as
-          # `staging` accumulates a soak's PRs. A describe-based boundary then sticks at
-          # the last promotion reachable from `staging` and re-lists every prior soak's
-          # PRs (the bug this fixes). `bridge` only advances on a promotion (a passed
-          # soak), so `origin/bridge..HEAD` is exactly this soak's own, un-shipped content.
-          # Squash-merged PRs carry "(#N)"; merge syncs/promotions are dropped by
-          # --no-merges. Fall back to the tag range only if `bridge` can't be fetched.
+
+          # PR_RANGE = this build's own un-shipped content = `origin/bridge..HEAD`. It is NOT the
+          # git-describe range: `gh release create` tags the default branch (`bridge`), so alpha
+          # tags DON'T advance as `staging` accumulates a soak's PRs. A describe boundary then
+          # sticks at the last promotion (in practice it walks all the way back to an old tag like
+          # v0.15.0) and re-lists EVERY prior soak's content. `bridge` only advances on a promotion,
+          # so `origin/bridge..HEAD` is exactly this soak's own PRs. (#134 fixed this for the PR
+          # list; feeding the SAME range to the notes captain below is the other half of that bug.)
+          # Explicit refspec so refs/remotes/origin/bridge is guaranteed to exist: checkout@v4 uses
+          # a narrow refspec, so a bare `git fetch origin bridge` may only move FETCH_HEAD, leaving
+          # `origin/bridge` a "bad revision" that would silently fall back to the buggy tag range.
           PR_RANGE="$RANGE"
-          # Explicit refspec so refs/remotes/origin/bridge is guaranteed to exist:
-          # checkout@v4 uses a narrow refspec, so a bare `git fetch origin bridge` may
-          # only move FETCH_HEAD, leaving `origin/bridge` a "bad revision" — which here
-          # would silently fall back to the buggy tag range. Same guard as ci.yml's
-          # workflow-parity job (which documents this exact checkout@v4 gotcha).
           if git fetch --quiet --no-tags origin '+refs/heads/bridge:refs/remotes/origin/bridge' 2>/dev/null \
              && git rev-parse --verify --quiet origin/bridge >/dev/null; then
             PR_RANGE="origin/bridge..HEAD"
           fi
+
+          # Notes range for the captain. An ALPHA (soak, cut from `staging`) must describe only
+          # this soak's un-shipped content — the same `origin/bridge..HEAD` as the PR list — NOT
+          # every soak since the last promotion. A BETA (cut from `bridge` on promotion) ships
+          # everything since the last beta, where `origin/bridge..HEAD` is empty, so it uses the
+          # tag range. BASELINE is just the human phrasing handed to the captain.
+          if [ "${{ inputs.channel }}" = "alpha" ]; then
+            NOTES_RANGE="$PR_RANGE"; BASELINE="the last stable release"
+          else
+            NOTES_RANGE="$RANGE"; BASELINE="${LAST_TAG:-the first release}"
+          fi
+          echo "baseline=$BASELINE" >> "$GITHUB_OUTPUT"
+
+          # One bullet per non-merge commit subject in the notes range -> the captain's raw material.
+          git log --no-merges --pretty=format:'- %s' "$NOTES_RANGE" > "$GITHUB_WORKSPACE/commits.txt" || true
+          printf '\n' >> "$GITHUB_WORKSPACE/commits.txt"
+          # `grep -c .` exits non-zero on an empty file, so `|| true` (not `|| echo 0`,
+          # which would print a second 0 next to grep's own).
+          N="$(grep -c . "$GITHUB_WORKSPACE/commits.txt" || true)"
+          echo "Collected ${N:-0} commit(s) in notes range $NOTES_RANGE (PR range $PR_RANGE)."
+
+          # PR list for the SOAK issue (§9.1): this build's content PRs. Squash-merged PRs carry
+          # "(#N)"; merge syncs/promotions drop out via --no-merges.
           git log --no-merges --pretty=format:'- %s' "$PR_RANGE" 2>/dev/null \
             | grep -E '\(#[0-9]+\)' > "$GITHUB_WORKSPACE/pr-list.md" || true
           [ -s "$GITHUB_WORKSPACE/pr-list.md" ] || echo "_(no pull requests in this build)_" > "$GITHUB_WORKSPACE/pr-list.md"
@@ -104,7 +116,7 @@ jobs:
           prompt: |
             Draft concise, user-facing release notes in GitHub-flavored markdown for the
             Thessal overlay "${{ inputs.channel }}" release, covering changes since
-            ${{ steps.commits.outputs.last_tag }}.
+            ${{ steps.commits.outputs.baseline }}.
 
             The raw Conventional Commits are in commits.txt (read it). Rewrite them into
             short human-readable bullets grouped under **Features** / **Fixes** / **Other**

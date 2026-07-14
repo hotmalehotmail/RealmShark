@@ -495,18 +495,19 @@ checks went green.
 - **Gate.** Merge only if **all** hold: both `ci` job contexts = `success`, the
   `review-verdict` context = `success`, no `agent:needs-human` label present, **and** a
   `session-done` marker exists for the PR's current head (§7.2).
-- **Action.** `gh pr merge {n} --squash --auto` using **`MERGE_PAT`** (the maintainer's
-  fine-grained PAT), *not* `GITHUB_TOKEN`. `--auto` hands off to *native* auto-merge, so
-  branch protection does the final "wait for green" — the job just arms it. The PAT is
-  required because the merge **must** trigger downstream: a `GITHUB_TOKEN` merge is swallowed
-  by the recursion guard, so `post-merge.yml` (`recut-alpha`) would never fire on a soak-fix
-  merge. A **loud preflight** validates the PAT and fails the run on an expired/missing token
-  rather than silently arming with `GITHUB_TOKEN`.
+- **Action.** `gh pr merge {n} --squash --auto` using a **`craig-the-intern-bot` App
+  installation token** (minted in-job by `actions/create-github-app-token` from the
+  `BOT_APP_ID` / `BOT_APP_PRIVATE_KEY` secrets), *not* `GITHUB_TOKEN`. `--auto` hands off to
+  *native* auto-merge, so branch protection does the final "wait for green" — the job just
+  arms it. A non-`GITHUB_TOKEN` member identity is required because the merge **must** trigger
+  downstream: a `GITHUB_TOKEN` merge is swallowed by the recursion guard, so `post-merge.yml`
+  (`recut-alpha`) would never fire on a soak-fix merge. A **loud preflight** fails the run if
+  the App token failed to mint rather than silently arming with `GITHUB_TOKEN`.
 - **On verdict = failure** it does nothing; §6 owns that path.
 - **On conflict (`DIRTY`)** it does not merge and does nothing further — arming is impossible on a DIRTY PR, and `conflict-watch.yml` owns the rebase re-fire (§6.5).
 - **Prerequisites.** Enable the repo's **"Allow auto-merge"** setting (a repo toggle,
-  not a token). The arming itself uses **`MERGE_PAT`** (see 9.3) so the merge fires
-  `post-merge`.
+  not a token). The arming itself uses the **`craig-the-intern-bot` App token** (see 9.3) so
+  the merge fires `post-merge`.
 
 ### 7.1 · The sweep — a level-triggered safety net (`sweep.yml`)
 The gatekeeper is **edge-triggered** (it acts on ci/review *completion*), which strands PRs
@@ -521,7 +522,8 @@ agent PR — polling `mergeStateStatus` past the transient `UNKNOWN` first, then
 with a plain `gh pr merge` (**no `--admin`**) so branch protection — crucially `review-verdict`
 — still gates. A fork PR can't obtain `review-verdict` (no secrets on a `pull_request` from a
 fork), so the sweep can never merge one; this depends on `review.yml` staying `on: pull_request`
-(never `pull_request_target`). Same `MERGE_PAT` + loud preflight as the other merge paths.
+(never `pull_request_target`). Same `craig-the-intern-bot` App token + loud preflight as the
+other merge paths.
 The sweep is also the **level-triggered backstop for §6.5**: a `DIRTY` candidate is no longer
 skipped — it's re-fired through the same `.github/scripts/rebase-refire.sh` (same separate
 rebase budget, same staging-SHA dedupe), so a dropped conflict-watch event self-heals within
@@ -593,7 +595,28 @@ non-firing hook degrades to "merges ~45 min late," not "never merges."
 gate + `push`/`synchronize` triggers + synchronize-disarm; ✅ sweep marker gate + crash backstop
 + marker GC. ⏳ live validation of (a)/(b) above on a Routine run.
 
-### 7.3 · Triage gate — a passing review's medium/low findings get a decision
+### 7.2b · Bot identity — the loop acts as `craig-the-intern-bot[bot]`, not a human
+Every automated action in the loop is attributed to the **`craig-the-intern-bot` GitHub App**
+(org-owned under `white-bag`, installed on this repo), split across two mechanisms:
+
+- **Commits** — a sibling **`SessionStart` hook** (`.claude/hooks/session-identity.sh`, registered
+  in the same `.claude/settings.json` as the §7.2 marker hook) points git's author/committer at
+  the App bot's noreply address `304674093+craig-the-intern-bot[bot]@users.noreply.github.com`
+  (GitHub matches the bot user id + slug in that address for attribution). Same **cloud-only guard**
+  as the marker hook — `CLAUDE_CODE_REMOTE=true`, unset in a maintainer's local CLI — so **local
+  commits keep the maintainer's own identity**; only cloud-routine commits become the bot.
+- **Token-driven actions** — merges, the `staging → bridge` promotion PR, and the fix-loop
+  auto-accept marker comment run on a **short-lived App installation token** (minted in-job by
+  `actions/create-github-app-token` from the `BOT_APP_ID` / `BOT_APP_PRIVATE_KEY` secrets), a
+  non-`GITHUB_TOKEN` member identity — see §9.6 for the token ledger and why a member identity is
+  required (recursion guard + external-contributor gate).
+
+This replaces the earlier `MERGE_PAT` (a long-lived personal fine-grained PAT): same member
+identity, but scoped, ~1h-expiry tokens with no rotation toil, and a single coherent bot identity
+across commits *and* the token-driven actions instead of the maintainer's account appearing to
+merge its own agent's PRs.
+
+### 7.3 · Triage gate — a passing review's medium+ findings get a decision (lows are informational)
 
 **Why.** `review-verdict` is a *deterministic* function of the findings: it fails only on a
 **high/critical** finding (plus the `.github` tripwire and the missing-issue-link check).
@@ -604,10 +627,16 @@ first. (`review.yml` is untouched — the workflow-parity guard requires it byte
 default branch — so triage reads its *existing* outputs.)
 
 **Detecting "passed with findings."** The reviewer posts each line-anchored finding as an inline
-review comment (`/pulls/{n}/comments`) at the reviewed head sha. Both the fix loop and the
-gatekeeper count `github-actions[bot]` inline comments whose `commit_id` == the current head.
-(Known gap: a *file-level* finding with no line anchor lives only in the review body, so it isn't
-counted and won't get a triage pass — rare, and never blocking since it's medium/low.)
+review comment (`/pulls/{n}/comments`) at the reviewed head sha, severity-tagged `**[low|medium|
+high|critical]**` in the body. The fix loop, gatekeeper, and sweep all count `github-actions[bot]`
+inline comments whose `commit_id` == the current head **and that are NOT `**[low]**`** — i.e.
+**medium-and-up** only (high/critical already fail the verdict, so on a pass that means "a
+medium"). **`low` findings are informational: posted on the PR for the record, but never triaged
+and never gated** — the reviewer stays comprehensive (its thoroughness is what caught the #129
+`sweep` bypass as a *high*), while nit-level lows don't cost a triage run or hold a merge. All
+three counters apply the identical non-low filter, so a low-only PR is never held waiting for a
+`session-triaged` marker that would never come. (Known gap: a *file-level* finding with no line
+anchor lives only in the review body, so it isn't counted — rare, and never blocking.)
 
 **The loop (`fixloop.yml`).** On `review-verdict = success` with unaddressed findings on the head
 and no `session-triaged` marker for it yet, the fix loop re-fires the agent in **TRIAGE MODE**
@@ -615,8 +644,12 @@ and no `session-triaged` marker for it yet, the fix loop re-fires the agent in *
 the rest — **the agent's call is final** (the chosen Q2 policy). A **separate budget**
 (`MAX_TRIAGE_ROUNDS`, marker `<!-- fixloop:triage -->`) from the fix rounds, so nit-churn can't
 starve real fixes. **Budget spent → auto-accept** (the loop posts the `session-triaged` marker
-itself): medium/low are non-blocking, so they must never freeze a PR — the opposite of the fix
-loop's escalate-on-exhaustion.
+itself, **via the `craig-the-intern-bot` App token** — a `GITHUB_TOKEN`-authored comment is swallowed
+by GitHub's recursion guard and would never wake the gatekeeper's `issue_comment` trigger, stranding
+the PR until the next sweep; observed on #138): medium/low are non-blocking, so they must never freeze a PR — the
+opposite of the fix loop's escalate-on-exhaustion. The TRIAGE MODE prompt also tells the agent to
+address *only* the listed findings in one pass (no extra polishing/refactoring), since every extra
+commit moves the head and re-triggers the whole review+triage cycle.
 
 **The gate + signal.** Triage-complete is a **comment** marker `<!-- session-triaged: <head-sha> -->`
 — posted by the agent when it declines-only (it can post via MCP; a decline changes no code so
@@ -660,8 +693,10 @@ the dispatch itself, not the version bump.
 **Status.** 🟢 Built, incl. the release-notes captain.
 
 - **Release-notes "captain" — built.** A preceding `notes` job runs a Haiku agent
-  (`claude-haiku-4-5`, `CLAUDE_CODE_OAUTH_TOKEN`) over the Conventional Commits since
-  the last tag (`git describe --tags` → `git log`), which writes `release-notes.md`;
+  (`claude-haiku-4-5`, `CLAUDE_CODE_OAUTH_TOKEN`) over this build's Conventional Commits —
+  for an **alpha**, the same `origin/bridge..HEAD` range as the PR list (this soak's
+  un-shipped content, NOT the git-describe range, which walks back to an old tag and re-lists
+  every prior soak — see §9.1); for a **beta**, since the last tag — which writes `release-notes.md`;
   the Windows publish job downloads it and passes `--notes-file`. **Best-effort:**
   every captain step is `continue-on-error` and the publish job falls back to the old
   static note (`"Automated {channel} build from {ref}"`) if no notes were produced, so
@@ -713,7 +748,10 @@ alpha keeps a clean, self-contained verdict record.
 > accumulates a soak's PRs; a tag-based boundary sticks at the last promotion
 > *reachable from `staging`* and re-lists every prior soak's PRs. `bridge` only
 > moves on a promotion (a passed soak), so the branch diff is exactly this soak's
-> own, un-shipped content.
+> own, un-shipped content. The Haiku **release-notes captain draws from this SAME
+> `origin/bridge..HEAD` range for an alpha** (a beta uses the tag range, since
+> `origin/bridge..HEAD` is empty when cut from `bridge`) — so the "What changed"
+> notes and the PR list describe the same build, not every soak since v0.15.0.
 
 ### 9.2 · Verdict — `soak:pass` / `soak:fail`
 Two maintainer-applied labels on the soak issue, read by `on: issues: labeled`
@@ -721,22 +759,23 @@ workflows scoped to issues that carry the `soak` label. Applying a label require
 write/triage permission, so — exactly like kickoff — GitHub guarantees a maintainer;
 no author check needed.
 
-### 9.3 · Pass → promote to `bridge` (PR-based, review-skipped, via `MERGE_PAT`)
+### 9.3 · Pass → promote to `bridge` (PR-based, review-skipped, via the `craig-the-intern-bot` App)
 `soak:pass` promotes **via a PR, not a direct push**. The `soak-verdict.yml` `soak:pass`
 handler:
 
-1. Opens a `staging → bridge` PR ("Promote — soak v<version> passed"), **authored by
-   `MERGE_PAT`** — a fine-grained PAT owned by the maintainer (Contents + Pull requests, this
-   repo only).
+1. Opens a `staging → bridge` PR ("Promote — soak v<version> passed"), **authored by the
+   `craig-the-intern-bot` App token** — a short-lived installation token minted in-job by
+   `actions/create-github-app-token` (Contents + Pull requests, this repo only).
 2. **Stamps `review-verdict = success`** on the PR head SHA (on the built-in `GITHUB_TOKEN`)
    — `soak:pass` *is* the human approval, standing in for a re-review (the same "manually
    stamp the verdict" pattern used for fork PRs under *Cross-cutting: merging outside*).
-3. Enables native auto-merge **with `MERGE_PAT`** (`--merge`, to preserve per-commit history
+3. Enables native auto-merge **with the App token** (`--merge`, to preserve per-commit history
    + `Closes #N`).
 
-A **loud PAT preflight** runs first: if `MERGE_PAT` is missing or fails (expired / revoked /
-insufficient scope) the handler comments on the soak issue and **fails the run**, rather than
-silently falling back to `GITHUB_TOKEN` (which would re-break the promotion invisibly).
+A **loud token preflight** runs first: if the App token fails to mint (bad/missing
+`BOT_APP_ID` / `BOT_APP_PRIVATE_KEY`, or the App isn't installed) the handler comments on the
+soak issue and **fails the run**, rather than silently falling back to `GITHUB_TOKEN` (which
+would re-break the promotion invisibly).
 
 **The agent review is skipped on promotion PRs:** `review.yml` gets a one-line `if:`
 guard so it does *not* run on a `staging → bridge` PR (head `staging`, base `bridge`) —
@@ -847,50 +886,58 @@ Built in **PR #41** (workflows) unless noted:
   `-alpha`, `--prerelease`) that opens the soak issue after publish; `beta` = the **latest**
   release (minor bump, no suffix, `--latest` not `--prerelease`), auto-cut on promotion.
 - `soak-verdict.yml` (`on: issues: labeled`): `soak:pass` → open the `staging → bridge` PR
-  **as `MERGE_PAT`** (so `ci` runs naturally and the merge fires `post-merge`), stamp
-  `review-verdict=success` (on `GITHUB_TOKEN`), arm auto-merge **as `MERGE_PAT`** — all behind
-  a **loud PAT preflight** (the soak issue closes later, when the promotion lands; the no-diff
+  **as the `craig-the-intern-bot` App** (so `ci` runs naturally and the merge fires `post-merge`),
+  stamp `review-verdict=success` (on `GITHUB_TOKEN`), arm auto-merge **as the App** — all behind
+  a **loud token preflight** (the soak issue closes later, when the promotion lands; the no-diff
   "nothing to promote" case closes + thaws here so the freeze can't wedge); `soak:fail` →
   ensure the `soak-fix` label, then `/fire` the fix agent (`GITHUB_TOKEN` + `ROUTINE_FIRE_*`).
 - `post-merge.yml` (`on: pull_request: closed`; `actions: write` to dispatch, `issues: write`
   + `pull-requests: write` for the close + thaw): a staging merge during a soak re-cuts the
   alpha; a `staging → bridge` promotion landing cuts the latest release, closes the soak
   issue, and thaws the freeze (arms any held agent PRs). Now reliably reached because the
-  gatekeeper/promotion merges are made by `MERGE_PAT`, not `GITHUB_TOKEN`. **Code-gated:**
+  gatekeeper/promotion merges are made by the `craig-the-intern-bot` App token, not `GITHUB_TOKEN`. **Code-gated:**
   both auto-dispatches only fire when the merged PR touches *buildable* code — a PR whose
   files are all `.github/**` / `docs/**` / `*.md` / root config yields a byte-identical app,
   so the release is skipped (the close + thaw still run). Fail-safe: any file outside that set
   counts as code. The *manual* `release.yml` dispatch is never gated.
 - `ci.yml` runs `on: pull_request` only — the promotion PR is a real `pull_request` authored
-  by `MERGE_PAT`, so `ci` runs naturally (the earlier `workflow_dispatch` workaround is gone).
-- Repo labels `soak` / `soak:pass` / `soak:fail` / `soak-fix`; repo setting **Allow merge commits** on. The promotion PR is authored by `MERGE_PAT` (a member), so neither the "Allow GitHub Actions to create PRs" toggle nor the "require approval for external contributors" gate applies to it — keep that external-contributor gate **on** for real fork PRs.
+  by the `craig-the-intern-bot` App, so `ci` runs naturally (the earlier `workflow_dispatch` workaround is gone).
+- Repo labels `soak` / `soak:pass` / `soak:fail` / `soak-fix`; repo setting **Allow merge commits** on. The promotion PR is authored by the `craig-the-intern-bot` App (a member identity), so neither the "Allow GitHub Actions to create PRs" toggle nor the "require approval for external contributors" gate applies to it — keep that external-contributor gate **on** for real fork PRs.
 - **The soak-freeze (§9.5)** — the §7 gatekeeper holds unrelated agent PRs while a `soak`
   issue is open, exempting soak-fix PRs (recognized by the `soak-fix` label, body reference as fallback),
   plus the `post-merge.yml` thaw. Folded into **PR #41**.
 - **`review.yml` skip-guard** for `staging → bridge` PRs — **PR #42** (parity-guarded →
   `bridge`-first, admin-merged, then synced to `staging`).
 
-**`MERGE_PAT` is the one non-default credential.** A fine-grained PAT (owner: the maintainer;
-this repo only; Contents + Pull requests: read/write) used *only* to **create the promotion
-PR** and to **arm auto-merge** (gatekeeper agent PRs + the promotion). It makes those actions
-carry a member identity, so (a) downstream workflows fire on the merge and (b) the external-
-contributor approval gate doesn't apply. Everything else runs on the built-in `GITHUB_TOKEN`.
-A **loud preflight** in each PAT-using job fails the run — with a comment — on an expired or
-missing PAT, never a silent fallback. (The earlier `PROMOTE_TOKEN` idea, and the "no token at
-all" design, were both wrong: GitHub's recursion guard + the approval gate make a member-
-identity token unavoidable for the merge/promotion — see 9.3.)
+**The `craig-the-intern-bot` GitHub App is the one non-default credential.** An org-owned App
+(installed on this repo; Contents + Pull requests + Issues: read/write) whose short-lived
+installation token is minted in-job by `actions/create-github-app-token` (from the `BOT_APP_ID`
++ `BOT_APP_PRIVATE_KEY` secrets) and used to **create the promotion PR**, **arm auto-merge**
+(gatekeeper agent PRs + the promotion), and **post the fix-loop auto-accept marker**. It makes
+those actions carry a member identity, so (a) downstream workflows fire on the merge/comment and
+(b) the external-contributor approval gate doesn't apply — and every automated action (commits,
+merges, promotion PRs, marker comments) reads as `craig-the-intern-bot[bot]` rather than a human
+account. Everything else runs on the built-in `GITHUB_TOKEN`. A **loud preflight** in each
+token-using merge/promotion job fails the run — with a comment — if the App token failed to mint,
+never a silent fallback. This replaces the earlier `MERGE_PAT` (a long-lived personal fine-grained
+PAT); the App gives the same member identity with **scoped, ~1h-expiry tokens and no rotation
+toil**. (The still-earlier `PROMOTE_TOKEN` idea and the "no token at all" design were both wrong:
+GitHub's recursion guard + the approval gate make a member-identity token unavoidable for the
+merge/promotion — see 9.3.) Commit authorship is set separately — the `SessionStart` hook
+`.claude/hooks/session-identity.sh` points cloud-routine git commits at the same bot (see
+§"bot identity").
 
 | Action | Token | Scope |
 |---|---|---|
 | Soak-issue open/close/comment + labels · verdict stamp | `GITHUB_TOKEN` | `issues: write` + `statuses: write` |
 | `soak:fail` → fire the fix agent | `GITHUB_TOKEN` + `ROUTINE_FIRE_*` | — |
 | Auto-cut / cut-latest → dispatch `release.yml` (`workflow_dispatch` is recursion-guard-exempt) | `GITHUB_TOKEN` | `actions: write` |
-| **Create the promotion PR + arm auto-merge** (gatekeeper + promotion) | **`MERGE_PAT`** | Contents R/W + Pull requests R/W |
+| **Create the promotion PR + arm auto-merge** (gatekeeper + promotion) · **fix-loop auto-accept marker** | **`craig-the-intern-bot` App token** (`BOT_APP_ID` + `BOT_APP_PRIVATE_KEY`) | Contents R/W + Pull requests R/W |
 
 The auto-cut dispatch works on `GITHUB_TOKEN` because `workflow_dispatch` is one of the
 two events *exempt* from GitHub's recursion guard (so a token-fired dispatch still runs
-the release). Nothing here needs a PAT or App — the promotion sidesteps the
-push-to-protected-branch problem by going through a PR (9.3) instead of a push.
+the release). The promotion also sidesteps the push-to-protected-branch problem by going
+through a PR (9.3) instead of a push.
 
 ### 9.7 · Known limitation
 The fix agent is **headless — no game**. A live-game-only visual/UX soak failure can't
@@ -983,18 +1030,21 @@ dead end — to land a good outside contribution, in increasing order of cleanli
 | `ROUTINE_FIRE_URL` / `ROUTINE_FIRE_TOKEN` | §1 kickoff `/fire` | 🟢 |
 | `CLAUDE_CODE_OAUTH_TOKEN` | §5 review agent (draws on Max, not metered API) | 🟢 |
 | `MAINTAINER_HANDLE` (repo variable) | §6 escalation @-mention/assignee | 🟢 set (`hotmalehotmail`) |
-| ~~`GATEKEEPER_TOKEN`~~ | **Not needed** — see below | — |
+| `BOT_APP_ID` / `BOT_APP_PRIVATE_KEY` | §7.2b/§9.6 `craig-the-intern-bot` App — merges, promotion PR, auto-accept marker | 🟢 |
+| ~~`GATEKEEPER_TOKEN`~~, ~~`MERGE_PAT`~~ | Superseded by the `craig-the-intern-bot` App (§7.2b) | — |
 
 **No `GATEKEEPER_TOKEN` (why the earlier plan dropped it).** GitHub's recursion
 guard means actions taken with the built-in `GITHUB_TOKEN` don't trigger further
-workflows. The *only* place that bit this design was the fix-loop trigger: if it
-keyed on the reviewer's `pull_request_review`, that review is posted with
-`GITHUB_TOKEN`, so the event would be suppressed. **We chose the `workflow_run`
-trigger (§6.1) instead** — it fires regardless of token — so nothing in §6/§7 needs
-elevated credentials. The gatekeeper's merge runs on `GITHUB_TOKEN` (0 required
-approvals, no push restrictions, and the staging merge doesn't cascade). A
-non-default token (PAT/App) only becomes necessary if you later add automation that
-must react to an automation-made merge or push — none exists today.
+workflows. The *only* place that bit the §6 fix-loop trigger: if it keyed on the
+reviewer's `pull_request_review`, that review is posted with `GITHUB_TOKEN`, so the
+event would be suppressed. **We chose the `workflow_run` trigger (§6.1) instead** — it
+fires regardless of token — so the fix loop itself needs no elevated credential.
+**The merge/promotion paths do**, however: the gatekeeper arm, the sweep merge, the
+`staging → bridge` promotion, and the fix-loop auto-accept marker all run on the
+`craig-the-intern-bot` App token (not `GITHUB_TOKEN`), precisely because
+`post-merge.yml` (and the gatekeeper's own `issue_comment` trigger) **must** react to
+those automation-made merges/comments — which `GITHUB_TOKEN` would suppress. See §7.2b
+and §9.6 for the App-token model that replaced the old `MERGE_PAT`.
 
 ## Cross-cutting: workflow-parity guard (prevents review from silently breaking)
 
