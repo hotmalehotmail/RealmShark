@@ -35,6 +35,7 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
   const [downloadPct, setDownloadPct] = useState<number | null>(null)
   const [checkMsg, setCheckMsg] = useState('')
   const [bugMsg, setBugMsg] = useState('')
+  const [captureMsg, setCaptureMsg] = useState('')
 
   useEffect(() => {
     window.overlay.getSettings().then((settings) => setToggleHotkey(settings.toggleHotkey))
@@ -84,6 +85,16 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
       setBugMsg('Capture saved — drag it into the issue')
     } catch {
       setBugMsg('Capture failed')
+    }
+  }
+
+  const captureNow = async (): Promise<void> => {
+    setCaptureMsg('Capturing…')
+    try {
+      await window.overlay.captureNow()
+      setCaptureMsg('Capture saved to disk')
+    } catch {
+      setCaptureMsg('Capture failed')
     }
   }
 
@@ -149,6 +160,15 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
             Report bug
           </Button>
           {bugMsg && <span className="truncate text-xs text-fg-faint">{bugMsg}</span>}
+        </div>
+      )}
+
+      {size !== 'sm' && (
+        <div className="mt-1 flex items-center justify-between gap-2">
+          <Button className="shrink-0" onClick={captureNow}>
+            Capture now
+          </Button>
+          {captureMsg && <span className="truncate text-xs text-fg-faint">{captureMsg}</span>}
         </div>
       )}
 

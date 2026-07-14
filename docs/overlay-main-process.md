@@ -24,12 +24,14 @@ shapes on the bridge socket, `bridge-server.md` for the Java side,
 | `overlay/src/main/panelLayout.ts` | Load/persist the renderer's panel layout to `panels.json`. |
 | `overlay/src/main/spritePack.ts` | Main-side sprite-pack cache + serve/push to renderer. |
 | `overlay/src/main/consoleCapture.ts` | Patches `console.*` so main-process logs reach the renderer console panel. |
-| `overlay/src/main/tray.ts` | Tray icon + context menu; shows bridge status. |
+| `overlay/src/main/tray.ts` | Tray icon + context menu; shows bridge status; "Capture now" item. |
 | `overlay/src/main/updater.ts` | GitHub-release self-updater (brief here; see `build-and-release.md`). |
+| `overlay/src/main/sessionRecorder.ts` | Electron-facing wrapper around `SessionRecordingWriter` (below) - start/stop/feed the session recorder. |
 | `overlay/src/preload/index.ts` (+ `index.d.ts`) | `window.overlay` contextBridge API. |
 | `overlay/src/shared/ipc.ts` | `IPC` channel names + shared types (`SpritePack`, `PacketEnvelope`, …). |
 | `overlay/src/shared/capture.ts` | `CaptureRing` + `CAPTURE_ALLOWED_TYPES`/quotas backing the bug-report capture (below), importable by both main and the test suite. |
-| `overlay/src/shared/settings.ts` | `OverlaySettings` model + `DEFAULT_SETTINGS`. |
+| `overlay/src/shared/sessionRecording.ts` | `SessionRecordingWriter` - the NDJSON/gzip rolling-file recorder (below), pure Node so it's directly testable. |
+| `overlay/src/shared/settings.ts` | `OverlaySettings` model + `DEFAULT_SETTINGS` (includes `recordSessionToDisk`). |
 | `overlay/src/shared/panels.ts` | `PanelInstance` layout model (owned by the renderer). |
 
 ## The big picture
@@ -209,7 +211,8 @@ All registered inside `whenReady` (`index.ts:281-380`). `handle` = renderer
 | `relaunch` | handle | `app.relaunch()` + `app.exit(0)` |
 | `getPanelLayout` | handle | `loadPanelLayout()` |
 | `savePanelLayout` | handle | `persistPanelLayout(panels)` |
-| `reportBug` | handle | gzips `{version, …, recentPackets: captureRing.snapshot(), mainLogs}` to a temp file, reveals it, opens the prefilled bug-report issue form (see below) |
+| `reportBug` | handle | `dumpCaptureRing(true)` - see below |
+| `captureNow` | handle | `dumpCaptureRing(false)` - see below |
 
 Pushes to the renderer set up in the same block: `mainLogEntry`, `spritePack`,
 `bridgeStatus`, `packetBatch`, `attachSuccess`, `overlayDetach`,
@@ -244,7 +247,7 @@ what gets *retained* for a bug report, never what the live overlay sees.
   (each a simple push-then-shift-if-over-cap queue), and `snapshot()` merges
   and re-sorts them by `envelope.time` since the sub-buffers fill
   independently and would otherwise interleave out of chronological order.
-- **Serialization.** `reportBug` writes **compact** JSON (no pretty-print)
+- **Serialization.** The dump writes **compact** JSON (no pretty-print)
   through `zlib.gzipSync` to `realmshark-bug-<ts>.json.gz` - GitHub accepts
   `.gz` issue attachments, and gzip keeps a full 10k-envelope capture under
   its 25 MB limit (typically a few MB).
@@ -252,6 +255,73 @@ what gets *retained* for a bug report, never what the live overlay sees.
   exactly what `overlay/test/replay.ts`'s `loadCapture()` reads - see
   `docs/overlay-testing.md` for the test suite that turns a capture into a
   regression test.
+
+### Capture-now button (PRD §7.1)
+
+`IPC.reportBug` and `IPC.captureNow` are two thin `ipcMain.handle` entry
+points over one shared `dumpCaptureRing(openForm: boolean)` function
+(`index.ts`, defined right after the `CaptureRing` is created): both gzip the
+same `{version, platform, arch, capturedAt, bridgeStatus, gameWindowTitle,
+recentPackets: captureRing.snapshot(), mainLogs}` shape to a temp file and
+`shell.showItemInFolder` it; only `reportBug` (`openForm: true`) additionally
+`shell.openExternal`s the prefilled `bug_report.yml` issue form. "Capture
+now" is reachable from the Status panel (`StatusPanel.tsx`, next to "Report
+bug") and the tray's "Capture now" item (`tray.ts`'s `TrayCallbacks.onCaptureNow`,
+wired directly to `dumpCaptureRing(false)` in `index.ts` since the tray
+click handler runs in the main process - no IPC round-trip needed there).
+
+### Session recorder (PRD §7.2)
+
+A Settings toggle - `OverlaySettings.recordSessionToDisk` (`shared/settings.ts`,
+off by default) - that continuously appends allowlisted packet batches to
+disk, so a bug can be captured *after* the fact instead of requiring
+"Capture now" to be pressed while the evidence is still in the ring.
+
+- **Where the logic lives.** `shared/sessionRecording.ts`'s
+  `SessionRecordingWriter` is pure Node (`fs`/`zlib` only, no Electron) so
+  it's directly unit-testable (`overlay/test/session-recording.test.ts`)
+  against a plain temp directory. `main/sessionRecorder.ts` is the thin
+  Electron-facing wrapper (`startRecording`/`stopRecording`/`recordBatch`)
+  that points a module-scoped writer instance at
+  `app.getPath('userData')/captures`.
+- **Lifecycle.** `index.ts` calls `startRecording()` at launch if the
+  persisted setting is already on (so recording resumes across restarts),
+  and the `saveSettings` handler calls `startRecording()`/`stopRecording()`
+  whenever `recordSessionToDisk` flips, same "applies on Save" pattern as
+  the rest of that handler. `will-quit` calls `stopRecording()` so the
+  current file is closed cleanly on app exit. `onBatch` (inside
+  `startBridgeClient`) calls `recordBatch(packets)` unconditionally - it's a
+  no-op whenever no writer is active.
+- **Format.** NDJSON (one `PacketEnvelope` JSON object per line) piped
+  through a single long-lived `zlib.createGzip()` stream into
+  `userData/captures/session-<ISO timestamp>-<counter>.ndjson.gz`. Same
+  `CAPTURE_ALLOWED_TYPES` filter as the capture ring - identical privacy
+  posture, since these files are meant to be shareable too.
+- **Rotation.** At `RECORDING_ROTATE_BYTES` (~50 MB) of *uncompressed*
+  NDJSON written to the current file - measured pre-gzip via a running byte
+  counter, not the on-disk file size, because the gzip stream buffers
+  internally and its compressed output isn't available synchronously right
+  after a write. The actual `.ndjson.gz` file lands well under 50 MB in
+  practice (packet traffic compresses hard). Rotating ends the current gzip
+  stream and immediately opens a new file - the old stream keeps flushing to
+  disk in the background rather than blocking the next batch.
+- **Retention.** `RECORDING_RETAIN_FILES` = 10 files (≈500 MB ceiling at the
+  rotation size above). Tracked in-memory in creation order, not by
+  re-listing the directory: a rotated-out file is only actually deleted once
+  its stream's `finish` event confirms it's fully closed (deleting a
+  still-open file handle fails on Windows, and is avoided everywhere on
+  principle). `SessionRecordingWriter.close()` resolves only once every file
+  the writer ever opened has finished and any resulting pruning has run, so
+  a caller that needs the final directory state right after (a clean
+  app-quit; a test) can await it.
+- **Surviving reconnects/instance changes.** The recorder has no notion of
+  bridge connection state or `MapInfoPacket`/instance changes - it just
+  appends whatever `onBatch` hands it, so a reconnect or a dungeon change
+  never resets or corrupts the file, it just keeps appending (covered by
+  `session-recording.test.ts`).
+- **Replay.** `overlay/test/replay.ts`'s `loadCapture()` reads `.ndjson.gz`
+  (and `.ndjson`) the same way it reads `.json.gz` - see
+  `docs/overlay-testing.md`.
 
 ### Quit / teardown
 
@@ -382,11 +452,11 @@ and closes.
 ## 4. Settings & config
 
 **Model** (`shared/settings.ts`): `OverlaySettings = { gameWindowTitle,
-toggleHotkey, textileAnimMs }`, with `DEFAULT_SETTINGS = { gameWindowTitle:
-'RotMGExalt', toggleHotkey: 'Alt+Shift+R', textileAnimMs: 200 }`.
-`gameWindowTitle` is the exact strcmp target for `attachByTitle` (§1).
-`textileAnimMs` is the animated-textile-dye frame duration — see
-`dyes-and-textiles.md`.
+toggleHotkey, textileAnimMs, textileScrollSpeed, textileRotateSpeed,
+recordSessionToDisk }`. `gameWindowTitle` is the exact strcmp target for
+`attachByTitle` (§1). The `textile*` fields tune animated-cloth dye rendering
+— see `dyes-and-textiles.md`. `recordSessionToDisk` (off by default) is the
+session-recorder toggle — see the Session recorder section in §1 above.
 
 **Storage** (`settings.ts`): JSON at `app.getPath('userData')/settings.json`.
 `loadSettings()` merges the file over `DEFAULT_SETTINGS` (so new keys pick up
@@ -406,6 +476,9 @@ at runtime:
   math yields a falsy value) so a bad value can't stall or thrash the render
   loop, then pushed live to the overlay renderer via the `settingsChanged`
   IPC (`IPC.settingsChanged`) — no restart needed.
+- If `recordSessionToDisk` changed → `startRecording()`/`stopRecording()` (§1's
+  Session recorder section), applying immediately rather than needing a
+  restart.
 
 `SaveSettingsResult` (`shared/ipc.ts:42`) carries `{ needsRestart,
 hotkeyRegistered }` back to the config UI, which then can offer `relaunch`.
@@ -488,11 +561,13 @@ line) are captured. `setMainLogSink(sink)` (`index.ts:227`) wires live entries t
 
 ### `tray.ts`
 
-`createTray(icon, { onToggleOverlay, onOpenSettings })` builds a `Tray` whose
-context menu shows the live bridge status (a disabled label), **Show/Hide
-Overlay** (→ `toggleInteractive`), **Settings…** (→ `openConfigWindow`), and
-**Quit**. `setTrayStatus(status)` (called from the bridge `onStatus` callback)
-re-renders the menu with the mapped label.
+`createTray(icon, { onToggleOverlay, onOpenSettings, onCaptureNow })` builds a
+`Tray` whose context menu shows the live bridge status (a disabled label),
+**Show/Hide Overlay** (→ `toggleInteractive`), **Settings…** (→
+`openConfigWindow`), **Capture now** (→ `dumpCaptureRing(false)`, PRD §7.1 -
+see the Capture-now button section in §1), and **Quit**. `setTrayStatus(status)`
+(called from the bridge `onStatus` callback) re-renders the menu with the
+mapped label.
 
 ### `updater.ts` (brief — see `build-and-release.md`)
 
