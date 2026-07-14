@@ -5,10 +5,11 @@
 # Fires on Claude Code's SessionStart in the build/fix agent's cloud session and points git's
 # author/committer identity at the bot's noreply address, so every commit the routine makes is
 # attributed to craig-the-intern-bot[bot] on GitHub (GitHub matches the App bot's user id + slug
-# in the address for attribution) instead of a human account. The App supplies the commit
-# identity HERE; its installation TOKEN (minted in gatekeeper.yml / sweep.yml / soak-verdict.yml
-# via actions/create-github-app-token) is what performs the merges. See
-# docs/dev-loop-mechanisms.md §"bot identity".
+# in the address for attribution) instead of a human account. This hook supplies only the commit
+# IDENTITY (author/committer metadata — free, no auth). The API credential for the agent's OWN
+# actions (the PRs it opens, the comments it posts) is minted by the companion
+# `session-bot-token.sh` SessionStart hook; the merge/promotion workflows mint their own via
+# actions/create-github-app-token. See docs/dev-loop-mechanisms.md §7.2b.
 #
 # BLAST RADIUS: no-op anywhere but a remote pipeline session.
 #   Guard (CLAUDE_CODE_REMOTE): unset in the local CLI -> a maintainer's terminal is untouched,

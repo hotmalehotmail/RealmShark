@@ -252,8 +252,39 @@ jobs:
           if [ -s "$NOTES_FILE" ]; then CHANGES="$(cat "$NOTES_FILE")"; else CHANGES="_(see the release for the change list)_"; fi
           PR_FILE="notes/pr-list.md"
           if [ -s "$PR_FILE" ]; then PRS="$(cat "$PR_FILE")"; else PRS="_(PR list unavailable)_"; fi
-          BODY="$(printf 'Installer to test: %s\n\n### What changed\n%s\n\n### Pull requests in this build\n%s\n\n### To verify\nTest against the live game, then apply a verdict label:\n\n- ✅ **Works** — apply `soak:pass`. Promotes `staging` to `bridge` and cuts a **latest** release.\n- ❌ **Broken** — describe each bug below (steps / expected / actual; add a FakePacketSource repro capture for packet/DPS/decode bugs), then apply `soak:fail`. The build agent fixes forward and a fresh alpha auto-cuts for re-soak.\n\n> While this soak is open, any change merged to `staging` auto-cuts a fresh alpha and supersedes this issue.' \
-            "$REL_URL" "$CHANGES" "$PRS")"
+          # ---- UI gallery (§9.1 / PRD §5.4): a before/after image pair per panel PNG this
+          #      soak's content changed — the same origin/bridge..HEAD range as the PR list.
+          #      Raw URLs are SHA-PINNED (bridge sha = shipped "before", HEAD = this alpha's
+          #      "after") so a superseded soak issue's gallery stays accurate forever. The
+          #      maintainer swipes the gallery BEFORE installing: visually broken => soak:fail
+          #      + a comment, no install needed. Best-effort (`|| true` throughout): a gallery
+          #      hiccup must never block cutting the release's soak issue. ----
+          GALLERY=""
+          if git fetch --quiet --no-tags origin '+refs/heads/bridge:refs/remotes/origin/bridge' 2>/dev/null \
+             && git rev-parse --verify --quiet origin/bridge >/dev/null; then
+            BRIDGE_SHA="$(git rev-parse origin/bridge)"
+            HEAD_SHA="$(git rev-parse HEAD)"
+            ROWS=""
+            for F in $(git diff --name-only "$BRIDGE_SHA" "$HEAD_SHA" -- docs/screenshots/panels/ 2>/dev/null || true); do
+              NAME="$(basename "$F" .png)"
+              if git cat-file -e "$BRIDGE_SHA:$F" 2>/dev/null; then
+                BEFORE="![before](https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$BRIDGE_SHA/$F)"
+              else
+                BEFORE="_(new panel)_"
+              fi
+              if git cat-file -e "$HEAD_SHA:$F" 2>/dev/null; then
+                AFTER="![after](https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$HEAD_SHA/$F)"
+              else
+                AFTER="_(removed)_"
+              fi
+              ROWS="$ROWS"$'\n'"| \`$NAME\` | $BEFORE | $AFTER |"
+            done
+            if [ -n "$ROWS" ]; then
+              GALLERY="$(printf '\n### UI changes in this build (before → after)\nSwipe this gallery first — if a panel is visibly broken, apply `soak:fail` with a comment, no install needed.\n\n| Panel | shipped (`bridge`) | this alpha |\n|---|---|---|%s\n' "$ROWS")"
+            fi
+          fi
+          BODY="$(printf 'Installer to test: %s\n\n### What changed\n%s\n\n### Pull requests in this build\n%s\n%s\n### To verify\nTest against the live game, then apply a verdict label:\n\n- ✅ **Works** — apply `soak:pass`. Promotes `staging` to `bridge` and cuts a **latest** release.\n- ❌ **Broken** — describe each bug below (steps / expected / actual; attach the overlay'\''s **Report bug** capture — a gzipped packet capture the fix agent replays into a regression test — for packet/DPS/decode bugs), then apply `soak:fail`. The build agent fixes forward and a fresh alpha auto-cuts for re-soak.\n\n> While this soak is open, any change merged to `staging` auto-cuts a fresh alpha and supersedes this issue.' \
+            "$REL_URL" "$CHANGES" "$PRS" "$GALLERY")"
           gh label create soak --repo "$GITHUB_REPOSITORY" --color 5319E7 --description "Alpha soak tracking issue" --force >/dev/null 2>&1 || true
           NEW_URL="$(gh issue create --repo "$GITHUB_REPOSITORY" --title "🧪 Alpha soak: v$VERSION" --label soak --body "$BODY")"
           NEW_NUM="${NEW_URL##*/}"
