@@ -6,10 +6,6 @@
           {
             "type": "command",
             "command": "bash -c 'r=\"$(git rev-parse --show-toplevel 2>/dev/null || echo .)\"; exec bash \"$r/.claude/hooks/session-identity.sh\"'"
-          },
-          {
-            "type": "command",
-            "command": "bash -c 'r=\"$(git rev-parse --show-toplevel 2>/dev/null || echo .)\"; exec bash \"$r/.claude/hooks/session-bot-token.sh\"'"
           }
         ]
       }
