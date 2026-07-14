@@ -65,6 +65,12 @@ moving parts, each with its own doc below.
   (`overlay/test/`): the capture-replay harness (`loadCapture`/`replay`, fake-
   timer anchoring), the fixtures convention, the capture-allowlist tripwire,
   and the contract for turning a future bug capture into a regression test.
+- **[overlay-harness.md](overlay-harness.md)** — the browser renderer harness
+  (`overlay/src/renderer/src/harness/`): hosting the React renderer in
+  headless Chromium with no Electron process behind it, the live-fake and
+  fixture data sources, the `?panel=&size=` single-panel mount mode, and the
+  `npm run shots` deterministic screenshot pipeline that produces the
+  committed gallery at `docs/screenshots/panels/`.
 
 ## Build, run & release
 

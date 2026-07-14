@@ -1,0 +1,268 @@
+{
+  "ready": true,
+  "version": "harness-fixture-1",
+  "atlases": {
+    "1": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAABQCAYAAADRAH3kAAACL0lEQVR4nO3dQWpUURCF4d5JCWJwLAdtAoanS0hPlGgjEURSWUjIUIQMJKPgBmqDLd1QG6jjJLz/wb+Bd7/ZgXs37zMOTrn1uk6vM7PIndnW6jLDKvK11eZ4iD9KoxpA7TWqATyVRjWApTSqAajuRzUA1X5UA7grjWoAqo+jAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAALAGAMzBK56DI78frN6lVcYnq9inVYbZPqy26RX5weoEQPV3VAPQlxrVAEq/RjUAPdaoBlCqUQ2gHjWqAexLoxqA6nYUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANYAgDl4zXPw5zw4vQivjAurl5FWcfqJTldeS1qdh9cJgH7XqAbwVjWqAZR+jmoA56pRDUClUQ1A9TCqAeimRjWAb6pRAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFgDAObgFc/BGa8OTu4FCXGdXmdeu/DKN2EV+dUqI6xOAEoXoxqAc0XK8RD1VKMagJYa1QDuVaMaQO00qgGo/oxqACWNAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMAaADAHr3kOvoqD05Je7oMTeWmWXpvn/h0PsR40qgHclEYt/+HJmeMh1p1GNYAqjQIAAAAAgGf+AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABWAYA5eL1z8D9sZd1swahYRwAAAABJRU5ErkJggg=="
+  },
+  "table": {
+    "768": [
+      1,
+      0,
+      0,
+      16,
+      16
+    ],
+    "1900": [
+      1,
+      16,
+      0,
+      16,
+      16
+    ],
+    "1901": [
+      1,
+      32,
+      0,
+      16,
+      16
+    ],
+    "1902": [
+      1,
+      48,
+      0,
+      16,
+      16
+    ],
+    "1903": [
+      1,
+      64,
+      0,
+      16,
+      16
+    ],
+    "2500": [
+      1,
+      80,
+      0,
+      16,
+      16
+    ],
+    "4000": [
+      1,
+      96,
+      0,
+      16,
+      16
+    ],
+    "4001": [
+      1,
+      112,
+      0,
+      16,
+      16
+    ],
+    "4002": [
+      1,
+      0,
+      16,
+      16,
+      16
+    ],
+    "4003": [
+      1,
+      16,
+      16,
+      16,
+      16
+    ],
+    "4005": [
+      1,
+      32,
+      16,
+      16,
+      16
+    ],
+    "4010": [
+      1,
+      48,
+      16,
+      16,
+      16
+    ],
+    "4020": [
+      1,
+      64,
+      16,
+      16,
+      16
+    ],
+    "4030": [
+      1,
+      80,
+      16,
+      16,
+      16
+    ],
+    "4100": [
+      1,
+      96,
+      16,
+      16,
+      16
+    ],
+    "4101": [
+      1,
+      112,
+      16,
+      16,
+      16
+    ],
+    "4102": [
+      1,
+      0,
+      32,
+      16,
+      16
+    ],
+    "4103": [
+      1,
+      16,
+      32,
+      16,
+      16
+    ],
+    "4105": [
+      1,
+      32,
+      32,
+      16,
+      16
+    ],
+    "4149": [
+      1,
+      48,
+      32,
+      16,
+      16
+    ],
+    "4200": [
+      1,
+      64,
+      32,
+      16,
+      16
+    ],
+    "4201": [
+      1,
+      80,
+      32,
+      16,
+      16
+    ],
+    "4202": [
+      1,
+      96,
+      32,
+      16,
+      16
+    ],
+    "4203": [
+      1,
+      112,
+      32,
+      16,
+      16
+    ],
+    "4205": [
+      1,
+      0,
+      48,
+      16,
+      16
+    ],
+    "4300": [
+      1,
+      16,
+      48,
+      16,
+      16
+    ],
+    "4301": [
+      1,
+      32,
+      48,
+      16,
+      16
+    ],
+    "4302": [
+      1,
+      48,
+      48,
+      16,
+      16
+    ],
+    "4303": [
+      1,
+      64,
+      48,
+      16,
+      16
+    ],
+    "4305": [
+      1,
+      80,
+      48,
+      16,
+      16
+    ],
+    "4967": [
+      1,
+      96,
+      48,
+      16,
+      16
+    ],
+    "9000": [
+      1,
+      112,
+      48,
+      16,
+      16
+    ],
+    "9001": [
+      1,
+      0,
+      64,
+      16,
+      16
+    ],
+    "9002": [
+      1,
+      16,
+      64,
+      16,
+      16
+    ],
+    "9100": [
+      1,
+      32,
+      64,
+      16,
+      16
+    ],
+    "9200": [
+      1,
+      48,
+      64,
+      16,
+      16
+    ],
+    "9300": [
+      1,
+      64,
+      64,
+      16,
+      16
+    ]
+  }
+}
