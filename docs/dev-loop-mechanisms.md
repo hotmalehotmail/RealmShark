@@ -32,7 +32,8 @@ step that *runs* (driven) but is *not gated* (unenforced), or vice-versa.
 | 2 | Routine fire → cloud session | `implement.yml` `curl /fire` | per-routine bearer token; Auto-Mode allowlist | 🟢 |
 | 3 | Build agent → branch + PR | routine session (Opus 4.8) | GitHub App push scope; `claude/*` branch convention | 🟢 |
 | 4 | CI ground-truth checks | `pull_request` → `ci.yml` | branch protection required checks | 🟢 |
-| 5 | Independent review | `pull_request` → `review.yml` | workflow-validation guard | 🟢 verdict live |
+| 5 | Independent review | `pull_request` (incl. `edited`, relevance-guarded) → `review.yml` | workflow-validation guard | 🟢 verdict live |
+| 5.1 | PR hygiene + duplicate guard | `pull_request` (incl. `edited`/`labeled`) → `hygiene.yml` | `pr hygiene` required check; dedup auto-close | 🟡 built — required-check flip pending |
 | 6 | Fix loop (review → re-fire builder, capped) | `workflow_run` of `review` → `fixloop.yml`; `agent:retry` → `resume.yml`; conflict → `conflict-watch.yml` (+ sweep backstop) rebase | `review-verdict` status; `MAX_FIX_ROUNDS` (review) + `MAX_REBASE_ROUNDS` (conflicts); `agent:needs-human` freeze | 🟡 re-fire + escalate + resume + conflict-rebase built; live-verify pending |
 | 7 | Gatekeeper auto-merge | `workflow_run` → arm auto-merge | native auto-merge + required checks | 🟢 verified (#19) |
 | 8 | Release (ship button) | `workflow_dispatch` → `release.yml` | manual-only dispatch | 🟢 (captain notes + auto-bump built) |
@@ -139,13 +140,18 @@ includes behavioral tests, on both `staging` and `bridge`.
 
 ## 5 · Independent review
 
-**Drives.** `.github/workflows/review.yml` runs `on: pull_request: [opened, synchronize,
-reopened]` for base `staging`/`bridge`, in three deterministic phases (the **judge /
-scribe split**, audit H2/H3):
+**Drives.** `.github/workflows/review.yml` runs `on: pull_request: [opened, edited,
+synchronize, reopened]` for base `staging`/`bridge`. A **relevance pre-step** guards the
+`edited` type: a full model review re-runs only when an edit changes a verdict *input* —
+the linked-issue reference (which selects the acceptance criteria) or the base branch
+(which changes the diff); any other edit skips, posting nothing, so the existing verdict
+on the head SHA stands (same fail-closed semantics as the validation skip). Then three
+deterministic phases (the **judge / scribe split**, audit H2/H3):
 1. **stage** — plain bash (`github.token`, read-only `gh`) writes the diff + the linked
    issue to files, and computes the verdict facts that must NOT be left to the model:
-   is this a `claude/*` agent branch, does it touch `.github/`, does it declare a
-   `Closes #N`.
+   is this a `claude/*` agent branch, does it touch `.github/`, which issue does it
+   declare via `Closes #N` (the *presence* of that link is enforced by §5.1's
+   `pr hygiene` check, not by this verdict — see below).
 2. **judge** — `anthropics/claude-code-action@v1` (Opus 4.8, `CLAUDE_CODE_OAUTH_TOKEN`)
    with **`--allowedTools Read,Grep,Glob,Write` — no Bash, no gh**. It reads the staged
    inputs + the repo and WRITES its findings to `review-inputs/verdict.json`. With no
@@ -154,14 +160,15 @@ scribe split**, audit H2/H3):
    own verdict via `Bash(gh:*)` — the credential-holding-judge risk in audit H2).
 3. **scribe** — plain bash. Computes the verdict as a deterministic function of the
    judge's findings + the stage facts (any `high`/`critical` finding, an agent PR
-   touching `.github/`, an agent PR with no issue link, or unmet acceptance criteria
-   ⇒ fail), posts the review (`POST /pulls/{n}/reviews`, with a single-comment 422
-   fallback), and posts the `review-verdict` status. **Soak-fix PRs are exempt from the
-   issue-link requirement** (detected by the `soak-fix` label or an "Addresses soak #N"
-   body reference, the same signals the §9.5 gatekeeper freeze-exemption uses): they
-   close no discrete issue — the soak issue is loop-managed (superseded on re-cut, closed
-   on promotion) — so requiring a `Closes #N` would wrongly auto-fail every soak-fix. The
-   `.github/` tripwire still applies to them.
+   touching `.github/`, or unmet acceptance criteria ⇒ fail), posts the review
+   (`POST /pulls/{n}/reviews`, with a single-comment 422 fallback), and posts the
+   `review-verdict` status. The issue-link requirement is deliberately NOT part of this
+   verdict — it moved to §5.1's `pr hygiene` check after the PR #158 incident: the body
+   is mutable, this workflow's triggers historically didn't re-fire on a body edit, and
+   a `missing issue link` failure posted before the body was fixed could never be
+   re-evaluated without pushing an unrelated commit. A gate must re-run when its input
+   changes; the model review can't afford to (hence the relevance guard above), so the
+   cheap mutable-input gates live in a model-free workflow that can.
 
 **Enforces.** Two layers. (1) `claude-code-action`'s **workflow-validation guard**: the
 judge runs only if the executing `review.yml` is **byte-identical to the copy on the
@@ -206,6 +213,52 @@ linchpin for §6 and §7. How it works:
 - **Remaining (step 3):** add `review-verdict` to branch protection's required checks
   so a failing verdict actually *blocks* a merge (today it posts but nothing gates
   on it — see Branch protection).
+
+### 5.1 · PR hygiene gate & duplicate guard — `hygiene.yml`
+
+**Drives.** `.github/workflows/hygiene.yml` runs `on: pull_request: [opened, edited,
+synchronize, reopened, labeled, unlabeled]` for base `staging`/`bridge` — every event
+that can mutate its inputs (the PR body and labels). Model-free bash against the event
+payload; nothing from the PR head is checked out or executed. Two jobs:
+
+- **`pr hygiene`** (required check): an agent (`claude/*`) PR must declare the issue it
+  resolves — the literal closing keyword `Closes #N` / `Fixes #N` in the body (same
+  regex as review.yml's stage step; keep them in sync). **Soak-fix PRs are exempt**
+  (the `soak-fix` label or an "Addresses soak #N" body reference — the same signals the
+  §9.5 gatekeeper freeze-exemption uses): they close no discrete issue, since the soak
+  issue is loop-managed (superseded on re-cut, closed on promotion), so requiring a
+  `Closes #N` would wrongly auto-fail every soak-fix. Non-agent PRs pass unconditionally.
+  On failure it posts one marker-deduped comment (`<!-- hygiene:issue-link -->`) with the
+  exact remedy, including that **editing the body re-runs the gate — no commit needed**
+  (the `edited` trigger is the entire point: this gate reads a mutable field, so it
+  re-evaluates whenever that field changes; the PR #158 incident is why).
+- **`duplicate guard`** (acts, doesn't gate): if an agent PR's body closes an issue that
+  an **older open PR** already declares it closes, the newer PR is labeled
+  `agent:duplicate`, gets an explanatory comment (`<!-- hygiene:duplicate -->`), and is
+  closed — its branch is kept for salvage. The rule is deterministic and race-free: the
+  lower-numbered PR always wins, and each PR only ever closes *itself*, so two
+  simultaneous runs can't close both. This is the mechanism backstop for the PR #159
+  incident (a mis-routed FIX MODE session rebuilt an in-flight issue from scratch):
+  kickoff's PR-contract text tells the agent not to do this, but prompt text is the soft
+  layer — the guard is what makes it not matter.
+
+**Enforces.** `pr hygiene` is a required status check on `staging` and `bridge` (added
+alongside `review-verdict` — see Branch protection). The duplicate guard enforces
+one-open-PR-per-issue by construction.
+
+**Trust chain (why the `.github/` tripwire is NOT here).** `pull_request` workflows run
+the workflow file from the PR's **merge ref**, so a PR that edits `hygiene.yml` is
+checked by its own edited copy — this file is self-certifiable and must never be the
+sole guard against anything worth tampering with. It is safe to rely on only because
+review.yml — anchored by claude-code-action's byte-identity validation against the
+default branch, which a PR cannot fake — auto-fails any agent PR that touches
+`.github/` at all: gutting `hygiene.yml` costs an agent PR its `review-verdict`.
+Deterministic checks that defend against `.github/` tampering itself must stay in
+review.yml; checks that merely need cheap re-evaluation on mutable inputs belong here.
+
+**Status.** 🟡 Built; the `pr hygiene` required-check flip on both branches is a
+rollout step (do it only after `hygiene.yml` exists on both `staging` and `bridge`,
+or every open PR blocks on a check that can never run).
 
 ---
 
@@ -957,7 +1010,7 @@ human approval click.
 
 | Setting | Spec | Actual | Gap |
 |---|---|---|---|
-| Required checks | `ci` + review | `ci` (2) **+ `review-verdict`** | ✅ added on both branches (verified gating #19/#23) |
+| Required checks | `ci` + review | `ci` (2) **+ `review-verdict`** (+ `pr hygiene` — flip pending, §5.1) | ✅ added on both branches (verified gating #19/#23); `pr hygiene` to be added once hygiene.yml exists on both branches |
 | Required approvals | 0 | 0 | ✅ |
 | Restrict who can push | yes | **none** | ⚠️ **N/A** — GitHub push restrictions aren't available on **user-owned** repos (only org repos). Mitigated: agents can't push to protected branches (they open PRs), and the required checks gate every merge |
 | Enforce for admins | (implied) | **off** | 🟡 admins bypass all gates — kept off deliberately as the owner escape hatch (below) |
