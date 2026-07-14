@@ -83,12 +83,23 @@ retain - every capture for that scenario was then silently useless until
 someone noticed by hand.
 
 Each gameplay/behavior consumer exports a `CONSUMED_ENVELOPE_TYPES` const
-(derived straight from its `ingest()`/`onPacketBatch` switch):
-`DpsTracker.CONSUMED_ENVELOPE_TYPES`, `LootTracker.CONSUMED_ENVELOPE_TYPES`,
+that's meant to list exactly what its `ingest()`/`onPacketBatch` switch
+handles: `DpsTracker.CONSUMED_ENVELOPE_TYPES`, `LootTracker.CONSUMED_ENVELOPE_TYPES`,
 `EntityRegistry.CONSUMED_ENVELOPE_TYPES`. The tripwire test asserts the union
 of these is a subset of `CAPTURE_ALLOWED_TYPES` - so adding a new envelope
-type to a tracker's switch without extending the allowlist now fails a test
+type to a tracker's switch *and* remembering to append it to that tracker's
+`CONSUMED_ENVELOPE_TYPES` fails a test if the allowlist isn't extended too,
 instead of shipping a silently-useless capture.
+
+**Caveat:** `CONSUMED_ENVELOPE_TYPES` is a hand-maintained list, not actually
+derived from the switch (each switch has a `NOTE:` comment calling this out) -
+so the tripwire only catches a missing allowlist entry for a type the author
+*also remembered* to add to this list. A switch case added without touching
+`CONSUMED_ENVELOPE_TYPES` passes the tripwire silently, reproducing the same
+"forgot to update a parallel list" shape one level up. Deriving the list
+programmatically from the switch would close this gap fully but wasn't done
+here to avoid restructuring working, untested-elsewhere control flow as part
+of a test-suite issue; worth revisiting if this class of miss recurs.
 
 `ItemInfoProvider.CONSUMED_ENVELOPE_TYPES` (`itemInfo`/`enchantNames`) exists
 for the same documentation purpose but is **deliberately excluded** from the

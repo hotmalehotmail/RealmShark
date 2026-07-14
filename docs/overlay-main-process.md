@@ -186,13 +186,13 @@ was lost (`index.ts:212`).
 > in particular it must not run the bridge supervisor, whose reaper would
 > force-kill the *first* instance's healthy bridge (leaving it bridgeless with no
 > respawn). Hence `will-quit` only calls `stopBridge()` when
-> `gotSingleInstanceLock` is true (`index.ts:330`). The `second-instance` event
-> (`index.ts:205`) just does `overlayWindow?.showInactive()` to surface the
+> `gotSingleInstanceLock` is true (`index.ts:391`). The `second-instance` event
+> (`index.ts:214`) just does `overlayWindow?.showInactive()` to surface the
 > existing overlay.
 
 ### IPC handlers registered here
 
-All registered inside `whenReady` (`index.ts:256-319`). `handle` = renderer
+All registered inside `whenReady` (`index.ts:281-380`). `handle` = renderer
 `invoke` request/response; the pushes (`webContents.send`) are set up alongside.
 
 | Channel (`IPC.*`) | Kind | Behaviour |
@@ -255,7 +255,7 @@ what gets *retained* for a bug report, never what the live overlay sees.
 
 ### Quit / teardown
 
-`will-quit` (`index.ts:322`): `globalShortcut.unregisterAll()`, then
+`will-quit` (`index.ts:383`): `globalShortcut.unregisterAll()`, then
 `stopBridgeClient()` **before** `stopBridge()`.
 
 > **Non-obvious fact.** Order matters: `stopBridge()` drops the bridge socket,
@@ -263,7 +263,7 @@ what gets *retained* for a bug report, never what the live overlay sees.
 > the already-destroyed overlay window. Severing the client first removes its
 > listeners so that can't happen. `stopBridge()` itself is skipped for a losing
 > second instance (see above). `window-all-closed` quits except on darwin
-> (`index.ts:333`).
+> (`index.ts:394`).
 
 ---
 
@@ -289,7 +289,7 @@ wire stdout/stderr → console.*, error, exit handlers
   `jarPath()` (`bridgeSupervisor.ts:38`) is
   `process.resourcesPath/bridge.jar` when packaged, else
   `<__dirname>/../../../build/libs/bridge.jar` in dev.
-- **`--fake` on non-Windows.** `index.ts:237` calls
+- **`--fake` on non-Windows.** `index.ts:246` calls
   `ensureBridgeRunning(!supportsAttach)`, so on macOS/others the bridge runs with
   `--fake` (synthetic packets, no packet sniffing) — the same platforms that use
   simulated attach.
@@ -359,7 +359,7 @@ the socket closed (`bridgeClient.ts:77`).
 | `msg.type === 'spritePack'` | `onSpritePack(msg)` → `spritePack.ts` (§6) |
 | `Array.isArray(msg.batch)` | `onBatch(msg.batch)` → `IPC.packetBatch` |
 
-The `onConnected` hook is used by `index.ts:252` to fire `requestSpritePack`, so
+The `onConnected` hook is used by `index.ts:277` to fire `requestSpritePack`, so
 each (re)connect re-requests the pack. Wire shapes for `batch`, `dps`, sprite
 pack, etc. live in `architecture.md` and `bridge-server.md`.
 
@@ -393,7 +393,7 @@ toggleHotkey, textileAnimMs }`, with `DEFAULT_SETTINGS = { gameWindowTitle:
 defaults), and falls back to defaults on parse error. `persistSettings()` writes
 pretty-printed JSON.
 
-**`saveSettings` handler** (`index.ts:287`) is where settings changes take effect
+**`saveSettings` handler** (`index.ts:337`) is where settings changes take effect
 at runtime:
 
 - If `gameWindowTitle` changed → `needsRestart = true` in the result (attach
@@ -477,7 +477,7 @@ unchanged version is a cheap no-op instead of re-shipping a multi-MB payload.
 warn/error` to also record a `MainLogEntry { level, time, message }` into a
 ring buffer (`MAX_ENTRIES = 300`) and push it to the registered sink. It's
 installed at the very top of `index.ts` so pre-window logs (like the bridge spawn
-line) are captured. `setMainLogSink(sink)` (`index.ts:218`) wires live entries to
+line) are captured. `setMainLogSink(sink)` (`index.ts:227`) wires live entries to
 `IPC.mainLogEntry`; `getBufferedMainLogs()` backfills the panel on mount via
 `IPC.getBufferedMainLogs`.
 
@@ -499,7 +499,7 @@ re-renders the menu with the mapped label.
 A lightweight self-updater that polls GitHub releases of
 `white-bag/thessal` for a newer `vX.Y.Z[-alpha]` (or legacy
 `overlay-test-vX.Y.Z`) tag with a `*-setup.exe` asset. **What triggers it:**
-`startUpdatePolling` (`index.ts:266`) runs one check ~10 s after launch then every
+`startUpdatePolling` (`index.ts:316`) runs one check ~10 s after launch then every
 6 h, and is a **no-op when unpackaged** (`app.isPackaged`); the config UI can also
 call `checkForUpdate`/`downloadUpdate` on demand. On download it streams
 `updateProgress`, then `installAndRestart` launches the NSIS installer detached

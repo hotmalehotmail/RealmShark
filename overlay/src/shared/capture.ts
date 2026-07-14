@@ -63,20 +63,34 @@ export const CAPTURE_TYPE_QUOTAS: Record<string, number> = {
 export const CAPTURE_SHARED_BUDGET =
   CAPTURE_RING_CAPACITY - Object.values(CAPTURE_TYPE_QUOTAS).reduce((sum, n) => sum + n, 0)
 
+/** A pushed envelope plus its ring-wide arrival order, for stable re-merging in `snapshot()`. */
+interface RingEntry {
+  envelope: PacketEnvelope
+  /** Monotonic push order across the whole ring (both shared and quota'd sub-buffers share one counter). */
+  seq: number
+}
+
 /**
  * Fixed-capacity, allowlist-filtered packet ring for the "Report bug" /
  * "Capture now" capture. Spam types (`CAPTURE_TYPE_QUOTAS`) get their own
  * bounded sub-buffer so they can't crowd out everything else; every other
- * allowlisted type shares `CAPTURE_SHARED_BUDGET`. `snapshot()` merges and
- * re-sorts by `envelope.time` since the sub-buffers are appended to
- * independently and would otherwise interleave out of order.
+ * allowlisted type shares `CAPTURE_SHARED_BUDGET`. `snapshot()` merges the
+ * sub-buffers back into arrival order: primarily by `envelope.time`, but the
+ * bridge stamps ms-granular timestamps and batches many packets per ms, so
+ * ties are common - a plain sort-by-time would then fall back to
+ * `Array.prototype.sort`'s stability, which orders by *push* order within
+ * the concatenated `[...sharedBuffer, ...quotaBuffers]` array, not by true
+ * arrival order across sub-buffers. Each entry is stamped with a ring-wide
+ * monotonic `seq` at push time instead, and ties break on that.
  */
 export class CaptureRing {
-  private readonly quotaBuffers = new Map<string, PacketEnvelope[]>()
-  private readonly sharedBuffer: PacketEnvelope[] = []
+  private readonly quotaBuffers = new Map<string, RingEntry[]>()
+  private readonly sharedBuffer: RingEntry[] = []
+  private nextSeq = 0
 
   push(envelope: PacketEnvelope): void {
     if (!CAPTURE_ALLOWED_TYPES.has(envelope.type)) return
+    const entry: RingEntry = { envelope, seq: this.nextSeq++ }
 
     const quota = CAPTURE_TYPE_QUOTAS[envelope.type]
     if (quota !== undefined) {
@@ -85,23 +99,24 @@ export class CaptureRing {
         buffer = []
         this.quotaBuffers.set(envelope.type, buffer)
       }
-      buffer.push(envelope)
+      buffer.push(entry)
       if (buffer.length > quota) buffer.shift()
     } else {
-      this.sharedBuffer.push(envelope)
+      this.sharedBuffer.push(entry)
       if (this.sharedBuffer.length > CAPTURE_SHARED_BUDGET) this.sharedBuffer.shift()
     }
   }
 
-  /** All retained envelopes, chronological order. */
+  /** All retained envelopes, in true arrival order (see class doc comment). */
   snapshot(): PacketEnvelope[] {
     const all = [...this.sharedBuffer, ...Array.from(this.quotaBuffers.values()).flat()]
-    all.sort((a, b) => a.time - b.time)
-    return all
+    all.sort((a, b) => a.envelope.time - b.envelope.time || a.seq - b.seq)
+    return all.map((entry) => entry.envelope)
   }
 
   clear(): void {
     this.quotaBuffers.clear()
     this.sharedBuffer.length = 0
+    this.nextSeq = 0
   }
 }
