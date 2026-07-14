@@ -1,8 +1,8 @@
 import { join } from 'path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { LootTracker } from '../src/renderer/src/loot/LootTracker'
 import type { PacketEnvelope } from '../src/shared/ipc'
-import { loadCapture, replay } from './replay'
+import { loadCapture, replay, replayUntil } from './replay'
 
 const FIXTURES_DIR = join(__dirname, 'fixtures/captures')
 
@@ -86,5 +86,60 @@ describe('LootTracker capture replay', () => {
 
     expect(tracker.entriesFor(6)).toEqual([])
     expect(tracker.entriesFor(8)).toEqual([])
+  })
+
+  it('replayUntil + onStep: exposes mid-replay tracker state and leaves the fake clock live for the caller', () => {
+    // Exercises the mid-replay-snapshot path replay() can't: stopping the
+    // capture's timeline partway through, before the synthesized drop below,
+    // and inspecting tracker state at that exact instant with the fake clock
+    // still pinned there (the caller-owns-cleanup contract documented on
+    // replayUntil).
+    const base = loadCapture(join(FIXTURES_DIR, 'soak-122-equip-unequip.json.gz'))
+    const lastTime = base[base.length - 1].time
+
+    const lootBagTypes: PacketEnvelope = {
+      type: 'lootBagTypes',
+      direction: 'internal',
+      time: lastTime + 1000,
+      data: {
+        bagTypeTable: { '9064': 6 },
+        lootBagIcons: { '6': 1292 },
+        lootBagObjectTypes: { '1292': 6 },
+        itemNames: { '9064': 'Sword of Acclaim' }
+      }
+    }
+    const bagDrop: PacketEnvelope = {
+      type: 'UpdatePacket',
+      direction: 'incoming',
+      time: lastTime + 2000,
+      data: {
+        newObjects: [
+          {
+            objectType: 1292,
+            status: {
+              objectId: 999002,
+              stats: [{ statTypeNum: 8, statValue: 9064 }]
+            }
+          }
+        ],
+        drops: []
+      }
+    }
+
+    const packets = [...base, lootBagTypes, bagDrop]
+    const cutoff = lastTime + 1500 // after lootBagTypes, strictly before bagDrop
+    const tracker = new LootTracker()
+    const steps: number[] = []
+
+    replayUntil(tracker, packets, cutoff, { onStep: (_envelope, index) => steps.push(index) })
+    try {
+      const expectedSteps = packets.filter((p) => p.time <= cutoff).length
+      expect(steps).toHaveLength(expectedSteps)
+      expect(Date.now()).toBe(cutoff)
+      // The drop envelope is past the cutoff, so it hasn't been ingested yet.
+      expect(tracker.entriesFor(6)).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
