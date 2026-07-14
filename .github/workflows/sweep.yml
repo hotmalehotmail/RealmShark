@@ -145,10 +145,18 @@ jobs:
                 fi
                 # (b) Triage: a passing review's MEDIUM-and-up findings were decided (only if (a)
                 #     passed). `low` findings are informational — never gated (same non-low filter
-                #     as fixloop/gatekeeper), so a low-only PR isn't held here either.
+                #     as fixloop/gatekeeper), so a low-only PR isn't held here either. Read the
+                #     AUTHORITATIVE count from the `review-findings` status on this sha (immune to
+                #     the #161 off-diff / no-line inline-comment gap); fall back to the non-low
+                #     inline-comment count only when that status is absent.
                 if [ "$GATED_OK" = 1 ]; then
-                  FINDINGS="$(gh api --paginate "repos/$REPO/pulls/$P/comments" \
-                                -q ".[] | select(.user.login==\"github-actions[bot]\" and .commit_id==\"$POID\" and (.body | startswith(\"**[low]**\") | not)) | .id" 2>/dev/null | wc -l | tr -d ' ')"
+                  FINDINGS="$(gh api "repos/$REPO/commits/$POID/status" \
+                                -q '.statuses[] | select(.context=="review-findings") | .description' 2>/dev/null \
+                                | head -n1 | grep -oE '[0-9]+' | head -n1 || true)"
+                  if [ -z "${FINDINGS:-}" ]; then
+                    FINDINGS="$(gh api --paginate "repos/$REPO/pulls/$P/comments" \
+                                  -q ".[] | select(.user.login==\"github-actions[bot]\" and .commit_id==\"$POID\" and (.body | startswith(\"**[low]**\") | not)) | .id" 2>/dev/null | wc -l | tr -d ' ')"
+                  fi
                   if [ "${FINDINGS:-0}" -gt 0 ] \
                      && ! gh api --paginate "repos/$REPO/issues/$P/comments" \
                             -q ".[] | select(.body | contains(\"<!-- session-triaged: $POID -->\")) | .id" 2>/dev/null | grep -q .; then

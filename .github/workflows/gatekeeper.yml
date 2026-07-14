@@ -255,13 +255,21 @@ jobs:
               echo "PR #$NUM: review-verdict for current head $PR_HEAD_OID is '${RV:-absent}' — review not complete/passed for this sha; holding until it is."
               exit 0
             fi
-            # The reviewer's inline comments on THIS head that are MEDIUM-and-up (tagged
-            # `**[medium|high|critical]**`; `low` is informational only, never gated — same filter
-            # as fixloop). File-level findings with no line anchor live only in the review body — a
-            # known, rare gap; they don't gate. Count with ...| .id | wc -l, not `-q length`
-            # (miscounts under --paginate).
-            FINDINGS="$(gh api --paginate "repos/$REPO/pulls/$NUM/comments" \
-                          -q ".[] | select(.user.login==\"github-actions[bot]\" and .commit_id==\"$PR_HEAD_OID\" and (.body | startswith(\"**[low]**\") | not)) | .id" 2>/dev/null | wc -l | tr -d ' ')"
+            # MEDIUM-and-up findings on THIS head must be triaged before arming (high/critical
+            # already fail the verdict; `low` is informational, never gated — same filter as
+            # fixloop). Read the AUTHORITATIVE count from the `review-findings` status the scribe
+            # stamps on this sha — immune to whether a finding could be anchored as an inline
+            # comment (the #161 off-diff gap, and no-line findings that live only in the body).
+            # Fall back to the non-low inline-comment count (...| .id | wc -l, not `-q length`
+            # which miscounts under --paginate) only when that status is absent (pre-fix head or a
+            # rare status-post hiccup).
+            FINDINGS="$(gh api "repos/$REPO/commits/$PR_HEAD_OID/status" \
+                          -q '.statuses[] | select(.context=="review-findings") | .description' 2>/dev/null \
+                          | head -n1 | grep -oE '[0-9]+' | head -n1 || true)"
+            if [ -z "${FINDINGS:-}" ]; then
+              FINDINGS="$(gh api --paginate "repos/$REPO/pulls/$NUM/comments" \
+                            -q ".[] | select(.user.login==\"github-actions[bot]\" and .commit_id==\"$PR_HEAD_OID\" and (.body | startswith(\"**[low]**\") | not)) | .id" 2>/dev/null | wc -l | tr -d ' ')"
+            fi
             if [ "${FINDINGS:-0}" -gt 0 ]; then
               if gh api --paginate "repos/$REPO/issues/$NUM/comments" \
                    -q ".[] | select(.body | contains(\"<!-- session-triaged: $PR_HEAD_OID -->\")) | .id" 2>/dev/null | grep -q .; then
