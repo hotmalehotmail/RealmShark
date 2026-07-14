@@ -102,4 +102,23 @@ describe('SessionRecordingWriter', () => {
     const files = readdirSync(dir)
     expect(() => readNdjsonGz(join(dir, files[0]))).not.toThrow()
   })
+
+  it('seeds retention from files already on disk, so a fresh writer prunes leftovers from a prior run', async () => {
+    const stale = new SessionRecordingWriter(dir, { rotateBytes: 50, retainFiles: 5 })
+    for (let i = 0; i < 5; i++) {
+      stale.writeBatch([env('UpdatePacket', 1000 + i, 'x'.repeat(60))])
+    }
+    await stale.close()
+    const leftoverCount = readdirSync(dir).filter((f) => f.endsWith('.ndjson.gz')).length
+    expect(leftoverCount).toBeGreaterThan(2)
+
+    // A brand-new writer instance (as happens on every app relaunch/toggle-on)
+    // must inherit those leftovers into its own retention accounting instead
+    // of starting blind and only ever pruning files it creates itself.
+    const writer = new SessionRecordingWriter(dir, { retainFiles: 2 })
+    await writer.close()
+
+    const files = readdirSync(dir).filter((f) => f.endsWith('.ndjson.gz'))
+    expect(files.length).toBeLessThanOrEqual(2) // seeded leftovers pruned down to retainFiles, same as any other rotation
+  })
 })

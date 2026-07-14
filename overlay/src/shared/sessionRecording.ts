@@ -1,4 +1,4 @@
-import { createWriteStream, mkdirSync, unlinkSync, writeFileSync } from 'fs'
+import { createWriteStream, mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { createGzip, type Gzip } from 'zlib'
 import { CAPTURE_ALLOWED_TYPES } from './capture'
@@ -53,12 +53,16 @@ interface TrackedFile {
  * A writer is "recording" for its whole lifetime - construct one to start,
  * call `close()` to stop. Each instance opens its first file immediately.
  *
- * Retention is tracked in-memory (creation order), not by re-listing the
- * directory: a rotated-out file is only actually deleted once its stream's
- * `finish` event confirms it's fully closed, since a rotation ends the old
- * stream and opens the new one without waiting - deleting a file whose
- * handle hasn't finished closing yet would fail on Windows and is best
- * avoided everywhere.
+ * Retention is tracked in-memory (creation order): the constructor seeds
+ * `files` once from whatever `session-*.ndjson.gz` files already exist in
+ * `dir` (recording resumes on every launch, so without this a fresh writer
+ * instance would only ever prune files it created itself, and files left by
+ * prior runs would accumulate forever) and thereafter tracks purely in
+ * memory, not by re-listing the directory on every write. A rotated-out file
+ * is only actually deleted once its stream's `finish` event confirms it's
+ * fully closed, since a rotation ends the old stream and opens the new one
+ * without waiting - deleting a file whose handle hasn't finished closing yet
+ * would fail on Windows and is best avoided everywhere.
  */
 export class SessionRecordingWriter {
   private readonly dir: string
@@ -77,7 +81,19 @@ export class SessionRecordingWriter {
     this.rotateBytes = opts.rotateBytes ?? RECORDING_ROTATE_BYTES
     this.retainFiles = opts.retainFiles ?? RECORDING_RETAIN_FILES
     mkdirSync(this.dir, { recursive: true })
+    this.seedExistingFiles()
     this.openNewFile()
+  }
+
+  /** Pulls already-on-disk recording files (from a previous run/toggle) into retention tracking, oldest first, and prunes any already past `retainFiles`. */
+  private seedExistingFiles(): void {
+    const existing = readdirSync(this.dir)
+      .filter((name) => name.startsWith('session-') && name.endsWith(FILE_SUFFIX))
+      .sort()
+    for (const name of existing) {
+      this.files.push({ path: join(this.dir, name), closed: true })
+    }
+    this.pruneOldFiles()
   }
 
   private openNewFile(): void {
