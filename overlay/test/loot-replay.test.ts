@@ -24,12 +24,27 @@ describe('LootTracker capture replay', () => {
   it('soak #122 (mutated): a real bag-entity drop layered on the same session logs one entry', () => {
     const envelopes = loadCapture(join(FIXTURES_DIR, 'soak-122-equip-unequip.json.gz'))
     const lastTime = envelopes[envelopes.length - 1].time
-    // Synthesize a true drop on top of the equip/unequip-only session: a
-    // white-bag entity (objectType 3000, registered in the fixture's
-    // lootBagTypes envelope as bagType 6) appearing with a tracked item in
-    // its first slot.
+    // The real #122 capture never received a `lootBagTypes` envelope at all
+    // (its 300-envelope ring had already rotated past the bridge's one-time
+    // broadcast by the time the bug was reported), so this synthesizes one on
+    // top of the real session, then a white-bag entity (objectType 3000,
+    // registered here as bagType 6) carrying a tracked item in its first slot.
+    // Wire shapes lifted from `bridge/LootBagTypes.java` and
+    // `packets/data/enums/StatType.java` - no committed fixture actually
+    // contains a real white/orange bag drop (see the fixtures README).
     const mutated = [
       ...envelopes,
+      {
+        type: 'lootBagTypes',
+        direction: 'SERVER',
+        time: lastTime + 500,
+        data: {
+          bagTypeTable: { '1001': 6 },
+          lootBagIcons: { '6': 2000 },
+          lootBagObjectTypes: { '3000': 6 },
+          itemNames: { '1001': 'Potion of Life' }
+        }
+      },
       {
         type: 'UpdatePacket',
         direction: 'SERVER',
