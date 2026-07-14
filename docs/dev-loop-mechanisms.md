@@ -36,6 +36,7 @@ step that *runs* (driven) but is *not gated* (unenforced), or vice-versa.
 | 5.1 | PR hygiene + duplicate guard | `pull_request` (incl. `edited`/`labeled`) → `hygiene.yml` | `pr hygiene` required check; dedup auto-close | 🟡 built — required-check flip pending |
 | 6 | Fix loop (review → re-fire builder, capped) | `workflow_run` of `review` → `fixloop.yml`; `agent:retry` → `resume.yml`; conflict → `conflict-watch.yml` (+ sweep backstop) rebase | `review-verdict` status; `MAX_FIX_ROUNDS` (review) + `MAX_REBASE_ROUNDS` (conflicts); `agent:needs-human` freeze | 🟡 re-fire + escalate + resume + conflict-rebase built; live-verify pending |
 | 7 | Gatekeeper auto-merge | `workflow_run` → arm auto-merge | native auto-merge + required checks | 🟢 verified (#19) |
+| 7.4 | UI-signoff gate (opt-in) | `issues`/`pull_request_target: labeled` → `signoff.yml` label sync | gatekeeper + sweep hold `ui:signoff` w/o `ui:approved`; no backstop (human gate) | 🟡 built — unexercised |
 | 8 | Release (ship button) | `workflow_dispatch` → `release.yml` | manual-only dispatch | 🟢 (captain notes + auto-bump built) |
 | 9 | Alpha soak → promote or fix | `soak:pass`/`soak:fail` labels; auto-cut on staging merge; latest-on-promotion | maintainer-only labels; `soak:pass` = stamped `review-verdict` on the promotion PR | 🟡 built pending deploy (PRs #41 #42) — fix-forward, auto-cut, labels, PR-based promote (no token) |
 | — | Branch protection | — | required checks (+ push restriction) | 🟢 verdict required (push restrict N/A on user repo) |
@@ -124,8 +125,10 @@ so the same agent can push fixes to the PR under review. Specified in §6.
 
 **Drives.** `.github/workflows/ci.yml` runs `on: pull_request: branches: [staging, bridge]`.
 Two jobs: `overlay — typecheck + lint` (Node 22, `npm ci --ignore-scripts`,
-`npm run typecheck`, `npm run lint`) and `bridge — compile + fat jar`
-(`gradle bridgeJar`, Gradle pinned 7.4.2 via `gradle/actions/setup-gradle@v4`).
+`npm run typecheck`, `npm run lint`, `npm test` — the vitest suite: capture-replay
+regression tests + the allowlist tripwire, see `docs/overlay-testing.md`) and
+`bridge — compile + fat jar` (`gradle bridgeJar`, Gradle pinned 7.4.2 via
+`gradle/actions/setup-gradle@v4`).
 
 **Enforces.** Branch protection on `staging` and `bridge` lists both job names as
 **required status checks** (verified: contexts `overlay — typecheck + lint` and
@@ -134,7 +137,12 @@ Two jobs: `overlay — typecheck + lint` (Node 22, `npm ci --ignore-scripts`,
 **Status.** 🟢 Built. **PR #18** landed the JUnit DPS test module and added a `gradle
 test` step to the `bridge` job. It runs inside the existing `bridge — compile + fat
 jar` context, so the required-check list is unchanged — the ground-truth gate now
-includes behavioral tests, on both `staging` and `bridge`.
+includes behavioral tests, on both `staging` and `bridge`. The overlay vitest suite
+(PRD Phase 1, #157/#158, wired in #166) is added the same way: `npm test` runs inside
+the existing `overlay — typecheck + lint` context (no required-check rename). #166
+landed staging-first (not bridge-first like review.yml changes — ci.yml has no parity
+guard, and the test suite only exists on `staging`; a bridge-based PR would fail its
+own `npm test`); `bridge` picks it up at the next promotion.
 
 ---
 
@@ -157,7 +165,13 @@ deterministic phases (the **judge / scribe split**, audit H2/H3):
    inputs + the repo and WRITES its findings to `review-inputs/verdict.json`. With no
    shell it physically cannot post a review or a status, so untrusted diff content has
    **no path to the gate** (this replaces the old design where the reviewer posted its
-   own verdict via `Bash(gh:*)` — the credential-holding-judge risk in audit H2).
+   own verdict via `Bash(gh:*)` — the credential-holding-judge risk in audit H2). The
+   judge scores four dimensions: correctness, code quality, docs freshness, and —
+   when the diff touches `overlay/src/renderer/` or `docs/screenshots/` — **visual
+   correctness**: it is multimodal, so it Reads the committed panel gallery
+   (`docs/screenshots/panels/`, PRD §5.4) and treats a clear visual defect, or
+   renderer changes shipped without refreshed shots (stale evidence), as findings
+   like any other.
 3. **scribe** — plain bash. Computes the verdict as a deterministic function of the
    judge's findings + the stage facts (any `high`/`critical` finding, an agent PR
    touching `.github/`, or unmet acceptance criteria ⇒ fail), posts the review
@@ -765,6 +779,27 @@ a context line outside the diff 422'd the review and slipped past inline-comment
 
 ---
 
+### 7.4 · UI-signoff gate — an opt-in human visual hold (`signoff.yml` + gatekeeper/sweep)
+
+**Drives.** A maintainer puts **`ui:signoff`** on an *issue* whose change needs human
+eyes on the rendered result before merge. `signoff.yml` (`issues: labeled` +
+`pull_request_target: [opened, edited]` — API-only, nothing from the PR head is ever
+checked out, same safety rule as §6.5) mirrors `ui:signoff`/`ui:approved` from the
+issue onto every open PR that declares it closes that issue, because the gatekeeper
+and sweep evaluate **PR** labels. Release: the maintainer applies **`ui:approved`**
+(to the issue — synced — or the PR directly); labels are maintainer-only, the same
+security model as every other verdict label (§1, §9.2).
+
+**Enforces.** Gatekeeper: after the interlock + triage gates, `ui:signoff` without
+`ui:approved` ⇒ do not arm; the `pull_request: labeled` trigger makes the
+`ui:approved` event itself re-evaluate arming immediately (no sweep-cycle latency).
+Sweep: such PRs are excluded at candidate selection, so they are unreachable by its
+merge path entirely. **Deliberately NO crash/timeout backstop** — unlike the triage
+gate (§7.3), this is a human gate: a held PR waits indefinitely. Reject-with-steer is
+the existing machinery: leave a steering comment + `agent:retry` (§6.3).
+
+**Status.** 🟡 Built; unexercised until a maintainer first applies `ui:signoff`.
+
 ## 8 · Release — the human ship button
 
 **Drives.** `.github/workflows/release.yml` runs **only** `on: workflow_dispatch`
@@ -824,10 +859,19 @@ its `beta` channel, auto-cut on promotion (9.3). Not yet live-verified.
 On a successful alpha publish, the **release staging** pipeline (`release.yml`, alpha
 channel only) opens an issue
 `🧪 Alpha soak: v<version>`, labeled `soak`, whose body is the changes since the last
-promotion + the installer link + the verdict instructions. Opened with the built-in
-`GITHUB_TOKEN` (`issues: write`) — no PAT needed. **One soak issue per published
-alpha**: a re-cut (9.5) opens a new one and closes the prior as *superseded*, so each
-alpha keeps a clean, self-contained verdict record.
+promotion + the installer link + a **UI gallery** + the verdict instructions. Opened
+with the built-in `GITHUB_TOKEN` (`issues: write`) — no PAT needed. **One soak issue
+per published alpha**: a re-cut (9.5) opens a new one and closes the prior as
+*superseded*, so each alpha keeps a clean, self-contained verdict record.
+
+> **UI gallery (PRD §5.4)** — for every panel PNG this build changed under
+> `docs/screenshots/panels/` (same `origin/bridge..HEAD` range as the PR list), the
+> issue embeds a before/after pair via `raw.githubusercontent.com` URLs **pinned to
+> the bridge SHA (before) and the release HEAD SHA (after)** — so a superseded soak
+> issue's gallery stays accurate forever. Maintainer flow: swipe the gallery first;
+> visually broken ⇒ `soak:fail` + comment **without installing**; looks right ⇒
+> install and behavior-test. Gallery construction is best-effort — a hiccup never
+> blocks the soak issue.
 
 > **"Pull requests in this build" boundary** — the issue's PR list is
 > `origin/bridge..HEAD` (PRs on `staging` not yet promoted to the stable branch),
