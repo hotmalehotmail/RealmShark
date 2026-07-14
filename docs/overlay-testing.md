@@ -65,13 +65,18 @@ transcription step exists between "what a user attached to an issue" and
 
 Gzipped captures + a `README.md` describing each one's scenario and exactly
 what it does and doesn't cover - see that README for the full per-fixture
-detail, including a documented provenance caveat: the three fixtures were
-synthesized from the real wire-format shapes rather than downloaded from the
-GitHub issue attachments issue #157 named, because the build agent's
-sandboxed egress policy blocks `github.com/user-attachments/...` (not a
-repo-scoped path). If a real capture is later recovered or freshly recorded
-(PRD §7.3), it can replace the matching fixture without touching the tests -
-they assert on tracker *behavior*, not on capture bytes.
+detail. One (`soak-122-equip-unequip.json.gz`) is the real soak-#122
+attachment issue #157 named (recovered by issue #160 once the sandboxed
+egress block on `github.com/user-attachments/...` was lifted); the other two
+(`soak-144-loot-empty.json.gz`, `soak-50-other-player-damage.json.gz`) stay
+synthesized because their real attachments predate the envelope type
+(`lootBagTypes`, `dps` respectively) each fixture's regression test needs, so
+they cannot support the assertion without either fabricating that envelope on
+top of unrelated real noise or downgrading the test to a smoke test - see the
+fixtures README's per-fixture "Why still synthetic" notes. If a real capture
+ever surfaces (or a fresh one is recorded, PRD §7.3) that does contain the
+needed envelope, it can replace the matching fixture without touching the
+tests - they assert on tracker *behavior*, not on capture bytes.
 
 ## The allowlist tripwire (`overlay/test/allowlist.test.ts`)
 
