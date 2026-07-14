@@ -29,6 +29,18 @@ const MAX_PENDING_NEW_OBJECTS = 64
 export const TRACKED_BAG_TYPES = [6, 8] as const
 export type TrackedBagType = (typeof TRACKED_BAG_TYPES)[number]
 
+/**
+ * Every envelope type `ingest()`'s switch handles. Read by the
+ * capture-allowlist tripwire test (`test/allowlist.test.ts`) - see
+ * DpsTracker.ts's `CONSUMED_ENVELOPE_TYPES` for why this exists.
+ */
+export const CONSUMED_ENVELOPE_TYPES = [
+  'lootBagTypes',
+  'UpdatePacket',
+  'NewTickPacket',
+  'MapInfoPacket'
+] as const
+
 function isTrackedBagType(n: number): n is TrackedBagType {
   return (TRACKED_BAG_TYPES as readonly number[]).includes(n)
 }

@@ -14,6 +14,18 @@ import type { EnchantNamesData, ItemInfoData } from './types'
  * latest snapshot each render; the one state bump per received table is only
  * to trigger that re-render, not a general change-notification API.
  */
+
+/**
+ * Envelope types this provider's `onPacketBatch` handler switches on.
+ * Deliberately NOT covered by the capture-allowlist tripwire
+ * (`test/allowlist.test.ts`): `itemInfo`/`enchantNames` are asset-derived
+ * display metadata, not part of `CAPTURE_ALLOWED_TYPES`
+ * (`src/shared/capture.ts`) - and this issue's allowlist is explicitly frozen
+ * (its contents don't change here), so extending it to cover these is a
+ * separate follow-up, not a silent gap.
+ */
+export const CONSUMED_ENVELOPE_TYPES = ['itemInfo', 'enchantNames'] as const
+
 export function ItemInfoProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
   const itemRef = useRef<ItemInfoData>({})
   const enchantRef = useRef<EnchantNamesData>({})

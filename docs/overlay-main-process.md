@@ -28,6 +28,7 @@ shapes on the bridge socket, `bridge-server.md` for the Java side,
 | `overlay/src/main/updater.ts` | GitHub-release self-updater (brief here; see `build-and-release.md`). |
 | `overlay/src/preload/index.ts` (+ `index.d.ts`) | `window.overlay` contextBridge API. |
 | `overlay/src/shared/ipc.ts` | `IPC` channel names + shared types (`SpritePack`, `PacketEnvelope`, …). |
+| `overlay/src/shared/capture.ts` | `CaptureRing` + `CAPTURE_ALLOWED_TYPES`/quotas backing the bug-report capture (below), importable by both main and the test suite. |
 | `overlay/src/shared/settings.ts` | `OverlaySettings` model + `DEFAULT_SETTINGS`. |
 | `overlay/src/shared/panels.ts` | `PanelInstance` layout model (owned by the renderer). |
 
@@ -208,10 +209,49 @@ All registered inside `whenReady` (`index.ts:256-319`). `handle` = renderer
 | `relaunch` | handle | `app.relaunch()` + `app.exit(0)` |
 | `getPanelLayout` | handle | `loadPanelLayout()` |
 | `savePanelLayout` | handle | `persistPanelLayout(panels)` |
+| `reportBug` | handle | gzips `{version, …, recentPackets: captureRing.snapshot(), mainLogs}` to a temp file, reveals it, opens the prefilled bug-report issue form (see below) |
 
 Pushes to the renderer set up in the same block: `mainLogEntry`, `spritePack`,
 `bridgeStatus`, `packetBatch`, `attachSuccess`, `overlayDetach`,
 `interactiveChange`, `updateAvailable`, `updateProgress`.
+
+### The bug-report capture ring
+
+`onBatch` (inside `startBridgeClient`, `index.ts`) feeds every incoming packet
+into a module-scoped `CaptureRing` (`shared/capture.ts`) alongside forwarding
+the full batch to the renderer via `IPC.packetBatch` - the ring only filters
+what gets *retained* for a bug report, never what the live overlay sees.
+
+- **Allowlist.** `CAPTURE_ALLOWED_TYPES` is default-deny: a packet type not
+  listed is dropped from the ring outright, regardless of quota. This keeps
+  chat (`TextPacket`, incl. DMs), account lists, and connection/auth packets
+  (`Hello`/`Reconnect`) out of a capture that's attached to a **public**
+  GitHub issue. Credential *fields* are separately stripped bridge-side
+  (`PacketSerializer`, Java) - this drops whole packet *types* instead.
+  `overlay/test/allowlist.test.ts` asserts every gameplay tracker's declared
+  `CONSUMED_ENVELOPE_TYPES` (`DpsTracker`/`LootTracker`/`EntityRegistry`) is a
+  subset of this allowlist, so a tracker that starts reading a new envelope
+  type without extending the allowlist fails a test instead of silently
+  shipping a capture the new type can never appear in.
+- **Capacity: 10,000 envelopes total**, with per-type quotas
+  (`CAPTURE_TYPE_QUOTAS`) for high-frequency "spam" types that would
+  otherwise dominate a plain count-based ring and starve wall-clock coverage
+  of everything else: `MovePacket` 500, `NewTickPacket` 1,000,
+  `UpdateAckPacket`/`GotoAckPacket` 300 each. Every other allowlisted type
+  shares whatever's left (`CAPTURE_SHARED_BUDGET` = 10,000 minus the sum of
+  the quotas above). Implementation: `CaptureRing` keeps one bounded
+  sub-buffer per quota'd type plus one shared sub-buffer for everything else
+  (each a simple push-then-shift-if-over-cap queue), and `snapshot()` merges
+  and re-sorts them by `envelope.time` since the sub-buffers fill
+  independently and would otherwise interleave out of chronological order.
+- **Serialization.** `reportBug` writes **compact** JSON (no pretty-print)
+  through `zlib.gzipSync` to `realmshark-bug-<ts>.json.gz` - GitHub accepts
+  `.gz` issue attachments, and gzip keeps a full 10k-envelope capture under
+  its 25 MB limit (typically a few MB).
+- **Replay.** The written file's shape (`{version, recentPackets, …}`) is
+  exactly what `overlay/test/replay.ts`'s `loadCapture()` reads - see
+  `docs/overlay-testing.md` for the test suite that turns a capture into a
+  regression test.
 
 ### Quit / teardown
 
