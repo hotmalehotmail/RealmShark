@@ -1,0 +1,102 @@
+name: signoff
+
+# UI-signoff label sync (mechanisms §7.4 / PRD §5.4). An OPT-IN human visual gate:
+# a maintainer puts `ui:signoff` on an ISSUE whose change needs human eyes on the
+# rendered result before it may merge. This workflow copies `ui:signoff` (and a
+# later `ui:approved`) from the issue to the open PR(s) that declare they close it,
+# because the gatekeeper and sweep evaluate PR labels, not issue labels.
+#
+# The HOLD itself lives in gatekeeper.yml + sweep.yml: `ui:signoff` present without
+# `ui:approved` => do not arm / do not sweep-merge. DELIBERATELY NO auto-release
+# backstop — unlike the triage gate's crash backstop, this is a human gate; a held
+# PR waits indefinitely until the maintainer applies `ui:approved` (to the issue —
+# synced here — or directly to the PR). Reject-with-steer stays the existing
+# machinery: comment + `agent:retry` (resume.yml).
+#
+# Two triggers, one invariant (PR labels mirror the closed issue's signoff labels):
+#   issues: labeled        — the maintainer labels the issue AFTER the PR is open.
+#   pull_request_target    — the PR opens (or its body's Closes #N changes) AFTER the
+#                            issue was labeled. `pull_request_target` deliberately:
+#                            it fires even for a conflicted PR (no merge ref needed,
+#                            the same gap that motivated conflict-watch §6.5), and per
+#                            the loop's standing safety rule NOTHING from the PR head
+#                            is ever checked out or executed — this job is API-only.
+#                            Labeling requires write access, so both triggers are
+#                            maintainer-gated (same model as kickoff §1).
+on:
+  issues:
+    types: [labeled]
+  pull_request_target:
+    types: [opened, edited]
+
+permissions:
+  issues: write # create/apply labels (PR labels ride the issues API)
+  pull-requests: read # list open PRs + read bodies
+
+jobs:
+  sync:
+    # issues path: only the two signoff labels are sync-relevant.
+    # pull_request_target path: same-repo agent PRs only (fork PRs get no labels).
+    if: >
+      (github.event_name == 'issues' &&
+       (github.event.label.name == 'ui:signoff' || github.event.label.name == 'ui:approved')) ||
+      (github.event_name == 'pull_request_target' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       startsWith(github.event.pull_request.head.ref, 'claude/'))
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      EVT: ${{ github.event_name }}
+      ISSUE_NUM: ${{ github.event.issue.number }}
+      LABEL: ${{ github.event.label.name }}
+      PR_NUM: ${{ github.event.pull_request.number }}
+      # Untrusted PR body: env var only — never interpolated into the script text.
+      PRBODY: ${{ github.event.pull_request.body }}
+    steps:
+      - name: Mirror ui:signoff / ui:approved from issue to closing PR(s)
+        run: |
+          set -euo pipefail
+          ensure_labels() {
+            gh label create "ui:signoff" --repo "$REPO" --color 1D76DB \
+              --description "Maintainer visual signoff required before merge (gatekeeper/sweep hold)" >/dev/null 2>&1 || true
+            gh label create "ui:approved" --repo "$REPO" --color 0E8A16 \
+              --description "Maintainer approved the visuals — releases the ui:signoff hold" >/dev/null 2>&1 || true
+          }
+
+          if [ "$EVT" = "issues" ]; then
+            # A signoff label landed on an issue -> copy it to every OPEN PR that closes it.
+            # (Same closing-keyword regex as review.yml/hygiene.yml — keep in sync.)
+            ensure_labels
+            FOUND=0
+            for P in $(gh pr list --repo "$REPO" --state open --limit 100 --json number --jq '.[].number'); do
+              B="$(gh pr view "$P" --repo "$REPO" --json body -q '.body' 2>/dev/null || true)"
+              if printf '%s' "$B" \
+                   | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+#[0-9]+' \
+                   | grep -oE '[0-9]+' | grep -qx "$ISSUE_NUM"; then
+                gh pr edit "$P" --repo "$REPO" --add-label "$LABEL" >/dev/null 2>&1 || true
+                echo "Copied $LABEL from issue #$ISSUE_NUM to PR #$P."
+                FOUND=1
+              fi
+            done
+            [ "$FOUND" -eq 0 ] && echo "No open PR closes issue #$ISSUE_NUM yet — the pull_request_target path syncs when one opens."
+            exit 0
+          fi
+
+          # pull_request_target path: the PR (re)declared its closed issues — pull any
+          # signoff labels those issues already carry. Body arrives via env, parsed with
+          # grep only; nothing from the PR is executed.
+          ISSUES="$(printf '%s' "${PRBODY:-}" \
+            | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+#[0-9]+' \
+            | grep -oE '[0-9]+' | sort -u || true)"
+          [ -z "$ISSUES" ] && { echo "PR #$PR_NUM declares no closing reference — nothing to sync."; exit 0; }
+          for ISS in $ISSUES; do
+            ILABELS="$(gh issue view "$ISS" --repo "$REPO" --json labels -q '.labels[].name' 2>/dev/null || true)"
+            for L in ui:signoff ui:approved; do
+              if printf '%s\n' "$ILABELS" | grep -qx "$L"; then
+                ensure_labels
+                gh pr edit "$PR_NUM" --repo "$REPO" --add-label "$L" >/dev/null 2>&1 || true
+                echo "PR #$PR_NUM closes issue #$ISS which carries $L — copied."
+              fi
+            done
+          done

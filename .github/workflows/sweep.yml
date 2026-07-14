@@ -82,8 +82,11 @@ jobs:
           fi
 
           # 2) Candidate PRs: SAME-REPO (no forks) claude/* -> staging, not a draft, not already
-          #    armed, not frozen for a human. The same-repo filter + branch protection (step 4)
-          #    are the security boundary — the `claude/` name is not.
+          #    armed, not frozen for a human, and not held for UI signoff (§7.4: `ui:signoff`
+          #    without `ui:approved` — a HUMAN gate, so unlike the interlock/triage gates below
+          #    it gets NO crash backstop; the sweep must stay exactly as restrictive as the
+          #    gatekeeper). The same-repo filter + branch protection (step 4) are the security
+          #    boundary — the `claude/` name is not.
           CANDIDATES="$(gh pr list --repo "$REPO" --base staging --state open \
             --json number,headRefName,headRefOid,isCrossRepository,isDraft,autoMergeRequest,labels \
             -q '.[]
@@ -92,6 +95,8 @@ jobs:
                  | select(.headRefName | startswith("claude/"))
                  | select(.autoMergeRequest == null)
                  | select([.labels[].name] | index("agent:needs-human") | not)
+                 | select((([.labels[].name] | index("ui:signoff")) == null)
+                          or (([.labels[].name] | index("ui:approved")) != null))
                  | "\(.number) \(.headRefName) \(.headRefOid)"' 2>/dev/null || true)"
           if [ -z "$CANDIDATES" ]; then
             echo "No stranded agent PRs to sweep."
