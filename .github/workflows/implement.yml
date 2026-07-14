@@ -45,8 +45,14 @@ jobs:
             gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "⚙️ \`$LABEL\` applied, but the build-agent routine isn't wired up yet (missing ROUTINE_FIRE_URL / ROUTINE_FIRE_TOKEN secrets). See docs/build-agent-routine.md."
             exit 0
           fi
-          TEXT="$(printf 'Work item from GitHub issue #%s in %s (label: %s).\nTitle: %s\n\n%s' \
-            "$ISSUE_NUMBER" "$REPO" "$LABEL" "$ISSUE_TITLE" "${ISSUE_BODY:-}")"
+          # The PR CONTRACT block is load-bearing: `Closes #N` is enforced by the
+          # `pr hygiene` required check (hygiene.yml) — a PR born without it sits
+          # blocked until the body is fixed — and the duplicate check prevents the
+          # mis-routed-session class of failure (a second full implementation opened
+          # next to an existing open PR; see hygiene.yml's duplicate guard, which
+          # backstops this instruction deterministically).
+          TEXT="$(printf 'Work item from GitHub issue #%s in %s (label: %s).\nTitle: %s\n\nPR CONTRACT (gate-enforced): make the FIRST line of your PR body exactly `Closes #%s` — the `pr hygiene` required check fails the PR without it. BEFORE writing any code: search this repo'\''s OPEN pull requests for one whose body already closes issue #%s; if one exists, the work is already delivered — do NOT build again and do NOT open a second PR; stop and report that instead.\n\n%s' \
+            "$ISSUE_NUMBER" "$REPO" "$LABEL" "$ISSUE_TITLE" "$ISSUE_NUMBER" "$ISSUE_NUMBER" "${ISSUE_BODY:-}")"
           # Compact JSON body written to a file (a jq failure aborts under set -e,
           # unlike BODY=$(jq ...)); --data @file sends exactly these bytes.
           jq -nc --arg t "$TEXT" '{text: $t}' > /tmp/fire.json

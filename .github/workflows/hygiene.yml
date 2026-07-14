@@ -1,0 +1,139 @@
+name: hygiene
+
+# Deterministic PR gates (mechanisms §5.1) — model-free, fast, and re-run on EVERY
+# event that mutates their inputs. Two jobs:
+#
+#   pr hygiene      — required check: an agent (`claude/*`) PR must declare the issue
+#                     it resolves (`Closes #N` / `Fixes #N` in the body); soak-fix PRs
+#                     are exempt (they must NOT close the loop-managed soak issue).
+#   duplicate guard — closes a newly-opened agent PR whose issue is already claimed by
+#                     an OLDER open PR, instead of letting two implementations race to
+#                     merge (the PR #159 incident: a mis-routed FIX MODE session
+#                     rebuilt issue #157 from scratch next to the open PR #158).
+#
+# WHY A SEPARATE WORKFLOW (the PR #158 incident): the issue-link gate used to live
+# inside `review-verdict`, whose `pull_request: [opened, synchronize, reopened]`
+# trigger never re-fires on a body edit. PR #158 gained its missing `Closes #157`
+# minutes AFTER the review had already read the body — the failure was correct when
+# posted but stale forever after, and only pushing an unrelated commit cleared it.
+# The rule this file encodes: a gate must re-evaluate whenever its input changes; the
+# PR body and labels are mutable, so the gate that reads them triggers on `edited`
+# and `labeled`/`unlabeled`. That re-evaluation is only affordable because no model
+# runs here — this is pure bash against the event payload.
+#
+# TRUST CHAIN — why the `.github/` tripwire is NOT in this file: `pull_request`
+# workflows execute the workflow file from the PR's MERGE REF, so a PR that edits
+# hygiene.yml is checked by its OWN edited copy — this file can be self-certified by
+# the PR under test and must never be the sole guard against anything worth tampering
+# with. That is acceptable for the checks here only because review.yml — protected by
+# claude-code-action's byte-identity validation against the default branch, which a
+# PR cannot fake — auto-fails ANY agent PR that touches `.github/`: gutting this file
+# costs an agent PR its `review-verdict`. Checks that defend against `.github/`
+# tampering itself must stay in review.yml.
+#
+# Same pull_request safety posture as the rest of the loop: nothing from the PR head
+# is checked out or executed; untrusted PR text reaches the script only via env vars.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, labeled, unlabeled]
+    branches: [staging, bridge]
+
+permissions:
+  contents: read
+  pull-requests: write # duplicate guard comments/closes; hygiene posts its hint comment
+  issues: write # PR labels + comments go through the issues API
+
+jobs:
+  hygiene:
+    name: pr hygiene
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      HEADREF: ${{ github.event.pull_request.head.ref }}
+      # Untrusted PR body: env var only — never interpolated into the script text.
+      PRBODY: ${{ github.event.pull_request.body }}
+    steps:
+      - name: Issue-link gate (agent PRs declare Closes #N; soak-fixes exempt)
+        run: |
+          set -euo pipefail
+          # Only `claude/*` head branches are pipeline agent PRs — a human PR closing
+          # no issue is legitimate. Same scoping as review.yml's stage step.
+          case "$HEADREF" in
+            claude/*) ;;
+            *) echo "Not an agent (claude/*) PR — the issue-link gate does not apply."; exit 0;;
+          esac
+          # Same closing-keyword regex as review.yml's stage step (keep the two in sync).
+          if printf '%s' "${PRBODY:-}" | grep -qiE '(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+#[0-9]+'; then
+            echo "Closing reference found — pass."
+            exit 0
+          fi
+          # Soak-fix exemption: the same two signals as fixloop's §9.5 freeze exemption
+          # (body reference first — it exists at PR-open time, before any label).
+          if printf '%s' "${PRBODY:-}" | grep -qiE 'addresses soak #[0-9]+'; then
+            echo "Soak-fix (body reference) — exempt from the issue-link requirement."
+            exit 0
+          fi
+          if gh pr view "$PR" --repo "$REPO" --json labels -q '.labels[].name' 2>/dev/null | grep -qx 'soak-fix'; then
+            echo "Soak-fix (label) — exempt from the issue-link requirement."
+            exit 0
+          fi
+          # Failing. Leave ONE instructional comment (marker-deduped across re-runs) so
+          # any FIX MODE agent or human reading the conversation knows the exact remedy —
+          # including that a body edit alone re-runs this gate (the whole point of the
+          # `edited` trigger above).
+          if ! gh api --paginate "repos/$REPO/issues/$PR/comments" \
+               -q '.[] | select(.body | contains("<!-- hygiene:issue-link -->")) | .id' 2>/dev/null | grep -q .; then
+            gh pr comment "$PR" --repo "$REPO" --body "$(printf '❌ **Missing issue link** (\`pr hygiene\` gate). An agent PR must declare the issue it resolves: make the FIRST line of the PR body exactly \`Closes #<issue>\` (or \`Fixes #<issue>\`). Editing the PR body re-runs this check automatically — no commit needed. (Soak-fix PRs are exempt: they carry \`Addresses soak #<n>\` or the \`soak-fix\` label instead, and must NEVER close the soak issue.) <!-- hygiene:issue-link -->')" || true
+          fi
+          echo "::error::Agent PR with no Closes/Fixes #N reference and no soak-fix exemption."
+          exit 1
+
+  dedup:
+    name: duplicate guard
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      HEADREF: ${{ github.event.pull_request.head.ref }}
+      PRBODY: ${{ github.event.pull_request.body }}
+    steps:
+      - name: Close this PR if an older open PR already closes the same issue
+        run: |
+          set -euo pipefail
+          # Agent PRs only: kickoff (BUILD MODE) is the only path that opens new PRs, so
+          # a second `claude/*` PR closing an already-claimed issue is always a
+          # mis-routed duplicate (FIX/TRIAGE/rebase re-fires push to existing branches).
+          case "$HEADREF" in
+            claude/*) ;;
+            *) echo "Not an agent (claude/*) PR — the duplicate guard does not apply."; exit 0;;
+          esac
+          ISSUES="$(printf '%s' "${PRBODY:-}" \
+            | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+#[0-9]+' \
+            | grep -oE '[0-9]+' | sort -u || true)"
+          if [ -z "$ISSUES" ]; then
+            echo "No closing references — nothing to deduplicate (the issue-link gate handles absence)."
+            exit 0
+          fi
+          # Deterministic, race-free rule: the LOWER-numbered open PR wins. Both PRs can
+          # run this concurrently — the older one sees no smaller-numbered rival and
+          # survives; only the newer one closes itself. Bodies of other PRs are untrusted:
+          # parsed with grep via printf, never interpolated or eval'd.
+          for OTHER in $(gh pr list --repo "$REPO" --state open --limit 100 --json number --jq '.[].number'); do
+            [ "$OTHER" -ge "$PR" ] && continue
+            OBODY="$(gh pr view "$OTHER" --repo "$REPO" --json body -q '.body' 2>/dev/null || true)"
+            for ISS in $ISSUES; do
+              if printf '%s' "$OBODY" | grep -qiE "(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+#${ISS}([^0-9]|\$)"; then
+                echo "Open PR #$OTHER already closes issue #$ISS — this PR is a duplicate."
+                gh label create "agent:duplicate" --repo "$REPO" --color D93F0B \
+                  --description "Closed automatically: an older open PR already claims this issue" >/dev/null 2>&1 || true
+                gh pr edit "$PR" --repo "$REPO" --add-label "agent:duplicate" >/dev/null 2>&1 || true
+                gh pr comment "$PR" --repo "$REPO" --body "$(printf '🔁 **Duplicate — closed automatically.** Open PR #%s already declares it closes issue #%s, so this PR is a second implementation of the same work item (usually a mis-routed agent session). The branch is kept for salvage — cherry-pick anything valuable into #%s. If this closure is wrong (e.g. the issues merely overlap), a maintainer can reopen. <!-- hygiene:duplicate -->' "$OTHER" "$ISS" "$OTHER")" || true
+                gh pr close "$PR" --repo "$REPO"
+                exit 0
+              fi
+            done
+          done
+          echo "No older open PR claims the same issue(s): $(echo $ISSUES | tr '\n' ' ')."

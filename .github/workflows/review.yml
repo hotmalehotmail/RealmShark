@@ -13,7 +13,10 @@ name: review
 #   1. stage  — plain bash (github.token, read-only gh) fetches the diff + the linked
 #               issue into files, and computes the facts the verdict depends on that must
 #               NOT be left to the model: is this an agent (`claude/*`) branch, does it
-#               touch `.github/`, does it declare a `Closes #N`.
+#               touch `.github/`, which issue does it declare via `Closes #N` (that
+#               reference selects the acceptance criteria the judge checks; its PRESENCE
+#               is enforced by the separate model-free `pr hygiene` check in hygiene.yml,
+#               which re-runs on body edits — this workflow can't, affordably).
 #   2. judge  — claude-code-action with **Read/Grep/Glob/Write only — no Bash, no gh**.
 #               It reads the staged inputs + the repo, assesses, and WRITES its findings
 #               to review-inputs/verdict.json. With no shell it physically cannot post a
@@ -22,10 +25,23 @@ name: review
 #               verdict via Bash(gh:*)).
 #   3. scribe — plain bash. Reads verdict.json, computes the pass/fail verdict as a
 #               deterministic function of the findings + the stage facts (any high/
-#               critical finding, an agent PR touching `.github/`, an agent PR with no
-#               issue link, or unmet acceptance criteria => fail), posts the review, and
-#               posts the `review-verdict` status. Fail-closed: no valid verdict.json =>
-#               no status posted.
+#               critical finding, an agent PR touching `.github/`, or unmet acceptance
+#               criteria => fail), posts the review, and posts the `review-verdict`
+#               status. Fail-closed: no valid verdict.json => no status posted.
+#               The `.github/` tripwire MUST live here and not in hygiene.yml:
+#               `pull_request` workflows run from the PR's merge ref, so hygiene.yml is
+#               self-certifiable by the PR under test — this file is not, because
+#               claude-code-action refuses to run unless it is byte-identical to the
+#               default branch's copy. review.yml is therefore the anchor of the trust
+#               chain that makes hygiene.yml safe to trust for everything else.
+#
+# TRIGGER NOTE: `edited` is included so a body edit that CHANGES THE LINKED ISSUE
+# re-runs the review — the acceptance-criteria check reads that issue, so the verdict
+# on the head SHA would otherwise be stale relative to its own inputs (the PR #158
+# incident, where a post-review body edit could never be re-evaluated without pushing
+# an unrelated commit). A relevance pre-step skips the (expensive) judge for every
+# other kind of edit: a skip posts nothing, so the existing verdict on the SHA stands —
+# the same fail-closed semantics as the validation skip.
 #
 # Auth: a Claude subscription OAuth token (CLAUDE_CODE_OAUTH_TOKEN) + the Claude GitHub
 # App. Needs id-token: write.
@@ -36,7 +52,7 @@ name: review
 # synced to staging.
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, edited, synchronize, reopened]
     branches: [staging, bridge]
 
 permissions:
@@ -60,7 +76,47 @@ jobs:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       SHA: ${{ github.event.pull_request.head.sha }}
     steps:
+      # 0. RELEVANCE — `edited` fires on every title/body/base change, but a full model
+      #    review is warranted only when an INPUT of the verdict changed: the linked-issue
+      #    reference (selects the acceptance criteria) or the base branch (changes the
+      #    diff). Everything else skips, leaving the existing verdict on this head SHA in
+      #    place. Payload fields only — no API calls, no PR content ever hits the shell
+      #    un-quoted (env vars throughout).
+      - name: Relevance — does this event change a verdict input?
+        id: relevance
+        env:
+          ACTION: ${{ github.event.action }}
+          BODY_CHANGED: ${{ github.event.changes.body != null }}
+          BASE_CHANGED: ${{ github.event.changes.base != null }}
+          OLD_BODY: ${{ github.event.changes.body.from }}
+          NEW_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          if [ "$ACTION" != "edited" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "$BASE_CHANGED" = "true" ]; then
+            echo "Base branch changed — the diff changed; full re-review."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "$BODY_CHANGED" != "true" ]; then
+            echo "Title-only edit — no verdict input changed; keeping the existing verdict."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # Same closing-keyword regex as the stage step below (keep in sync).
+          refs() { printf '%s' "$1" \
+            | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+#[0-9]+' \
+            | grep -oE '[0-9]+' | sort -u || true; }
+          if [ "$(refs "${OLD_BODY:-}")" = "$(refs "${NEW_BODY:-}")" ]; then
+            echo "Body edit does not change the linked-issue reference — keeping the existing verdict."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Linked-issue reference changed — acceptance criteria changed; full re-review."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
+        if: ${{ steps.relevance.outputs.proceed == 'true' }}
         with:
           fetch-depth: 0
 
@@ -69,6 +125,7 @@ jobs:
       #    .github? has a Closes #N?). Untrusted PR text stays in files; nothing here
       #    interpolates it into a mutating command.
       - name: Stage review inputs
+        if: ${{ steps.relevance.outputs.proceed == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -124,6 +181,7 @@ jobs:
       # 2. JUDGE — assess only. Read/Grep/Glob/Write, NO Bash and NO gh, so it cannot
       #    post anything: its sole output is review-inputs/verdict.json.
       - name: Judge — assess the diff, write findings JSON
+        if: ${{ steps.relevance.outputs.proceed == 'true' }}
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -170,7 +228,7 @@ jobs:
             Acceptance criteria: if `review-inputs/issue.txt` contains acceptance criteria,
             check the diff against EACH one and put any this PR does not satisfy into
             `acceptance_unmet`. If it says there is no linked issue, set `acceptance_unmet`
-            to `[]` (the deterministic step handles the missing-link case itself).
+            to `[]` (the separate `pr hygiene` required check enforces the link's presence).
 
             Severities: critical / high / medium / low. Skip pure formatting that
             eslint/prettier already handles.
@@ -194,7 +252,10 @@ jobs:
       #    so it runs even if the judge step failed (then verdict.json is absent =>
       #    fail-closed: nothing is posted and the required check stays absent => blocked).
       - name: Scribe — post the review and the review-verdict status
-        if: ${{ always() }}
+        # always() so a judge failure still reaches the fail-closed check below — but
+        # never on a relevance skip, where posting nothing IS the point (the existing
+        # verdict on this head stands).
+        if: ${{ always() && steps.relevance.outputs.proceed == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -228,10 +289,13 @@ jobs:
             FAIL=1
             NOTES="$NOTES"$'\n'"- ❌ **Agent PR modifies \`.github/\`** — auto-failed (audit H1 tripwire). Workflow/CI changes must come from a maintainer, not the build agent."
           fi
-          if [ "${IS_AGENT:-0}" = 1 ] && [ "${HAS_CLOSING:-0}" = 0 ] && [ "${IS_SOAKFIX:-0}" = 0 ]; then
-            FAIL=1
-            NOTES="$NOTES"$'\n'"- ❌ **No \`Closes #N\` / \`Fixes #N\` reference** — an agent PR must link the issue it resolves (drives auto-close, the label lifecycle, and this acceptance check)."
-          fi
+          # NOTE: the issue-link requirement (agent PR must declare `Closes #N`) is NOT
+          # part of this verdict — it lives in hygiene.yml's `pr hygiene` required check.
+          # A late-added link still gets its acceptance criteria reviewed: adding the
+          # reference changes the refs set (empty -> #N), so the `edited` relevance guard
+          # above triggers a full re-review with the issue staged. Keeping the requirement
+          # itself out of review-verdict means the gate that reads a mutable field always
+          # re-evaluates when that field changes (the PR #158 incident).
 
           if [ "$FAIL" = 1 ]; then EVENT=REQUEST_CHANGES; STATE=failure; else EVENT=COMMENT; STATE=success; fi
 
@@ -278,7 +342,6 @@ jobs:
             DESC="changes requested: ${HIGHCRIT:-0} high/critical"
             if [ "${UNMET:-0}" -gt 0 ]; then DESC="$DESC; ${UNMET} unmet criteria"; fi
             if [ "${IS_AGENT:-0}" = 1 ] && [ "${TOUCHES_GITHUB:-0}" = 1 ]; then DESC="$DESC; .github tripwire"; fi
-            if [ "${IS_AGENT:-0}" = 1 ] && [ "${HAS_CLOSING:-0}" = 0 ] && [ "${IS_SOAKFIX:-0}" = 0 ]; then DESC="$DESC; missing issue link"; fi
           else
             DESC="clean"
           fi
