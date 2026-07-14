@@ -1,6 +1,19 @@
 # PAT migration plan — the dev-loop's automation identity
 
-**Status:** implemented on branch `fix/pat-migration` (pending deploy) · **Scope:** `gatekeeper.yml`, `soak-verdict.yml`, `ci.yml`, docs + the `MERGE_PAT` secret. Each PAT-using job now runs a **loud preflight** that fails the run on a missing/expired PAT instead of falling back silently.
+> **⚠️ SUPERSEDED (historical).** This documents the **first** automation-identity design: a
+> single long-lived **`MERGE_PAT`** (a personal fine-grained PAT owned by `hotmalehotmail`). That
+> shipped and worked, but was later **replaced by the `craig-the-intern-bot` GitHub App** — the
+> same member identity, but with scoped, short-lived (~1h) installation tokens (minted in-job by
+> `actions/create-github-app-token` from `BOT_APP_ID` / `BOT_APP_PRIVATE_KEY`), no rotation toil,
+> and a single coherent bot voice across *both* commits (`SessionStart` hook
+> `.claude/hooks/session-identity.sh`) and the token-driven merges/PRs/comments. The `MERGE_PAT`
+> secret is retired. **The current design is `docs/dev-loop-mechanisms.md` §7.2b (bot identity)
+> and §9.6 (token ledger)** — read those for today's behavior. This file is kept only for the
+> *why-a-member-identity-is-needed* reasoning (§1–§3 below), which still holds. Note §5's "not
+> recommended / out of scope" full-unification and §8's "owner account, not a dedicated bot" call
+> were both **reversed** by the App migration.
+
+**Status:** ~~implemented on branch `fix/pat-migration`~~ → superseded by the `craig-the-intern-bot` App migration (see banner). **Original scope:** `gatekeeper.yml`, `soak-verdict.yml`, `ci.yml`, docs + the `MERGE_PAT` secret.
 
 ## 1 · Why now — two gates, one root cause
 

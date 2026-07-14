@@ -70,10 +70,21 @@ jobs:
        github.event.issue.pull_request != null &&
        contains(github.event.comment.body, '<!-- session-triaged:'))
     steps:
+      # Mint a short-lived installation token for the craig-the-intern-bot App, so auto-merge is
+      # armed by a non-GITHUB_TOKEN "member identity" (fires the downstream pull_request:closed ->
+      # post-merge recut) WITHOUT a long-lived personal PAT. continue-on-error so a mint failure
+      # still reaches the LOUD in-PR comment in the arming step below rather than dying silently.
+      - name: Mint bot app token
+        id: bot-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
       - name: Arm auto-merge, or drive the rebase FIX MODE on a conflict
         env:
           GH_TOKEN: ${{ github.token }}
-          MERGE_PAT: ${{ secrets.MERGE_PAT }}
+          BOT_TOKEN: ${{ steps.bot-token.outputs.token }}
           REPO: ${{ github.repository }}
           MAINTAINER: ${{ vars.MAINTAINER_HANDLE }}
           # Raw per-trigger fields; the script resolves HEAD/SHA from whichever fired.
@@ -261,24 +272,21 @@ jobs:
               fi
             fi
             echo "PR #$NUM: gates satisfied — proceeding to arm."
-            # --- MERGE_PAT preflight (LOUD). Arm with the PAT (a member identity) so the eventual
-            #     merge fires pull_request:closed -> post-merge recut-alpha. A GITHUB_TOKEN merge is
-            #     swallowed by the recursion guard, so a silent fallback to it would re-break the
-            #     re-cut. If the PAT is missing/expired we FAIL the run instead.
-            if [ -z "${MERGE_PAT:-}" ]; then
-              echo "::error::MERGE_PAT is empty/unset — required to arm auto-merge. Add the fine-grained PAT (this repo · Contents + Pull requests: R/W) as MERGE_PAT."
-              gh pr comment "$NUM" --repo "$REPO" --body "❌ Can't arm auto-merge — the \`MERGE_PAT\` secret is missing. Add it, then re-run ci (or push) to re-trigger." || true
+            # --- Bot app token preflight (LOUD). Arm with the craig-the-intern-bot installation
+            #     token — a non-GITHUB_TOKEN "member identity" so the eventual merge fires
+            #     pull_request:closed -> post-merge recut-alpha. A GITHUB_TOKEN merge is swallowed by
+            #     the recursion guard, so a silent fallback to it would re-break the re-cut. If the
+            #     token failed to mint (bad/missing BOT_APP_ID / BOT_APP_PRIVATE_KEY, or the App
+            #     isn't installed on this repo) we FAIL the run instead of falling back.
+            if [ -z "${BOT_TOKEN:-}" ]; then
+              echo "::error::Bot app token is empty — the craig-the-intern-bot App token failed to mint. Check the BOT_APP_ID / BOT_APP_PRIVATE_KEY secrets and that the App is installed on this repo (Contents + Pull requests: R/W)."
+              gh pr comment "$NUM" --repo "$REPO" --body "❌ Can't arm auto-merge — the bot App token failed to mint (check \`BOT_APP_ID\` / \`BOT_APP_PRIVATE_KEY\` and the App install). Re-run ci (or push) to re-trigger." || true
               exit 1
             fi
-            if ! GH_TOKEN="$MERGE_PAT" gh api "repos/$REPO/pulls?per_page=1" >/dev/null 2>/tmp/pat_err; then
-              echo "::error::MERGE_PAT failed (expired, revoked, or missing Contents/Pull-requests access) — rotate it. gh: $(tr '\n' ' ' </tmp/pat_err)"
-              gh pr comment "$NUM" --repo "$REPO" --body "❌ Can't arm auto-merge — \`MERGE_PAT\` failed (expired/revoked/insufficient access). Rotate it; this PR re-arms on its next ci/review run." || true
-              exit 1
-            fi
-            echo "Arming auto-merge on PR #$NUM (via MERGE_PAT)."
+            echo "Arming auto-merge on PR #$NUM (via the craig-the-intern-bot App token)."
             # --auto hands off to native auto-merge; branch protection waits for all required
             # checks (ci + review-verdict) before it actually merges.
-            GH_TOKEN="$MERGE_PAT" gh pr merge "$NUM" --repo "$REPO" --squash --auto \
+            GH_TOKEN="$BOT_TOKEN" gh pr merge "$NUM" --repo "$REPO" --squash --auto \
               || echo "::warning::Could not arm auto-merge on #$NUM (ineligible); leaving it."
             exit 0
           fi
