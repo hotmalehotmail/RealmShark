@@ -662,46 +662,40 @@ non-firing hook degrades to "merges ~45 min late," not "never merges."
 gate + `push`/`synchronize` triggers + synchronize-disarm; ✅ sweep marker gate + crash backstop
 + marker GC. ⏳ live validation of (a)/(b) above on a Routine run.
 
-### 7.2b · Bot identity — the loop acts as `craig-the-intern-bot[bot]`, not a human
-Every automated action in the loop is attributed to the **`craig-the-intern-bot` GitHub App**
-(org-owned under `white-bag`, installed on this repo), split across two mechanisms:
+### 7.2b · Bot identity — `craig-the-intern-bot[bot]` for commits + workflow actions (not the agent's own PRs)
+Automated actions are attributed to the **`craig-the-intern-bot` GitHub App** (org-owned under
+`white-bag`, installed on this repo) **where the mechanism allows** — which is commits and the
+workflow token-driven actions, but **not** the agent session's own PRs/comments:
 
-- **Commits** — a **`SessionStart` hook** (`.claude/hooks/session-identity.sh`, registered
-  in the same `.claude/settings.json` as the §7.2 marker hook) points git's author/committer at
-  the App bot's noreply address `304674093+craig-the-intern-bot[bot]@users.noreply.github.com`
-  (GitHub matches the bot user id + slug in that address for attribution). This is pure commit
-  *metadata* — no authentication as the bot is needed, which is why the hook alone suffices.
-- **The agent session's own API actions** — the PR it **opens** and the comments it **posts** are
-  authenticated GitHub API calls, attributed to whoever the *token* authenticates as, so setting
-  commit metadata does nothing for them. A second `SessionStart` hook
-  (`.claude/hooks/session-bot-token.sh`) mints an App installation token **in the session** (same
-  RS256-JWT → `/app/installations/{id}/access_tokens` flow the workflows use, hand-rolled with
-  openssl since the routine isn't an Actions runner) and wires it into git (`url.insteadOf`, so
-  `git push` acts as the bot regardless of any ambient `GH_TOKEN`) and `gh` (`gh auth login
-  --with-token`). It's **fail-safe** (any missing secret / tool / API access → no-op, leaving the
-  ambient credential) and shares the `CLAUDE_CODE_REMOTE=true` cloud-only guard. **Caveat:** a
-  platform-injected `GH_TOKEN` env var out-ranks `gh`'s stored credential, so if the routine sets
-  one, `gh` PR/comment calls keep the maintainer identity despite the hook; the fallback is the
-  token file the hook writes (`$XDG_CACHE_HOME/craig-bot-gh-token`), which the routine prompt can
-  use per-command (`GH_TOKEN="$(cat …)" gh …`). git push is unaffected either way.
+- **Commits** — a **`SessionStart` hook** (`.claude/hooks/session-identity.sh`, registered in the
+  same `.claude/settings.json` as the §7.2 marker hook) points git's author/committer at the App
+  bot's noreply address `304674093+craig-the-intern-bot[bot]@users.noreply.github.com` (GitHub
+  matches the bot user id + slug in that address for attribution). Pure commit *metadata* — no
+  authentication as the bot is needed, which is why the hook alone suffices. `CLAUDE_CODE_REMOTE`-
+  guarded, so a maintainer's local commits keep their own identity.
 - **Workflow token-driven actions** — merges, the `staging → bridge` promotion PR, and the fix-loop
   auto-accept marker comment run on a **short-lived App installation token** (minted in-job by
   `actions/create-github-app-token` from the `BOT_APP_ID` / `BOT_APP_PRIVATE_KEY` secrets), a
   non-`GITHUB_TOKEN` member identity — see §9.6 for the token ledger and why a member identity is
   required (recursion guard + external-contributor gate).
+- **The agent session's own PRs + comments stay the MAINTAINER — and this isn't currently fixable.**
+  Opening a PR / posting a comment is an authenticated API call whose actor is the *token*, not
+  commit metadata. In the cloud routine those calls go through the **GitHub MCP server, whose
+  credential the platform provisions** from the maintainer's Claude↔GitHub connection — so they
+  authenticate as the maintainer. There is no seam to substitute a bot credential: the routine has
+  **no `gh` CLI**, **no repo `.mcp.json`**, and the MCP token is not a routine env var one can point
+  elsewhere. An in-session App-token mint was prototyped (`session-bot-token.sh`, PR #168) on a `gh`
+  assumption and **removed** once it emerged the agent uses MCP, not `gh` — commits were already the
+  bot, and a minted token changes nothing the MCP server reads. Bot PR/comment attribution would
+  require a *custom* GitHub MCP server with a bot machine-user PAT (long-lived, a second identity ≠
+  this App); judged not worth it, since the `claude/*` head branch + the posted session link already
+  make agent authorship obvious.
 
-All three are cloud-only (`CLAUDE_CODE_REMOTE` / Actions), so a **maintainer's local CLI is never
-re-identified** — local commits keep the maintainer's own identity. This replaces the earlier
-`MERGE_PAT` (a long-lived personal fine-grained PAT): scoped, ~1h-expiry tokens with no rotation
-toil, and a single coherent bot identity across commits, the agent's own PRs/comments, *and* the
-workflow token-driven actions — instead of the maintainer's account appearing to open, comment on,
-and merge its own agent's PRs.
-
-**Activation.** The session hooks live on the branch the routine checks out first (the repo
-default, `bridge`), so `session-bot-token.sh` goes live once it reaches `bridge` — same as the §7.2
-interlock hook — **and** once `BOT_APP_ID` / `BOT_APP_PRIVATE_KEY` are present as routine env
-secrets (they can't be committed). Until both hold, the hook no-ops and PRs/comments stay on the
-ambient credential.
+Cloud-only (`CLAUDE_CODE_REMOTE` / Actions), so a **maintainer's local CLI is never re-identified**.
+The bot identity is coherent for **commits and the workflow actions**; the maintainer's account
+still appears as the opener/commenter on the agent's own PRs. This still improved on the earlier
+`MERGE_PAT` (a long-lived personal fine-grained PAT): scoped, ~1h-expiry tokens with no rotation toil
+for the workflow actions, plus bot-attributed commits.
 
 ### 7.3 · Triage gate — a passing review's medium+ findings get a decision (lows are informational)
 
