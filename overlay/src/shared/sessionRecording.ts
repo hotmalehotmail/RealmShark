@@ -93,15 +93,33 @@ export class SessionRecordingWriter {
 
     const record: TrackedFile = { path, closed: false }
     this.files.push(record)
-    this.pendingFinishes.push(
-      new Promise<void>((resolve) => {
-        fileStream.once('finish', () => {
-          record.closed = true
-          this.pruneOldFiles()
-          resolve()
-        })
-      })
-    )
+
+    let resolvePending: () => void = () => {}
+    this.pendingFinishes.push(new Promise<void>((resolve) => (resolvePending = resolve)))
+
+    // pipe() doesn't forward errors between source and destination, so both
+    // need their own listener - an unhandled 'error' event otherwise throws
+    // and takes down the whole overlay over something like a full disk. Treat
+    // it the same as a clean finish: settle the pending promise so close()
+    // doesn't hang, and stop this being the active file so further writes are
+    // dropped rather than thrown against a dead stream.
+    const onError = (err: unknown): void => {
+      console.error(`[sessionRecording] recording stopped, write to ${path} failed:`, err)
+      if (this.gzip === gzip) this.gzip = null
+      if (record.closed) return
+      record.closed = true
+      this.pruneOldFiles()
+      resolvePending()
+    }
+    gzip.once('error', onError)
+    fileStream.once('error', onError)
+
+    fileStream.once('finish', () => {
+      if (record.closed) return
+      record.closed = true
+      this.pruneOldFiles()
+      resolvePending()
+    })
   }
 
   /** Deletes the oldest tracked files past `retainFiles`, stopping at the first one still open - it's retried automatically once that file's own `finish` fires. */
