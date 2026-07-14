@@ -93,6 +93,14 @@ moving parts, each with its own doc below.
 - **[build-agent-routine.md](build-agent-routine.md)** — how a labeled issue
   becomes a PR: `implement.yml` fires the build-agent Routine over its `/fire`
   endpoint, and the one-time account-side setup.
+- **[prd-agent-observability.md](prd-agent-observability.md)** — PRD: closing the
+  see-and-verify loop for cloud agents. Evidence from the soak history (all
+  failures are visual or real-game-data gaps invisible to a headless agent), the
+  locked design decisions, and the technical design for the renderer screenshot
+  harness, capture-replay test suite, ground-truth corpus, and asset-facts file —
+  plus the agent/human ownership split and the phased issue plan. A styled,
+  viewable version is at
+  [prd-agent-observability.html](prd-agent-observability.html) (same content).
 
 ---
 
