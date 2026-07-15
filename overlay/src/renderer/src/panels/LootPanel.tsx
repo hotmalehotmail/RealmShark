@@ -64,7 +64,7 @@ function LootPanel({ size }: PanelContentProps): React.JSX.Element {
                 {BAG_LABELS[bagType]} · {entries.length}
               </span>
             </div>
-            <div className="flex flex-wrap gap-1">
+            <div className="flex flex-wrap gap-1.5">
               {ordered.map((entry) => {
                 const name = itemName(entry.objectType) ?? `#${entry.objectType}`
                 return (
