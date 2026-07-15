@@ -98,6 +98,11 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
     }
   }
 
+  // Consolidated into one slot below the action row (rather than one message
+  // per button) so the actions stay pinned to the bottom edge at a fixed
+  // height regardless of which action last fired - see docs/overlay-renderer.md.
+  const actionMsg = checkMsg || bugMsg || captureMsg
+
   return (
     <div className="flex h-full w-full flex-col">
       <div className="flex items-center justify-between">
@@ -112,70 +117,56 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
       </div>
 
       {size !== 'sm' && (
-        <div className="mt-2 text-xs text-fg-faint">{toggleHotkey} to return input to the game</div>
-      )}
+        <>
+          <div className="mt-1 text-2xs text-fg-faint">
+            {toggleHotkey} to return input to the game
+          </div>
 
-      {size !== 'sm' && (
-        <StatRow label="Packets seen" className="mt-3 border-t border-edge pt-2">
-          {packetCount}
-        </StatRow>
-      )}
+          <div className="mt-1.5 border-t border-edge pt-1">
+            <StatRow label="Packets seen">{packetCount}</StatRow>
+            <StatRow label="Memory" className="pt-0.5">
+              {heapMb === null ? 'n/a' : `${heapMb.toFixed(1)} MB`}
+            </StatRow>
+          </div>
 
-      {size !== 'sm' && (
-        <StatRow label="Memory" className="pt-1">
-          {heapMb === null ? 'n/a' : `${heapMb.toFixed(1)} MB`}
-        </StatRow>
-      )}
+          {size === 'lg' && lastPacket && (
+            <div className="mt-1 truncate text-2xs text-fg-faint">
+              last: {lastPacket.direction} {lastPacket.type}
+            </div>
+          )}
 
-      {size !== 'sm' && (
-        <div className="mt-3 border-t border-edge pt-2">
-          {update && (
-            <div className="flex items-center justify-between gap-2">
-              <span className="truncate text-xs text-success">
-                Update available → v{update.version}
-              </span>
-              {downloadPct == null ? (
-                <Button variant="success" className="shrink-0" onClick={installUpdate}>
+          {/* Pinned to the panel's bottom edge (mt-auto) so every action stays
+              reachable without scrolling regardless of how much info sits above it. */}
+          <div className="mt-auto border-t border-edge pt-1.5">
+            {update && (
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="truncate text-2xs text-success">v{update.version} available</span>
+                {downloadPct != null && (
+                  <span className="shrink-0 text-2xs text-fg-muted">{downloadPct}%…</span>
+                )}
+              </div>
+            )}
+            <div className="flex flex-wrap items-center gap-1">
+              {downloadPct == null && update && (
+                <Button variant="success" size="xs" onClick={installUpdate}>
                   Update &amp; restart
                 </Button>
-              ) : (
-                <span className="shrink-0 text-xs text-fg-muted">Downloading {downloadPct}%…</span>
               )}
-            </div>
-          )}
-          {downloadPct == null && (
-            <div className={`flex items-center justify-between gap-2 ${update ? 'mt-1' : ''}`}>
-              <Button className="shrink-0" onClick={checkUpdates} disabled={checking}>
-                {checking ? 'Checking…' : update ? 'Check again' : 'Check for updates'}
+              {downloadPct == null && (
+                <Button size="xs" onClick={checkUpdates} disabled={checking}>
+                  {checking ? 'Checking…' : update ? 'Check again' : 'Check for updates'}
+                </Button>
+              )}
+              <Button size="xs" onClick={reportBug}>
+                Report bug
               </Button>
-              {checkMsg && <span className="text-xs text-fg-faint">{checkMsg}</span>}
+              <Button size="xs" onClick={captureNow}>
+                Capture now
+              </Button>
             </div>
-          )}
-        </div>
-      )}
-
-      {size !== 'sm' && (
-        <div className="mt-2 flex items-center justify-between gap-2">
-          <Button className="shrink-0" onClick={reportBug}>
-            Report bug
-          </Button>
-          {bugMsg && <span className="truncate text-xs text-fg-faint">{bugMsg}</span>}
-        </div>
-      )}
-
-      {size !== 'sm' && (
-        <div className="mt-1 flex items-center justify-between gap-2">
-          <Button className="shrink-0" onClick={captureNow}>
-            Capture now
-          </Button>
-          {captureMsg && <span className="truncate text-xs text-fg-faint">{captureMsg}</span>}
-        </div>
-      )}
-
-      {size === 'lg' && lastPacket && (
-        <div className="mt-1 truncate text-xs text-fg-faint">
-          last: {lastPacket.direction} {lastPacket.type}
-        </div>
+            {actionMsg && <div className="mt-0.5 truncate text-2xs text-fg-faint">{actionMsg}</div>}
+          </div>
+        </>
       )}
     </div>
   )
