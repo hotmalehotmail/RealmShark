@@ -33,9 +33,7 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
   const [update, setUpdate] = useState<UpdateInfo | null>(null)
   const [checking, setChecking] = useState(false)
   const [downloadPct, setDownloadPct] = useState<number | null>(null)
-  const [checkMsg, setCheckMsg] = useState('')
-  const [bugMsg, setBugMsg] = useState('')
-  const [captureMsg, setCaptureMsg] = useState('')
+  const [actionMsg, setActionMsg] = useState('')
 
   useEffect(() => {
     window.overlay.getSettings().then((settings) => setToggleHotkey(settings.toggleHotkey))
@@ -49,7 +47,7 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
     })
     const offUpdate = window.overlay.onUpdateAvailable((info) => {
       setUpdate(info)
-      setCheckMsg('')
+      setActionMsg('')
     })
     const offProgress = window.overlay.onUpdateProgress(({ received, total }) =>
       setDownloadPct(total > 0 ? Math.round((received / total) * 100) : 0)
@@ -66,10 +64,10 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
 
   const checkUpdates = async (): Promise<void> => {
     setChecking(true)
-    setCheckMsg('')
+    setActionMsg('')
     const info = await window.overlay.checkForUpdate()
     setUpdate(info)
-    if (!info) setCheckMsg('Up to date')
+    if (!info) setActionMsg('Up to date')
     setChecking(false)
   }
 
@@ -79,29 +77,29 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
   }
 
   const reportBug = async (): Promise<void> => {
-    setBugMsg('Capturing…')
+    setActionMsg('Capturing…')
     try {
       await window.overlay.reportBug()
-      setBugMsg('Capture saved — drag it into the issue')
+      setActionMsg('Capture saved — drag it into the issue')
     } catch {
-      setBugMsg('Capture failed')
+      setActionMsg('Capture failed')
     }
   }
 
   const captureNow = async (): Promise<void> => {
-    setCaptureMsg('Capturing…')
+    setActionMsg('Capturing…')
     try {
       await window.overlay.captureNow()
-      setCaptureMsg('Capture saved to disk')
+      setActionMsg('Capture saved to disk')
     } catch {
-      setCaptureMsg('Capture failed')
+      setActionMsg('Capture failed')
     }
   }
 
-  // Consolidated into one slot below the action row (rather than one message
-  // per button) so the actions stay pinned to the bottom edge at a fixed
-  // height regardless of which action last fired - see docs/overlay-renderer.md.
-  const actionMsg = checkMsg || bugMsg || captureMsg
+  // Single message slot below the action row (rather than one message per
+  // button) so the actions stay pinned to the bottom edge at a fixed height,
+  // and the latest fired action's message always wins - see
+  // docs/overlay-renderer.md.
 
   return (
     <div className="flex h-full w-full flex-col">
