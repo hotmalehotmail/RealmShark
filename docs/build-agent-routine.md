@@ -175,11 +175,16 @@ panel layout, styling): run `npm run shots` (the harness screenshot pipeline —
 `docs/overlay-harness.md`), then READ the changed PNGs under `docs/screenshots/panels/` and
 actually look at them. Iterate until they match the issue's acceptance criteria — a screenshot
 you didn't look at is a screenshot that lies. Commit the changed PNGs (same stable paths,
-overwritten in place) in the SAME PR, and embed each changed image in the PR body via a raw URL
-pinned to your head SHA
-(`https://raw.githubusercontent.com/<repo>/<head-sha>/docs/screenshots/panels/<name>.png`) so
-the reviewer and the maintainer see what you saw. A renderer change with no updated shots is
-stale evidence — the review agent is told to treat it as drift.
+overwritten in place) in the SAME PR, and embed each changed image in the PR body as a
+MARKDOWN IMAGE — image syntax, not a bare link (a bare URL renders as a clickable link, not
+a picture; nobody clicks twenty links):
+`![<name>](https://raw.githubusercontent.com/<repo>/<head-sha>/docs/screenshots/panels/<name>.png)`
+Pin every image URL to a COMMIT SHA, never a branch name: "after" images pin to your head SHA
+(`git rev-parse HEAD` after your final commit); if you show a before/after pair, "before" pins
+to the commit you branched from (`git merge-base HEAD origin/staging`). A branch-pinned URL
+(e.g. `/staging/`) changes meaning the moment anything merges — the "before" would silently
+start showing the "after". A renderer change with no updated shots is stale evidence — the
+review agent is told to treat it as drift.
 
 ## Finishing (ALL modes) — stop when your deliverable is done
 When you have produced your deliverable — the PR opened (BUILD), or your commits/`session-triaged`
