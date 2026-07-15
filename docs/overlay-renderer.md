@@ -319,9 +319,19 @@ the IPC surface rather than a shared service. It subscribes to `onBridgeStatus`,
 `onPacketBatch` (just to count: `packetCount += packets.length`, `StatusPanel.tsx:42-45`),
 `onUpdateAvailable`, and `onUpdateProgress`, and polls `performance.memory`
 (a non-standard Chrome/Electron field, guarded, `StatusPanel.tsx:14-22`) every
-1 s. It also hosts the updater UI (Check / Update & restart) — see
-`build-and-release.md`. Content beyond the header is gated on `size !== 'sm'`,
-and the last-packet line only on `size === 'lg'`.
+1 s. It also hosts the updater UI (Check / Update & restart), plus "Report bug"
+and "Capture now" (`build-and-release.md`). Content beyond the header is gated
+on `size !== 'sm'`, and the last-packet line only on `size === 'lg'` — `sm`
+(160×50) stays a bare status glance with no actions at all, by design (#179).
+At `md`/`lg` the three actions render as a single row of compact (`size="xs"`)
+buttons **pinned to the panel's bottom edge** (`mt-auto`) so they're always
+reachable without scrolling, regardless of how much info renders above them;
+their status feedback shares one `actionMsg` line below the row instead of a
+message per button, to keep that row's height fixed; each handler sets
+`actionMsg` itself, so the latest action fired always wins rather than an
+older message masking a newer one. `registry.ts`'s `md` height was grown (155px → 184px,
+`lg` unchanged at 195px) to fit this row with the tightened info-row spacing
+above it — see issue #179 for the before/after gallery shots.
 
 **CharacterPanel** and **InstancePanel** (`panels/CharacterPanel.tsx`,
 `panels/InstancePanel.tsx`) render through the entity registry + sprite path

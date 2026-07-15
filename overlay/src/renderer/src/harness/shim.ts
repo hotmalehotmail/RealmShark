@@ -140,7 +140,8 @@ export function installHarness(): void {
     downloadUpdate: () => Promise.resolve(),
     onUpdateAvailable: updateAvailable.on,
     onUpdateProgress: updateProgress.on,
-    reportBug: (): Promise<BugReportResult> => Promise.resolve({ file: '' })
+    reportBug: (): Promise<BugReportResult> => Promise.resolve({ file: '' }),
+    captureNow: (): Promise<BugReportResult> => Promise.resolve({ file: '' })
   }
 
   window.overlay = api

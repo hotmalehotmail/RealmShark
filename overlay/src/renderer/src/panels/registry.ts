@@ -27,7 +27,7 @@ export const PANEL_REGISTRY: Record<string, PanelSpec> = {
     title: 'RealmShark',
     sizes: {
       sm: { width: 160, height: 50 },
-      md: { width: 260, height: 155 },
+      md: { width: 260, height: 184 },
       lg: { width: 300, height: 195 }
     },
     component: StatusPanel

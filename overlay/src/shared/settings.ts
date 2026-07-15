@@ -18,6 +18,14 @@ export interface OverlaySettings {
    * Higher = faster spin for rotating (vortex) cloths.
    */
   textileRotateSpeed: number
+  /**
+   * "Record session to disk" toggle (PRD §7.2). When true, the main process
+   * appends every allowlisted packet batch as NDJSON to a rolling
+   * `userData/captures/*.ndjson.gz` file - see `overlay/src/main/sessionRecorder.ts`
+   * and `docs/overlay-main-process.md`. OFF by default; toggling it applies on
+   * Save, same as the other settings here.
+   */
+  recordSessionToDisk: boolean
 }
 
 export const DEFAULT_SETTINGS: OverlaySettings = {
@@ -25,5 +33,6 @@ export const DEFAULT_SETTINGS: OverlaySettings = {
   toggleHotkey: 'Alt+Shift+R',
   textileAnimMs: 200,
   textileScrollSpeed: 1.5,
-  textileRotateSpeed: 0.15
+  textileRotateSpeed: 0.15,
+  recordSessionToDisk: false
 }

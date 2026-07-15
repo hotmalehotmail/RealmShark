@@ -22,10 +22,11 @@ export const IPC = {
   downloadUpdate: 'download-update',
   updateAvailable: 'update-available',
   updateProgress: 'update-progress',
-  reportBug: 'report-bug'
+  reportBug: 'report-bug',
+  captureNow: 'capture-now'
 } as const
 
-/** Result of an IPC.reportBug call: where the capture bundle was written on disk. */
+/** Result of an IPC.reportBug / IPC.captureNow call: where the capture bundle was written on disk. */
 export interface BugReportResult {
   /** Absolute path of the gzipped JSON capture (version + recent packets + logs) to attach. */
   file: string

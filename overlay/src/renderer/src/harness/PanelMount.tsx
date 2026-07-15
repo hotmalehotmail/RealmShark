@@ -17,7 +17,10 @@ interface PanelMountProps {
  * `PanelCanvas`/`PanelFrame` concerns, irrelevant to a single frozen shot),
  * but wrapped in the same providers `App.tsx` uses so every panel's data
  * hooks (`useEntityRegistry`, `useSprites`, `useItemInfo`) resolve exactly as
- * they do in the full canvas.
+ * they do in the full canvas. The scrollable content wrapper carries
+ * `data-panel-content` so `e2e/shots.spec.ts` can measure `scrollHeight` vs
+ * `clientHeight` to detect below-the-fold clipping and, when present,
+ * re-render it at its natural height for the `-full` variant shot.
  */
 function PanelMount({ type, size }: PanelMountProps): React.JSX.Element {
   const spec = PANEL_REGISTRY[type]
@@ -46,7 +49,10 @@ function PanelMount({ type, size }: PanelMountProps): React.JSX.Element {
               <div className="flex shrink-0 items-center justify-between bg-surface px-2 py-1">
                 <span className="truncate text-xs font-medium text-fg-muted">{spec.title}</span>
               </div>
-              <div className="min-h-0 flex-1 overflow-auto p-2 text-sm text-fg">
+              <div
+                data-panel-content=""
+                className="min-h-0 flex-1 overflow-auto p-2 text-sm text-fg"
+              >
                 <Content size={size} />
               </div>
             </div>
