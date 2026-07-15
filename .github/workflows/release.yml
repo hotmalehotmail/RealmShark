@@ -44,6 +44,32 @@ jobs:
       contents: read
       id-token: write # claude-code-action mints an OIDC token for its GitHub App token
     steps:
+      # Channel/ref guard. The GitHub "Run workflow" dropdown DEFAULTS to the default
+      # branch (bridge), which silently produces a broken alpha (the v0.19.1-alpha
+      # incident): the installer rebuilds already-shipped bridge content, the soak
+      # issue's `origin/bridge..HEAD` PR list and UI gallery come up empty, and the
+      # notes captain gets an empty commits.txt. Deterministic rule, enforced instead
+      # of documented: alpha is the soak build OF STAGING; beta ships THE TRUNK.
+      # Duplicated in the publish job below — its `if: !cancelled()` deliberately
+      # survives a notes-job failure (the captain-fallback path), so failing here
+      # alone would not stop the release.
+      - name: Guard — channel matches the dispatched ref
+        shell: bash
+        env:
+          REF: ${{ github.ref_name }}
+          CH: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+          if [ "$CH" = "alpha" ] && [ "$REF" != "staging" ]; then
+            echo "::error::channel=alpha must be dispatched from 'staging' (got '$REF'). An alpha is the soak build of staging's un-shipped content; from '$REF' it rebuilds shipped code and opens an empty soak issue. Re-run the dispatch with staging selected."
+            exit 1
+          fi
+          if [ "$CH" = "beta" ] && [ "$REF" != "bridge" ]; then
+            echo "::error::channel=beta must be dispatched from 'bridge' (got '$REF'). The latest release ships the promoted trunk."
+            exit 1
+          fi
+          echo "Channel/ref OK: $CH from $REF."
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # need tags + full history to diff since the last release
@@ -92,6 +118,17 @@ jobs:
           # which would print a second 0 next to grep's own).
           N="$(grep -c . "$GITHUB_WORKSPACE/commits.txt" || true)"
           echo "Collected ${N:-0} commit(s) in notes range $NOTES_RANGE (PR range $PR_RANGE)."
+          # Empty range => NEVER invoke the captain. Given an empty commits.txt (the
+          # v0.19.1-alpha incident), Haiku — which can Read the whole checkout — invents
+          # plausible notes from old repo history instead of reporting nothing. A model
+          # must never summarize an empty input; write the truthful static note here and
+          # the captain step below is skipped entirely.
+          if [ "${N:-0}" -gt 0 ]; then
+            echo "has_commits=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_commits=false" >> "$GITHUB_OUTPUT"
+            echo "_(no new commits in this build — it rebuilds existing content)_" > "$GITHUB_WORKSPACE/release-notes.md"
+          fi
 
           # PR list for the SOAK issue (§9.1): this build's content PRs. Squash-merged PRs carry
           # "(#N)"; merge syncs/promotions drop out via --no-merges.
@@ -101,6 +138,9 @@ jobs:
 
       - name: Draft release notes (Haiku)
         id: captain
+        # Skipped on an empty notes range — the collect step wrote a truthful static
+        # note instead (a model must never summarize an empty input).
+        if: ${{ steps.commits.outputs.has_commits == 'true' }}
         continue-on-error: true # never block the release on the captain
         uses: anthropics/claude-code-action@v1
         with:
@@ -152,6 +192,26 @@ jobs:
     # than cross-building from macOS/Linux. Free on public repos.
     runs-on: windows-latest
     steps:
+      # Same channel/ref guard as the notes job — duplicated deliberately: this job's
+      # `if: !cancelled()` survives a notes-job failure (the captain-fallback design),
+      # so only a guard HERE actually stops a mis-dispatched release from publishing.
+      - name: Guard — channel matches the dispatched ref
+        shell: bash
+        env:
+          REF: ${{ github.ref_name }}
+          CH: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+          if [ "$CH" = "alpha" ] && [ "$REF" != "staging" ]; then
+            echo "::error::channel=alpha must be dispatched from 'staging' (got '$REF'). Re-run the dispatch with staging selected."
+            exit 1
+          fi
+          if [ "$CH" = "beta" ] && [ "$REF" != "bridge" ]; then
+            echo "::error::channel=beta must be dispatched from 'bridge' (got '$REF')."
+            exit 1
+          fi
+          echo "Channel/ref OK: $CH from $REF."
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-java@v4

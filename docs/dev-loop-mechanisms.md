@@ -807,6 +807,20 @@ publishes without a human pressing it, which encodes the never-release-without-a
 explicit-ask rule. The version now **auto-bumps** on dispatch (see below); the gate is
 the dispatch itself, not the version bump.
 
+Two guards added after the **v0.19.1-alpha incident** (an alpha dispatched from
+`bridge` — the UI's ref dropdown defaults to the default branch — rebuilt shipped
+content, opened a soak issue with an empty PR list and no gallery, and the notes
+captain, fed an empty `commits.txt`, *invented* notes from old repo history):
+1. **Channel/ref guard** — `alpha` must be dispatched from `staging`, `beta` from
+   `bridge`; anything else fails fast with a loud error. Duplicated in BOTH jobs,
+   deliberately: the publish job's `if: !cancelled()` survives a notes-job failure
+   (the captain-fallback design), so a notes-only guard would not stop the publish.
+   post-merge.yml's auto-dispatches already pass the right refs.
+2. **Empty-range short-circuit** — if the notes range has zero commits, the collect
+   step writes a truthful static note and the Haiku captain is **skipped**: a model
+   must never summarize an empty input (it hallucinates plausible history instead of
+   reporting nothing).
+
 **Status.** 🟢 Built, incl. the release-notes captain.
 
 - **Release-notes "captain" — built.** A preceding `notes` job runs a Haiku agent
