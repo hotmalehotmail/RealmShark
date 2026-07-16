@@ -10,9 +10,10 @@ export function DpsDetailSelectionProvider({
 }): React.JSX.Element {
   const [selected, setSelected] = useState<DpsHistoryEntry | null>(null)
   const select = useCallback((entry: DpsHistoryEntry) => setSelected(entry), [])
+  const clear = useCallback(() => setSelected(null), [])
 
   return (
-    <DpsDetailSelectionContext.Provider value={{ selected, select }}>
+    <DpsDetailSelectionContext.Provider value={{ selected, select, clear }}>
       {children}
     </DpsDetailSelectionContext.Provider>
   )

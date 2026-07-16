@@ -68,6 +68,16 @@ function windowSize(): SizePx {
   return { width: window.innerWidth, height: window.innerHeight }
 }
 
+// A `closable` (programmatically-spawned) panel's selection lives in a
+// non-persisted context (e.g. dpsDetailContext.ts), so persisting the panel
+// instance itself would restore an empty shell on next launch with no way to
+// restore what it was showing. Exclude such panels both when saving (so they
+// never reach panels.json) and when loading (so a panels.json written before
+// this fix - or by an older build - doesn't resurrect a stray empty one).
+function isPersistablePanel(panel: PanelInstance): boolean {
+  return !PANEL_REGISTRY[panel.type]?.closable
+}
+
 interface PanelCanvasProps {
   interactive: boolean
 }
@@ -80,7 +90,7 @@ function PanelCanvas({ interactive }: PanelCanvasProps): React.JSX.Element {
 
   useEffect(() => {
     window.overlay.getPanelLayout().then((saved) => {
-      setPanels(mergeWithDefaults(saved))
+      setPanels(mergeWithDefaults(saved?.filter(isPersistablePanel)))
       loadedRef.current = true
     })
 
@@ -95,7 +105,7 @@ function PanelCanvas({ interactive }: PanelCanvasProps): React.JSX.Element {
     if (!loadedRef.current) return
     clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => {
-      window.overlay.savePanelLayout(panels)
+      window.overlay.savePanelLayout(panels.filter(isPersistablePanel))
     }, SAVE_DEBOUNCE_MS)
     return () => clearTimeout(saveTimer.current)
   }, [panels])

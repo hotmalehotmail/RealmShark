@@ -267,6 +267,11 @@ pre-load empty array never clobbers a saved layout.
 > panel whose `id` isn't present. So a panel type added in a new version appears
 > for existing users on upgrade, instead of only on a fresh `panels.json`.
 
+Both the load and the debounced save filter through `isPersistablePanel`
+first, dropping any panel whose registry entry sets `closable` — see §2's
+"Programmatic panel spawn/close" for why a spawned panel like `dpsDetail`
+must never round-trip through `panels.json`.
+
 The main process persists `panels.json`; see `overlay-main-process.md`.
 
 ### The `PanelContentProps` contract
@@ -331,6 +336,19 @@ mechanism any future panel can reuse, not a DPS-specific hack:
   `SPAWN_ANCHOR` default position rather than resuming wherever it was last
   dragged. This was a deliberate simplicity tradeoff (position isn't preserved
   across a close/reopen cycle), not a limitation of the mechanism itself.
+- **`closable` panels are excluded from persistence, in both directions.**
+  `PanelCanvas`'s `isPersistablePanel` filters any panel whose registry entry
+  sets `closable` out of `savePanelLayout`'s payload, and out of a freshly
+  loaded `panels.json` before it's merged with defaults. Without this, a
+  spawned `dpsDetail` panel open at quit time would round-trip into
+  `panels.json` like any ordinary panel and reappear on next launch — but its
+  selection lives in the separate, non-persisted `DpsDetailSelectionContext`
+  (below), which always starts `null`, so the restored panel would show a
+  permanent "No session selected" empty state with no way for the user to
+  populate it short of closing and reopening it. The load-side filter also
+  guards against a `panels.json` written before this fix (or by an older
+  build) still carrying a stale closable panel. This is what keeps the "only
+  exists in the `panels` array while open" claim above actually true.
 - **Cross-panel data still needs its own channel** — `PanelContentProps` is
   still just `{ size }` (above), so `openPanel`/`closePanel` alone can't tell
   the newly-opened panel *what* to show. The DPS case adds a small dedicated
@@ -345,7 +363,12 @@ mechanism any future panel can reuse, not a DPS-specific hack:
   own equally small context rather than generalizing this one — the DPS
   selection context has nothing panel-spawning-specific in it, and forcing a
   shared generic payload type across unrelated features isn't worth the
-  indirection for a single consumer.
+  indirection for a single consumer. The context also exposes `clear()`;
+  `DpsDetailPanel` calls it from an unmount-only `useEffect` cleanup, since
+  closing the panel unmounts the component (`closable`'s ✕ control just
+  removes the instance from `panels`, above) — without this, `selected` would
+  outlive the panel, and `DpsSummaryPanel`'s row highlight (`selectedId ===
+  selected?.id`) would keep implying an open detail panel that isn't there.
 - **The harness mount (`harness/PanelMount.tsx`)** has no `PanelCanvas`, so it
   wraps its single rendered panel in a no-op `PanelSpawnContext.Provider`
   (`openPanel`/`closePanel` both no-ops) purely so `usePanelSpawn()` doesn't

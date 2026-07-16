@@ -18,6 +18,8 @@ import type { DpsHistoryEntry } from './DpsTracker'
 export interface DpsDetailSelectionApi {
   selected: DpsHistoryEntry | null
   select: (entry: DpsHistoryEntry) => void
+  /** Clears the selection - called by `DpsDetailPanel` when it unmounts (closes), so the summary list's row highlight doesn't outlive the detail panel it implies is open. */
+  clear: () => void
 }
 
 export const DpsDetailSelectionContext = createContext<DpsDetailSelectionApi | null>(null)
