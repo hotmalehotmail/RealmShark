@@ -39,6 +39,10 @@ Upstream also has `tomato`/`potato` branches (full Swing GUI overlays built dire
 
 The bridge's JSON is a direct reflection of Java field names (Gson, no custom serializers for packet data), so any TypeScript type consuming it must match the Java class's public fields exactly — check the actual `packets/incoming/*.java` / `packets/data/*.java` source before writing a new consumer, not just the wire output, since enums serialize as their name string (e.g. `"statType": "NAME_STAT"`) and nested data classes reflect their own fields the same way.
 
+## Game-data ground truth
+
+Never invent facts about the game's assets (object ids, names, bag colors, item stats, enchant semantics, class data) — check `src/main/resources/assets/facts/asset-facts.json` first, the committed distillation of the real game XML (`docs/asset-pipeline.md` "Asset facts"). If the fact a feature needs isn't in it, that's a signal to stop, not to guess: the facts file must be extended from the real dump (a maintainer-side `./gradlew extractFacts` rerun with new fields) *before* the feature is built against it. Assumed-then-tested-against-the-same-assumption data is how the loot saga burned four live soak cycles (issue #105 → soaks #113/#122/#136/#144).
+
 ## Commands
 
 ### Java / bridge (Gradle)
