@@ -84,6 +84,13 @@ tests - they assert on tracker *behavior*, not on capture bytes.
 
 `session-recording-sample.ndjson.gz` demonstrates the fourth fixture source
 below: a slice of a session recording, committed as-is.
+`baseline-session.ndjson.gz` is the real thing at scale — the
+maintainer-recorded **kitchen-sink seed corpus** (PRD §7.3/D5, 24k envelopes
+from a live 2026-07-16 session): the standing reference for "what does X
+really look like on the wire" (grep it before assuming), smoke-replayed and
+fact-pinned by `baseline-session.test.ts`. See the fixtures README for its
+coverage and known gaps (no dungeon/boss or white/orange drop yet — extend
+the corpus with a future recording, don't edit the slice).
 
 ## Slicing a session recording into a fixture
 
