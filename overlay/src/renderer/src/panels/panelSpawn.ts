@@ -22,6 +22,14 @@ export interface PanelSpawnApi {
   openPanel: (id: string, type: string, size?: PanelSize) => void
   /** Removes a panel instance from the canvas entirely. */
   closePanel: (id: string) => void
+  /**
+   * Whether a panel instance with this `id` currently exists on the canvas -
+   * lets a spawning panel body (e.g. `DpsSummaryPanel`) derive UI state (like
+   * a row highlight) from the spawned panel's actual open/closed state
+   * instead of tracking it separately in a way that must be manually kept in
+   * sync when the panel closes.
+   */
+  isOpen: (id: string) => boolean
 }
 
 export const PanelSpawnContext = createContext<PanelSpawnApi | null>(null)

@@ -138,8 +138,10 @@ function PanelCanvas({ interactive }: PanelCanvasProps): React.JSX.Element {
     setPanels((prev) => prev.filter((p) => p.id !== id))
   }
 
+  const isOpen = (id: string): boolean => panels.some((p) => p.id === id)
+
   return (
-    <PanelSpawnContext.Provider value={{ openPanel, closePanel }}>
+    <PanelSpawnContext.Provider value={{ openPanel, closePanel, isOpen }}>
       <div className="relative h-full w-full">
         {panels.map((panel) => {
           const spec = PANEL_REGISTRY[panel.type]

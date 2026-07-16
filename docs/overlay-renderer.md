@@ -315,16 +315,19 @@ summary panel's own cramped content in place — so this is now a small generic
 mechanism any future panel can reuse, not a DPS-specific hack:
 
 - **`panels/panelSpawn.ts`** — `PanelSpawnContext` / `usePanelSpawn()`, giving
-  a panel body two calls: `openPanel(id, type, size?)` (creates a
+  a panel body three calls: `openPanel(id, type, size?)` (creates a
   `PanelInstance` at a fixed default anchor if `id` isn't already in the
   canvas's `panels` array, otherwise just raises the existing one to front —
   so re-targeting an already-open panel, e.g. selecting a different session,
-  never spawns a duplicate) and `closePanel(id)` (removes it from the array
-  entirely). Both are implemented by `PanelCanvas` (`openPanel`/`closePanel`
-  next to `updatePanel`/`bringToTop`) and provided via
-  `<PanelSpawnContext.Provider>` wrapping its rendered panels — `PanelCanvas`
-  itself has no DPS-specific knowledge; it only manipulates `PanelInstance[]`
-  generically.
+  never spawns a duplicate), `closePanel(id)` (removes it from the array
+  entirely), and `isOpen(id)` (whether a panel instance with that `id`
+  currently exists — lets a spawning panel body derive UI state, like a row
+  highlight, from the spawned panel's actual presence on the canvas instead
+  of tracking it separately). All three are implemented by `PanelCanvas`
+  (`openPanel`/`closePanel`/`isOpen` next to `updatePanel`/`bringToTop`) and
+  provided via `<PanelSpawnContext.Provider>` wrapping its rendered panels —
+  `PanelCanvas` itself has no DPS-specific knowledge; it only manipulates
+  `PanelInstance[]` generically.
 - **`registry.ts`'s `closable?: boolean`** on a `PanelSpec` — when set,
   `PanelFrame` renders a ✕ button in that panel's title bar (alongside
   pin/size) wired to `usePanelSpawn().closePanel(panel.id)` via the `onClose`
@@ -364,12 +367,17 @@ mechanism any future panel can reuse, not a DPS-specific hack:
   own equally small context rather than generalizing this one — the DPS
   selection context has nothing panel-spawning-specific in it, and forcing a
   shared generic payload type across unrelated features isn't worth the
-  indirection for a single consumer. The context also exposes `clear()`;
-  `DpsDetailPanel` calls it from an unmount-only `useEffect` cleanup, since
-  closing the panel unmounts the component (`closable`'s ✕ control just
-  removes the instance from `panels`, above) — without this, `selected` would
-  outlive the panel, and `DpsSummaryPanel`'s row highlight (`selectedId ===
-  selected?.id`) would keep implying an open detail panel that isn't there.
+  indirection for a single consumer. `selected` is never explicitly cleared
+  on close — `DpsSummaryPanel`'s row highlight instead gates on
+  `usePanelSpawn().isOpen('dpsDetail')`, so it reads the canvas's actual
+  open/closed state rather than a copy that has to be manually kept in sync.
+  An earlier version tore down `selected` from `DpsDetailPanel`'s
+  unmount-only `useEffect` cleanup, but that's unsafe under React
+  StrictMode: on mount, StrictMode runs setup → cleanup → setup in
+  development, so the cleanup fired once immediately after the very first
+  mount and wiped the selection that had just been set, and the panel opened
+  showing "No session selected" until a second click. `isOpen()` has no such
+  lifecycle dependency.
 - **The harness mount (`harness/PanelMount.tsx`)** has no `PanelCanvas`, so it
   wraps its single rendered panel in a no-op `PanelSpawnContext.Provider`
   (`openPanel`/`closePanel` both no-ops) purely so `usePanelSpawn()` doesn't

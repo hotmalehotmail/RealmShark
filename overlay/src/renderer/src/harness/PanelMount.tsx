@@ -20,7 +20,11 @@ interface PanelMountProps {
  * single-panel harness mount has no `PanelCanvas` to supply one. A no-op
  * spawn API is enough for a static shot (nothing here simulates a click).
  */
-const NOOP_PANEL_SPAWN = { openPanel: (): void => {}, closePanel: (): void => {} }
+const NOOP_PANEL_SPAWN = {
+  openPanel: (): void => {},
+  closePanel: (): void => {},
+  isOpen: (): boolean => false
+}
 
 /**
  * Only for the `dpsDetail` shot: that panel renders nothing until a session

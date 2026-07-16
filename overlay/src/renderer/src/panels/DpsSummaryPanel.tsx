@@ -87,18 +87,21 @@ function MasterList({ history, size, selectedId, onSelect }: MasterListProps): R
 function DpsSummaryPanel({ size }: PanelContentProps): React.JSX.Element {
   const history = useDpsHistory()
   const { selected, select } = useDpsDetailSelection()
-  const { openPanel } = usePanelSpawn()
+  const { openPanel, isOpen } = usePanelSpawn()
 
   const handleSelect = (entry: DpsHistoryEntry): void => {
     select(entry)
     openPanel(DPS_DETAIL_PANEL_ID, 'dpsDetail', 'lg')
   }
 
+  // Gated on isOpen(), not just `selected`, so the highlight tracks the
+  // detail panel's actual open/closed state - see docs/overlay-renderer.md's
+  // "Programmatic panel spawn/close".
   return (
     <MasterList
       history={history}
       size={size}
-      selectedId={selected?.id ?? null}
+      selectedId={isOpen(DPS_DETAIL_PANEL_ID) ? (selected?.id ?? null) : null}
       onSelect={handleSelect}
     />
   )

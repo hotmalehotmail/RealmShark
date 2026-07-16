@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import type { PanelSize } from '../../../shared/panels'
 import type { DpsHistoryEnemy, DpsHistoryEntry, PlayerCosmetics } from '../dps/DpsTracker'
 import { useDpsDetailSelection } from '../dps/dpsDetailContext'
@@ -167,15 +167,13 @@ function DpsDetailBody({ entry, size }: DpsDetailBodyProps): React.JSX.Element {
  * receiving it as a prop - `PanelContentProps` is just `{ size }` for every
  * panel body, so cross-panel data flows through this dedicated context
  * instead. Closing is handled generically by `PanelFrame`'s close control
- * (`registry.ts`'s `closable: true` on this panel type), which unmounts this
- * component - so the unmount cleanup below is what actually notices a close
- * and clears the selection, keeping `DpsSummaryPanel`'s row highlight (which
- * reads the same selection) from outliving the detail panel it implies.
+ * (`registry.ts`'s `closable: true` on this panel type), which just removes
+ * this panel's instance from the canvas - `DpsSummaryPanel`'s row highlight
+ * tracks that via `usePanelSpawn().isOpen()` rather than this component
+ * tearing down the shared selection on unmount (see docs/overlay-renderer.md).
  */
 function DpsDetailPanel({ size }: PanelContentProps): React.JSX.Element {
-  const { selected, clear } = useDpsDetailSelection()
-
-  useEffect(() => () => clear(), [clear])
+  const { selected } = useDpsDetailSelection()
 
   if (!selected) {
     return <EmptyState>No session selected</EmptyState>
