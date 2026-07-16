@@ -124,6 +124,32 @@ surface every row the bridge sends, not just the local player's, for the
 locked quest-objective target. Guards against a future regression that
 filters or drops non-local rows in `ingestBridgeDps`/`snapshot`.
 
+### `baseline-session.ndjson.gz` (real — the kitchen-sink seed corpus, PRD §7.3/D5)
+
+**Not a soak fixture** - the maintainer-recorded seed corpus: a **verbatim**
+~8-minute slice (24,094 envelopes, ~11 MB gzipped - the one deliberately
+heavyweight fixture in this directory) of a real session recorded 2026-07-16
+via Settings → "Record session to disk" on a live client. Its primary role is
+**standing documentation of wire reality**: before assuming what any packet
+"looks like," grep this file for the real thing (companion to the asset-facts
+rule in CLAUDE.md - the same never-invent-facts discipline, for the wire).
+`baseline-session.test.ts` smoke-replays it and pins the facts a guess would
+most plausibly get wrong (e.g. `MapInfoPacket.displayName` arrives as the RAW
+localization key `{s.nexus}` - the soak-#89 class of bug - while `.name`
+carries the resolved string).
+
+**Coverage** (see the test for the pinned details): heavy instance churn
+(13 `MapInfoPacket`s - nexus/vault/Pet Yard hops, each with its
+`CreateSuccessPacket`), a live multiplayer roster (300+ real `NAME_STAT`
+names, committed as-is - maintainer decision, same posture as the soak
+fixtures; usernames are public in-game), brown (1280) and soulbound (1283)
+bag-entity drops, and real spam-type ratios (`UpdateAckPacket` ≈ 19%,
+`UpdatePacket` ≈ 19%, `objectNames` ≈ 13%). **Known gaps**, to be filled by a
+future recording session rather than by editing this one: no dungeon/boss
+encounter (the sole `QuestObjectIdPacket` is `id=-1`), no realm event chain,
+and no white/orange bag drop (tracked-color recognition stays covered by
+`soak-144-loot-empty.json.gz`).
+
 ### `session-recording-sample.ndjson.gz` (synthetic, demonstrates the recorder format)
 
 **Not a soak fixture** - a hand-built, session-recorder-shaped (NDJSON, one
