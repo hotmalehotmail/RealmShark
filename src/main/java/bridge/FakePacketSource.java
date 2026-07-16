@@ -80,7 +80,9 @@ import java.util.Random;
  * newObject is a bag carrying items in INVENTORY_0..7 plus per-slot enchant
  * codes in UNIQUE_DATA_STRING - so the Loot panel's drop detection, BagType
  * categorization, and per-item enchant/rarity display are demonstrable and
- * regression-testable with no game installed (issue #105).
+ * regression-testable with no game installed (issue #105). One drop variant
+ * is a real "Shiny"-suffixed facts item ({@link #SHINY_ITEM_TYPE}), so the
+ * Loot panel's shiny-item badge (issue #193) is exercised the same way.
  * <p>
  * Every roster member's UNIQUE_DATA_STRING stat also carries synthetic
  * per-slot enchant data ({@link #ROSTER_ENCHANTS}, encoded via
@@ -194,6 +196,12 @@ public class FakePacketSource {
     private static final int WHITE_ITEM_TYPE = factsItemType(6, 9100);
     private static final int ORANGE_ITEM_TYPE = factsItemType(8, 9200);
     private static final int FILLER_ITEM_TYPE = factsItemType(3, 9300);
+    // A shiny item (issue #193): asset-facts.json marks these purely by a
+    // trailing " Shiny" suffix on the item's `name` (`displayId` carries the
+    // base name instead - see AssetFacts.Item's javadoc), so the id picked
+    // here is whatever real shiny item happens to be lowest-numbered with
+    // BagType 6 (no BagType-8 shiny items exist in the facts snapshot).
+    private static final int SHINY_ITEM_TYPE = factsShinyItemType(6, 9400);
 
     /** Lowest-id facts entity with this bagType/boosted flag, or {@code fallback} when no facts are bundled. */
     private static int factsEntityType(int bagType, boolean boosted, int fallback) {
@@ -207,13 +215,25 @@ public class FakePacketSource {
 
     /** Registers a facts item under its real id with real name/tier/bagType, so the Loot panel and tooltips show real data. */
     private static void registerFactsItem(int type) {
+        registerFactsItem(type, false);
+    }
+
+    /**
+     * Like {@link #registerFactsItem(int)}, but {@code fullName} skips the
+     * {@code displayId} override and always registers the raw facts
+     * {@code name} - needed for {@link #SHINY_ITEM_TYPE} so its wire name
+     * keeps the trailing " Shiny" suffix (the client-side shininess signal,
+     * see {@code sprites/shiny.ts}); {@code displayId} would otherwise strip
+     * it, the same way it does for the real item's non-shiny "clean" name.
+     */
+    private static void registerFactsItem(int type, boolean fullName) {
         if (FACTS == null || FACTS.items == null) return;
         assets.facts.AssetFacts.Item item = FACTS.items.get(String.valueOf(type));
         if (item == null) return;
         IdToAsset.registerFake(
             type, "Equipment", item.bagType,
             item.tier == null ? "" : item.tier,
-            item.displayId != null ? item.displayId : item.name,
+            !fullName && item.displayId != null ? item.displayId : item.name,
             "Facts-seeded real item (" + item.name + ", asset-facts.json)."
         );
     }
@@ -223,6 +243,17 @@ public class FakePacketSource {
         if (FACTS == null || FACTS.items == null) return fallback;
         return FACTS.items.entrySet().stream()
             .filter(e -> e.getValue().bagType == bagType)
+            .mapToInt(e -> Integer.parseInt(e.getKey()))
+            .min()
+            .orElse(fallback);
+    }
+
+    /** Lowest-id facts item with this bagType whose {@code name} ends in " Shiny", or {@code fallback} when none match. */
+    private static int factsShinyItemType(int bagType, int fallback) {
+        if (FACTS == null || FACTS.items == null) return fallback;
+        return FACTS.items.entrySet().stream()
+            .filter(e -> e.getValue().bagType == bagType
+                && e.getValue().name != null && e.getValue().name.endsWith(" Shiny"))
             .mapToInt(e -> Integer.parseInt(e.getKey()))
             .min()
             .orElse(fallback);
@@ -281,6 +312,7 @@ public class FakePacketSource {
             registerFactsItem(ORANGE_ITEM_TYPE);
             registerFactsItem(FILLER_ITEM_TYPE);
             registerFactsItem(WHITE_ITEM_TYPE);
+            registerFactsItem(SHINY_ITEM_TYPE, true);
         } else {
             IdToAsset.registerFake(WHITE_BAG_ICON_TYPE, "Bag", 6);
             IdToAsset.registerFake(ORANGE_BAG_ICON_TYPE, "Bag", 8);
@@ -290,6 +322,10 @@ public class FakePacketSource {
             IdToAsset.registerFake(
                 WHITE_ITEM_TYPE, "Equipment", 6, "8",
                 "Fake Potion of Testing", "A synthetic loot item seeded by --fake mode for the item tooltip demo."
+            );
+            IdToAsset.registerFake(
+                SHINY_ITEM_TYPE, "Equipment", 6, "13",
+                "Fake Blade of Testing Shiny", "A synthetic shiny loot item seeded by --fake mode for the shiny-badge demo."
             );
         }
         IdToAsset.registerFake(
@@ -586,19 +622,23 @@ public class FakePacketSource {
      * items in INVENTORY_0..7 plus a UNIQUE_DATA_STRING of per-slot enchant
      * codes - exactly the shape a real client renders enchant pips from on
      * hover, and what the overlay's LootTracker reads. Cycles white /
-     * orange / boosted-white, each with a fresh objectId, so the Loot panel
-     * accumulates distinct DROP entries (no pickup required): the white bag
-     * pairs an enchanted white item with an off-tier filler that must NOT be
-     * listed (proving per-item filtering), the orange bag carries a
-     * more-enchanted orange item, and the boosted bag proves both the boosted
-     * entity's detection and a zero-enchant item. The previous bag is despawned
+     * orange / boosted-white / shiny-white, each with a fresh objectId, so
+     * the Loot panel accumulates distinct DROP entries (no pickup required):
+     * the white bag pairs an enchanted white item with an off-tier filler
+     * that must NOT be listed (proving per-item filtering), the orange bag
+     * carries a more-enchanted orange item, the boosted bag proves both the
+     * boosted entity's detection and a zero-enchant item, and the shiny-white
+     * bag drops {@link #SHINY_ITEM_TYPE} - a real facts item whose name keeps
+     * its " Shiny" suffix (see {@link #registerFactsItem(int, boolean)}) - so
+     * the renderer's shiny-badge detection (issue #193, `sprites/shiny.ts`)
+     * is exercised with no game installed. The previous bag is despawned
      * ({@link UpdatePacket}.drops) so bags don't pile up in view.
      */
     private UpdatePacket lootBagDrop(int cycle) {
         int bagObjectType;
         int[] items;
         int[] enchantCounts;
-        int variant = cycle % 3;
+        int variant = cycle % 4;
         if (variant == 1) {
             bagObjectType = ORANGE_BAG_ICON_TYPE;
             items = new int[]{ORANGE_ITEM_TYPE};
@@ -607,6 +647,10 @@ public class FakePacketSource {
             bagObjectType = BOOSTED_WHITE_BAG_ICON_TYPE;
             items = new int[]{WHITE_ITEM_TYPE};
             enchantCounts = new int[]{0};
+        } else if (variant == 3) {
+            bagObjectType = WHITE_BAG_ICON_TYPE;
+            items = new int[]{SHINY_ITEM_TYPE};
+            enchantCounts = new int[]{1};
         } else {
             bagObjectType = WHITE_BAG_ICON_TYPE;
             items = new int[]{WHITE_ITEM_TYPE, FILLER_ITEM_TYPE};

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { AnimatedDyeCanvas } from './AnimatedDyeCanvas'
 import { useSprites } from './context'
 import { RARITY_RING_CLASS } from './enchantRarity'
@@ -18,7 +18,44 @@ interface SpriteProps {
    * it never changes the sprite's own layout size.
    */
   rarity?: number | null
+  /**
+   * Whether to render the shiny-item badge (a small rainbow star in the
+   * top-left corner) - see sprites/shiny.ts. Like `rarity`, this overlays
+   * without changing the sprite's own layout size.
+   */
+  shiny?: boolean
   className?: string
+}
+
+/** A small rainbow-gradient star, absolutely positioned over the sprite's top-left corner. */
+function ShinyBadge({ size }: { size: number }): React.JSX.Element {
+  const gradientId = useId()
+  const badgeSize = Math.max(7, Math.round(size * 0.42))
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={badgeSize}
+      height={badgeSize}
+      className="pointer-events-none absolute -left-1 -top-1"
+      aria-hidden="true"
+    >
+      <defs>
+        <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#ff5757" />
+          <stop offset="25%" stopColor="#ffbd47" />
+          <stop offset="50%" stopColor="#5cff7e" />
+          <stop offset="75%" stopColor="#57a8ff" />
+          <stop offset="100%" stopColor="#c157ff" />
+        </linearGradient>
+      </defs>
+      <path
+        d="M12 1.6 14.7 8.6 22.2 9.3 16.5 14.3 18.2 21.6 12 17.7 5.8 21.6 7.5 14.3 1.8 9.3 9.3 8.6Z"
+        fill={`url(#${gradientId})`}
+        stroke="rgba(0,0,0,0.45)"
+        strokeWidth="1"
+      />
+    </svg>
+  )
 }
 
 /** Deterministic placeholder colour so an unresolved objectType is still a stable chip. */
@@ -44,6 +81,7 @@ export function Sprite({
   clothingDye,
   accessoryDye,
   rarity,
+  shiny,
   className
 }: SpriteProps): React.JSX.Element | null {
   const {
@@ -81,10 +119,12 @@ export function Sprite({
   const rarityClass = rarityRingClassName(rarity)
   const combinedClassName = [className, rarityClass].filter(Boolean).join(' ') || undefined
 
+  let rendered: React.JSX.Element | null = null
+
   if (dyed && smooth) {
     const bake = bakeAnimatedDye(objectType, size, clothingDye, accessoryDye)
     if (bake) {
-      return (
+      rendered = (
         <AnimatedDyeCanvas
           bake={bake}
           size={size}
@@ -96,11 +136,11 @@ export function Sprite({
     }
   }
 
-  const url = dyed
-    ? getDyedSprite(objectType, size, clothingDye, accessoryDye)
-    : getSprite(objectType, size)
-  if (url) {
-    return (
+  if (!rendered) {
+    const url = dyed
+      ? getDyedSprite(objectType, size, clothingDye, accessoryDye)
+      : getSprite(objectType, size)
+    rendered = url ? (
       <img
         src={url}
         width={size}
@@ -109,20 +149,27 @@ export function Sprite({
         style={{ imageRendering: 'pixelated' }}
         alt=""
       />
+    ) : (
+      <span
+        className={combinedClassName}
+        style={{
+          width: size,
+          height: size,
+          background: placeholderColor(objectType),
+          borderRadius: 2,
+          display: 'inline-block',
+          flexShrink: 0
+        }}
+      />
     )
   }
 
+  if (!shiny) return rendered
+
   return (
-    <span
-      className={combinedClassName}
-      style={{
-        width: size,
-        height: size,
-        background: placeholderColor(objectType),
-        borderRadius: 2,
-        display: 'inline-block',
-        flexShrink: 0
-      }}
-    />
+    <span className="relative inline-block" style={{ width: size, height: size, flexShrink: 0 }}>
+      {rendered}
+      <ShinyBadge size={size} />
+    </span>
   )
 }
