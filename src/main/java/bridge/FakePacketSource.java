@@ -207,6 +207,7 @@ public class FakePacketSource {
 
     /** Registers a facts item under its real id with real name/tier/bagType, so the Loot panel and tooltips show real data. */
     private static void registerFactsItem(int type) {
+        if (FACTS == null || FACTS.items == null) return;
         assets.facts.AssetFacts.Item item = FACTS.items.get(String.valueOf(type));
         if (item == null) return;
         IdToAsset.registerFake(

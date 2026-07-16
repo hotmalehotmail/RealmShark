@@ -135,14 +135,6 @@ public class IdToAsset {
     }
 
     /**
-     * Like {@link #registerFake(int, String, int)} but with an explicit id
-     * name, for facts-seeded entries (issue #189) that must carry the REAL
-     * asset name - e.g. the ground-bag entities, whose BagType the live
-     * assets encode only in the id string ({@code "Loot Bag <N>[ Boost]"},
-     * see {@link #lootBagEntityTypes()}), so a fake entry named
-     * {@code Fake<id>} could never exercise that rule.
-     */
-    /**
      * Drops every {@link #registerFake}/{@link #registerFakeNamed} entry and
      * reloads the base assets. Registered fakes are otherwise process-wide and
      * permanent, which made shared-JVM tests order-dependent - call this in a
@@ -153,6 +145,14 @@ public class IdToAsset {
         reloadAssets();
     }
 
+    /**
+     * Like {@link #registerFake(int, String, int)} but with an explicit id
+     * name, for facts-seeded entries (issue #189) that must carry the REAL
+     * asset name - e.g. the ground-bag entities, whose BagType the live
+     * assets encode only in the id string ({@code "Loot Bag <N>[ Boost]"},
+     * see {@link #lootBagEntityTypes()}), so a fake entry named
+     * {@code Fake<id>} could never exercise that rule.
+     */
     public static void registerFakeNamed(int id, String idName, String clazz, int bagType) {
         IdToAsset entry = new IdToAsset(
             "", id, idName == null || idName.isEmpty() ? "Fake" + id : idName,

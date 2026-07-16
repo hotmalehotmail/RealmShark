@@ -53,7 +53,14 @@ import org.w3c.dom.NodeList;
  */
 public final class AssetFactsExtractor {
 
-    /** The real ground-bag naming rule: id "Loot Bag &lt;N&gt;[ Boost]", N = BagType. Kept in sync with {@code IdToAsset.LOOT_BAG_ID_PATTERN}. */
+    /**
+     * The real ground-bag naming rule: id "Loot Bag &lt;N&gt;[ Boost]", N = BagType.
+     * Deliberately BROADER than {@code IdToAsset.LOOT_BAG_ID_PATTERN}, the runtime
+     * discovery rule: the extractor also captures the numberless family members
+     * ("Soulbound Loot Bag", recorded with bagType -1) so the facts describe the
+     * full container family, while the runtime rule tracks only the numbered
+     * entities whose suffix IS their BagType. Don't "sync" one to the other.
+     */
     static final Pattern LOOT_BAG_ID = Pattern.compile("^(Soulbound )?Loot Bag(?: (\\d+))?( Boost)?$");
 
     private static final String GENERATOR = "AssetFactsExtractor v1";
