@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { BridgeStatus } from '../../shared/ipc'
 import { ingestMainEntry } from './consoleLog'
+import { DpsDetailSelectionProvider } from './dps/DpsDetailSelectionProvider'
 import { ItemInfoProvider } from './items/ItemInfoProvider'
 import PanelCanvas from './panels/PanelCanvas'
 import { EntityRegistryProvider } from './sprites/EntityRegistry'
@@ -73,9 +74,15 @@ function App(): React.JSX.Element {
     <SpriteProvider>
       <EntityRegistryProvider>
         <ItemInfoProvider>
-          <InteractiveContext.Provider value={interactive}>
-            <AppShell status={status} interactive={interactive} showAttachToast={showAttachToast} />
-          </InteractiveContext.Provider>
+          <DpsDetailSelectionProvider>
+            <InteractiveContext.Provider value={interactive}>
+              <AppShell
+                status={status}
+                interactive={interactive}
+                showAttachToast={showAttachToast}
+              />
+            </InteractiveContext.Provider>
+          </DpsDetailSelectionProvider>
         </ItemInfoProvider>
       </EntityRegistryProvider>
     </SpriteProvider>
