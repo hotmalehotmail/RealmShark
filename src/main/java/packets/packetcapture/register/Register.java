@@ -75,10 +75,27 @@ public class Register {
      * @return True if the removal is successful.
      */
     public boolean unregister(PacketType type, IPacketListener<Packet> processor) {
-        ArrayList<IPacketListener<Packet>> list = packetListeners.get(type.getPacketClass());
+        return unregisterFrom(type.getPacketClass(), processor);
+    }
+
+    /**
+     * Removes a processor registered via {@link #registerAll(IPacketListener)}. Symmetric
+     * counterpart to {@code unregister}, needed by anything (e.g. a test harness replaying a
+     * capture) that registers a scoped catch-all listener and must detach it afterward instead
+     * of leaking it for the rest of the JVM's lifetime.
+     *
+     * @param processor The lambda passed to {@link #registerAll(IPacketListener)}.
+     * @return True if the removal is successful.
+     */
+    public boolean unregisterAll(IPacketListener<Packet> processor) {
+        return unregisterFrom(Packet.class, processor);
+    }
+
+    private boolean unregisterFrom(Class<? extends Packet> key, IPacketListener<Packet> processor) {
+        ArrayList<IPacketListener<Packet>> list = packetListeners.get(key);
         if (list != null) {
             if (list.size() == 1) {
-                return packetListeners.remove(type.getPacketClass()) != null;
+                return packetListeners.remove(key) != null;
             } else if (!emitting) {
                 return list.remove(processor);
             } else if (list.contains(processor)) {

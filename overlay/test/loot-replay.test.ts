@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { LootTracker } from '../src/renderer/src/loot/LootTracker'
+import { isShinyItemName } from '../src/renderer/src/sprites/shiny'
 import { loadCapture, replay } from './replay'
 
 const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures/captures')
@@ -81,5 +82,57 @@ describe('LootTracker capture replay', () => {
     const entries = tracker.entriesFor(6)
     expect(entries).toHaveLength(1)
     expect(entries[0].objectType).toBe(1001)
+  })
+
+  it('issue #193: a shiny item (name suffixed " Shiny" in itemNames) is detected via isShinyItemName', () => {
+    // Synthesized like the #122 (mutated) case above - no committed fixture
+    // contains a real shiny drop. Wire shapes lifted from
+    // `bridge/LootBagTypes.java` (itemNames carries the facts-derived name
+    // verbatim, "Shiny" suffix included - see FakePacketSource.registerFactsItem's
+    // fullName path) and `packets/data/enums/StatType.java`.
+    const envelopes: Parameters<typeof replay>[1] = [
+      {
+        type: 'lootBagTypes',
+        direction: 'SERVER',
+        time: 1000,
+        data: {
+          bagTypeTable: { '1210': 6, '1001': 6 },
+          lootBagIcons: { '6': 2000 },
+          lootBagObjectTypes: { '3000': 6 },
+          itemNames: { '1210': 'Dirk of Cronus Shiny', '1001': 'Potion of Life' }
+        }
+      },
+      {
+        type: 'UpdatePacket',
+        direction: 'SERVER',
+        time: 1500,
+        data: {
+          newObjects: [
+            {
+              objectType: 3000,
+              status: {
+                objectId: 7000,
+                stats: [
+                  { statTypeNum: 8, statValue: 1210 },
+                  { statTypeNum: 9, statValue: 1001 }
+                ]
+              }
+            }
+          ],
+          drops: []
+        }
+      }
+    ]
+    const tracker = new LootTracker()
+
+    replay(tracker, envelopes)
+
+    const entries = tracker.entriesFor(6)
+    expect(entries).toHaveLength(2)
+
+    const shiny = entries.find((e) => e.objectType === 1210)
+    const plain = entries.find((e) => e.objectType === 1001)
+    expect(isShinyItemName(tracker.itemName(shiny!.objectType))).toBe(true)
+    expect(isShinyItemName(tracker.itemName(plain!.objectType))).toBe(false)
   })
 })

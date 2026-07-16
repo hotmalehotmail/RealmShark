@@ -38,6 +38,7 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/sprites/EntityRegistry.tsx` | objectId → name/skin/equipment/equipmentRarity/enchantSlots/dyes, built from the packet stream. |
 | `overlay/src/renderer/src/sprites/context.ts` | The two React contexts + `useSprites` / `useEntityRegistry` hooks. |
 | `overlay/src/renderer/src/sprites/enchantRarity.ts` | Decodes `UNIQUE_DATA_STRING` into a per-slot rarity-border tier (issue #107) — see §4.1. |
+| `overlay/src/renderer/src/sprites/shiny.ts` | `isShinyItemName` - derives shininess from an item's resolved display name (issue #193) — see §4.3. |
 | `overlay/src/renderer/src/sprites/ItemSprite.tsx` | `<ItemSprite objectType>` - the shared item-rendering path (§4.2): wraps `Sprite` with the hover item/enchant tooltip. |
 | `overlay/src/renderer/src/items/ItemInfoProvider.tsx` | Ingests the `itemInfo`/`enchantNames` envelopes; provides item metadata + enchant-name lookups (§4.2). |
 | `overlay/src/renderer/src/items/context.ts` | `ItemInfoContext` + `useItemInfo()` hook. |
@@ -399,7 +400,7 @@ item tooltip (§4.2) with no per-panel wiring.
 | `InstancePanel` | "Instance" | `EntityRegistry.characters()` | Every named player in the instance, dyed sprites + gear. |
 | `DpsSummaryPanel` | "DPS Summary" | `useDpsHistory()` | A master list only: retained past instances (icon + name + a "You: Xdmg (#rank)" headline). Clicking a row opens that instance's breakdown in the separate `dpsDetail` panel below rather than swapping this panel's own content — see §2's "Programmatic panel spawn/close" and §5.1. |
 | `DpsDetailPanel` | "DPS Detail" | `useDpsDetailSelection()` | The large, closable, independently draggable/resizable panel `DpsSummaryPanel` opens on row click (issue #194): the selected instance's enemies ranked by total damage, expandable to a frozen per-player breakdown (gear/dyes/enchants). A single reused panel instance re-targeted on each new selection, not one spawned per session. Renders "No session selected" if opened with nothing selected (shouldn't happen via the normal row-click path). See §2, §5.1. |
-| `LootPanel` | "Loot" | `useLootTracker()` | Session log of white/orange bags (BagType 6/8) that dropped near the player, grouped under each color's own bag sprite, with per-item rarity border + enchant tooltip, chronological (not de-duplicated). See §7. |
+| `LootPanel` | "Loot" | `useLootTracker()` | Session log of white/orange bags (BagType 6/8) that dropped near the player, both always shown under their own bag sprite + count (no text label), with per-item rarity border + shiny badge + enchant tooltip, chronological (not de-duplicated). See §7. |
 
 **StatusPanel** (`panels/StatusPanel.tsx`) is the only panel wired straight to
 the IPC surface rather than a shared service. It subscribes to `onBridgeStatus`,
@@ -533,8 +534,8 @@ decoded `atlasesRef` bitmaps are asset data, kept for the next attach.
 ### `Sprite` and `CharacterSprite`
 
 `Sprite` (`sprites/Sprite.tsx`) takes an `objectType` (+ optional `size`, dyes,
-`rarity`, `className`). It picks `getDyedSprite` when a dye is present else
-`getSprite` (`Sprite.tsx:51-53`), and renders an
+`rarity`, `shiny`, `className`). It picks `getDyedSprite` when a dye is present
+else `getSprite` (`Sprite.tsx:51-53`), and renders an
 `<img style={{imageRendering:'pixelated'}}>`. When the lookup returns `null`
 (no real pack / undecoded atlas) it renders a **deterministic HSL placeholder
 chip** so an unresolved objectType is still a stable coloured box
@@ -543,9 +544,15 @@ chip** so an unresolved objectType is still a stable coloured box
 whether this particular sprite has an idle-frame or textile-frame animation,
 and only then does a local `setInterval` at `frameMs` re-render it
 (`Sprite.tsx:37-45`) — static sprites and event-driven panels never tick.
-`rarity` (0-4, see §4.1) adds a `ring-2 ring-rarity-<tier>` class on whichever
+`rarity` (0-4, see §4.1) adds a `ring-1 ring-rarity-<tier>` class on whichever
 of the three render paths (canvas/`<img>`/placeholder) is taken, so it never
-changes the sprite's rendered layout size the way a `border` would.
+changes the sprite's rendered layout size the way a `border` would. `shiny`
+(see §4.3) similarly overlays a small rainbow-star badge in the top-left
+corner without affecting layout size — but unlike `rarity`, it needs an
+actual wrapper element (an absolutely-positioned `<svg>` badge can't be a
+Tailwind class on the sprite itself), so `Sprite` only wraps its output in a
+`position: relative` span when `shiny` is truthy, leaving every other caller's
+DOM shape unchanged.
 
 `CharacterSprite` (`sprites/CharacterSprite.tsx`) takes an **`objectId`** and
 resolves everything from the entity registry: base type is the equipped `skin` if
@@ -730,6 +737,37 @@ instead of `Sprite`.
     listener, no portal. The click-through contract is preserved by never
     attaching a hover target at all, not by hiding one — there is nothing for
     the browser to dispatch a hover event *to*.
+
+### 4.3 Shiny item badge (`sprites/shiny.ts`, issue #193)
+
+A "shiny" item has no dedicated wire signal — per the game-data ground-truth
+rule (root `CLAUDE.md`), `assets/facts/asset-facts.json` marks one purely by a
+trailing `" Shiny"` suffix on `items[id].name` (`displayId` carries the base
+name instead, e.g. id `1210`: `name: "Dirk of Cronus Shiny"`,
+`displayId: "Dirk of Cronus"`). `itemNames` (the Loot panel's `lootBagTypes`
+envelope, §7) already forwards that same `name` string unfiltered
+(`IdToAsset.objectName`), so `shiny.ts`'s `isShinyItemName` just re-derives
+shininess client-side from the string every consumer already has via
+`itemName(objectType)` — no bridge envelope change was needed. `displayId`
+being set is **not** a valid proxy (most items with a `displayId` aren't
+shiny — it also covers unrelated "nicer name" overrides), so the suffix check
+is the only correct rule.
+
+`LootPanel` computes `isShinyItemName(itemName(entry.objectType))` per entry
+and passes it as `ItemSprite`'s (→ `Sprite`'s) `shiny` prop, which renders a
+small rainbow-gradient star (`ShinyBadge` in `Sprite.tsx`) absolutely
+positioned over the sprite's top-left corner — the same "overlay without
+changing layout size" technique `rarity` uses (§4.1), except it needs an
+actual `position: relative` wrapper span since a badge can't be a class on
+the sprite element itself (see §4's `Sprite` writeup). The gradient's `<svg
+id>` is generated via `useId()` so multiple shiny badges on screen at once
+don't collide on a duplicate DOM id.
+
+`FakePacketSource` seeds one real facts item whose name keeps its `" Shiny"`
+suffix (`SHINY_ITEM_TYPE`, registered via `registerFactsItem(id, true)` to
+skip the usual `displayId` override) and drops it in a dedicated loot-bag
+cycle variant, so the badge is exercised in dev and in the committed
+`gallery.json` capture with no game installed.
 
 ---
 
@@ -1206,18 +1244,26 @@ returns whether anything display-relevant changed (a new entry, or the
 
 ### `LootPanel` (`panels/LootPanel.tsx`)
 
-For each tracked BagType (6, 8), an empty category is hidden; if both are empty
-the panel shows the shared `EmptyState`. A non-empty category renders its
-bag-color sprite (`bagIcon(bagType)`, the ordinary `<Sprite objectType>` path)
-plus a count, then every dropped item through **`ItemSprite`** (§4.2) — the
-rarity border from `entry.rarity` and the hover tooltip (item name/tier/class/
-description from `itemInfo`, plus the enchant list decoded from
-`entry.enchantCode` via `ItemSprite`'s `enchantCode` prop, the same path
-`DpsDetailPanel` uses for frozen history) — **newest first** so the latest
-drop is visible without scrolling. The resolved item name (`itemName`, from
-`lootBagTypes`'s `itemNames` table) renders beside the sprite at
-`size === 'lg'`. Sized/registered via the standard checklist (§2):
-`registry.ts`'s `loot` entry, a default-layout instance in `PanelCanvas.tsx`.
+Both tracked BagTypes (6, 8) always render, even at a 0 count (issue #193) —
+no per-category hiding and no whole-panel `EmptyState`, so the panel's layout
+is stable across a session instead of jumping around as categories fill in.
+Each category's header is just its bag-color sprite (`bagIcon(bagType)`, the
+ordinary `<Sprite objectType>` path) plus the count — no "White Bag"/"Orange
+Bag" text, the sprite is recognizable on its own. Every dropped item renders
+through **`ItemSprite`** (§4.2) — the rarity border from `entry.rarity`, the
+shiny badge from `isShinyItemName(itemName(entry.objectType))` (§4.3), and the
+hover tooltip (item name/tier/class/description from `itemInfo`, plus the
+enchant list decoded from `entry.enchantCode` via `ItemSprite`'s
+`enchantCode` prop, the same path `DpsDetailPanel` uses for frozen history)
+— **newest first** so the latest drop is visible without scrolling. The
+resolved item name (`itemName`, from `lootBagTypes`'s `itemNames` table)
+renders beside the sprite at `size === 'lg'`. The scroll container carries a
+`p-1.5` inset so the leftmost/topmost item's rarity ring and shiny badge —
+both outset overlays that extend past the sprite's own box — aren't clipped
+by the container edge (issue #193; with no inset, `overflow-y-auto` clips
+exactly at the content edge). Sized/registered via the standard checklist
+(§2): `registry.ts`'s `loot` entry, a default-layout instance in
+`PanelCanvas.tsx`.
 
 ---
 

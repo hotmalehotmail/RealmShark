@@ -124,7 +124,10 @@ const overlayApi: OverlayApi = {
   /** Capture a bug report (version + recent packets + logs) and open the issue form. */
   reportBug: (): Promise<BugReportResult> => ipcRenderer.invoke(IPC.reportBug),
   /** Same capture-ring dump as `reportBug`, minus opening the issue form - just write the file and reveal it. */
-  captureNow: (): Promise<BugReportResult> => ipcRenderer.invoke(IPC.captureNow)
+  captureNow: (): Promise<BugReportResult> => ipcRenderer.invoke(IPC.captureNow),
+  setEditableFocused: (focused: boolean): void => {
+    ipcRenderer.send(IPC.editableFocusChange, focused)
+  }
 }
 
 export type { OverlayApi }

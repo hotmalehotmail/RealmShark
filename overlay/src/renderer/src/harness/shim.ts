@@ -141,7 +141,9 @@ export function installHarness(): void {
     onUpdateAvailable: updateAvailable.on,
     onUpdateProgress: updateProgress.on,
     reportBug: (): Promise<BugReportResult> => Promise.resolve({ file: '' }),
-    captureNow: (): Promise<BugReportResult> => Promise.resolve({ file: '' })
+    captureNow: (): Promise<BugReportResult> => Promise.resolve({ file: '' }),
+    // No main process to gate here - the harness has no global Esc dismiss.
+    setEditableFocused: (): void => {}
   }
 
   window.overlay = api

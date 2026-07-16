@@ -179,6 +179,15 @@ interactive. `registerHotkey(accelerator)` (`index.ts:199`) registers via
 boolean so `saveSettings` can detect a rejected accelerator. Default is
 `Alt+Shift+R` (`shared/settings.ts`).
 
+A third way to dismiss: while `isInteractive`, pressing **Esc** also calls
+`toggleInteractive()`, via a `webContents.on('before-input-event')` listener
+(not a `globalShortcut`, so it never steals Esc from the game's own menus
+while click-through). This is skipped when `rendererHasEditableFocus` is set -
+the renderer reports (via `IPC.editableFocusChange`, from a document-level
+`focusin`/`focusout` listener in `App.tsx`) whenever a text-editable element
+has focus, so Esc can't dismiss the whole overlay out from under a panel's own
+Esc affordance (e.g. `ConsolePanel` clearing its search box on Esc).
+
 ### Single-instance lock
 
 `index.ts:44` grabs the lock at module load; `whenReady` bails immediately if it
@@ -213,6 +222,7 @@ All registered inside `whenReady` (`index.ts:281-380`). `handle` = renderer
 | `savePanelLayout` | handle | `persistPanelLayout(panels)` |
 | `reportBug` | handle | `dumpCaptureRing(true)` - see below |
 | `captureNow` | handle | `dumpCaptureRing(false)` - see below |
+| `editableFocusChange` | on (fire-and-forget) | sets `rendererHasEditableFocus`, gating the Esc dismiss below |
 
 Pushes to the renderer set up in the same block: `mainLogEntry`, `spritePack`,
 `bridgeStatus`, `packetBatch`, `attachSuccess`, `overlayDetach`,

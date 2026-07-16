@@ -123,8 +123,8 @@ export function equipmentRarityFromUniqueDataString(value: string | null | undef
 
 /** Tailwind ring-color utility class per rarity tier (see docs/overlay-ui-style.md "Rarity roles"). Tier 0 has no entry (no border). */
 export const RARITY_RING_CLASS: Record<number, string> = {
-  1: 'ring-2 ring-rarity-uncommon',
-  2: 'ring-2 ring-rarity-rare',
-  3: 'ring-2 ring-rarity-legendary',
-  4: 'ring-2 ring-rarity-divine'
+  1: 'ring-1 ring-rarity-uncommon',
+  2: 'ring-1 ring-rarity-rare',
+  3: 'ring-1 ring-rarity-legendary',
+  4: 'ring-1 ring-rarity-divine'
 }

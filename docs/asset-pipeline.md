@@ -397,7 +397,14 @@ boosted variants, that the overlay's drop tracker watches for), `lootBagIcons`
 them as the synthetic `lootBagTypes` envelope - see
 [bridge-server.md](bridge-server.md#6-lootbagtypes--synthetic-loot-categorization)
 for the bridge-side broadcast mechanics and
-[architecture.md](architecture.md) for the exact wire shape. Deliberately
+[architecture.md](architecture.md) for the exact wire shape. `itemNames`
+carries a shiny item's raw display name verbatim, trailing `" Shiny"` suffix
+and all - `objectName` never consults the facts snapshot's `displayId` field
+(that's a fake-mode/test-only concept, see the Item facts bullet below), so a
+real asset load's `display`/`idName` columns are untouched by it. The
+overlay's Loot panel (`sprites/shiny.ts`, issue #193) derives shininess
+purely from that suffix client-side, with no dedicated `shiny` boolean added
+to this envelope. Deliberately
 **not** part of `SpritePackService`'s pack: this data needs only `IdToAsset`
 (no atlas), so it's available - and broadcast - independent of the sprite
 pack's atlas-readiness gate.
