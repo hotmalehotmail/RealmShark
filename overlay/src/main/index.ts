@@ -95,6 +95,16 @@ function createOverlayWindow(): void {
     overlayWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
+  // Esc dismisses the overlay back to click-through (same effect as toggling
+  // the hotkey off), but ONLY while the overlay is actually interactive/focused
+  // - never a globalShortcut, so it doesn't steal Esc from the game's own
+  // menus when the overlay is click-through.
+  overlayWindow.webContents.on('before-input-event', (_event, input) => {
+    if (isInteractive && input.type === 'keyDown' && input.key === 'Escape') {
+      toggleInteractive()
+    }
+  })
+
   if (supportsAttach) {
     // electron-overlay-window matches this with an exact strcmp, not a substring
     // or regex - must match the live window title byte-for-byte, including case.
