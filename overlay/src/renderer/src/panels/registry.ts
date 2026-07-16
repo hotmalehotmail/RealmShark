@@ -4,6 +4,7 @@ import { dpsPanelHeight } from '../dps/rowLayout'
 import type { SizePx } from './anchor'
 import CharacterPanel from './CharacterPanel'
 import ConsolePanel from './ConsolePanel'
+import DpsDetailPanel from './DpsDetailPanel'
 import DpsPanel from './DpsPanel'
 import DpsSummaryPanel from './DpsSummaryPanel'
 import InstancePanel from './InstancePanel'
@@ -19,6 +20,13 @@ export interface PanelSpec {
   title: string
   sizes: Record<PanelSize, SizePx>
   component: ComponentType<PanelContentProps>
+  /**
+   * Whether `PanelFrame` renders a close (✕) control in this panel's title
+   * bar, wired to `usePanelSpawn().closePanel` - for a panel that's
+   * programmatically opened rather than always present in the default
+   * layout (e.g. `dpsDetail`). Omit/false for every ordinary always-on panel.
+   */
+  closable?: boolean
 }
 
 export const PANEL_REGISTRY: Record<string, PanelSpec> = {
@@ -81,6 +89,20 @@ export const PANEL_REGISTRY: Record<string, PanelSpec> = {
       lg: { width: 400, height: 420 }
     },
     component: DpsSummaryPanel
+  },
+  dpsDetail: {
+    type: 'dpsDetail',
+    title: 'DPS Detail',
+    // Deliberately larger than dpsSummary at every preset - the whole point
+    // of #194 is giving the per-enemy/per-player breakdown room to breathe
+    // instead of being cramped inside the small summary panel.
+    sizes: {
+      sm: { width: 320, height: 320 },
+      md: { width: 460, height: 460 },
+      lg: { width: 620, height: 560 }
+    },
+    component: DpsDetailPanel,
+    closable: true
   },
   loot: {
     type: 'loot',
