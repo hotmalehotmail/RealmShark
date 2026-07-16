@@ -23,7 +23,8 @@ export const IPC = {
   updateAvailable: 'update-available',
   updateProgress: 'update-progress',
   reportBug: 'report-bug',
-  captureNow: 'capture-now'
+  captureNow: 'capture-now',
+  editableFocusChange: 'editable-focus-change'
 } as const
 
 /** Result of an IPC.reportBug / IPC.captureNow call: where the capture bundle was written on disk. */

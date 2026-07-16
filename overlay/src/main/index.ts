@@ -68,6 +68,11 @@ let currentBridgeStatus: BridgeStatus = 'connecting'
 
 let overlayWindow: BrowserWindow
 let isInteractive = false
+// Whether a text-editable element (input/textarea/contenteditable) currently
+// has focus in the renderer - reported via IPC.editableFocusChange. Gates the
+// global Esc-dismiss handler below so it doesn't steal Esc from a panel's own
+// affordance, e.g. ConsolePanel clearing its search box.
+let rendererHasEditableFocus = false
 // Whether the attached game window currently has OS focus (from
 // electron-overlay-window's focus/blur events). Used to ignore the global
 // toggle hotkey when the user has alt-tabbed away from the game.
@@ -98,9 +103,16 @@ function createOverlayWindow(): void {
   // Esc dismisses the overlay back to click-through (same effect as toggling
   // the hotkey off), but ONLY while the overlay is actually interactive/focused
   // - never a globalShortcut, so it doesn't steal Esc from the game's own
-  // menus when the overlay is click-through.
+  // menus when the overlay is click-through. Also skipped while a text-editable
+  // element has renderer focus (rendererHasEditableFocus), so it doesn't collide
+  // with a panel's own Esc affordance - e.g. ConsolePanel clearing its search box.
   overlayWindow.webContents.on('before-input-event', (_event, input) => {
-    if (isInteractive && input.type === 'keyDown' && input.key === 'Escape') {
+    if (
+      isInteractive &&
+      !rendererHasEditableFocus &&
+      input.type === 'keyDown' &&
+      input.key === 'Escape'
+    ) {
       toggleInteractive()
     }
   })
@@ -417,6 +429,10 @@ app.whenReady().then(() => {
 
   ipcMain.handle(IPC.savePanelLayout, (_event, panels: PanelInstance[]) => {
     persistPanelLayout(panels)
+  })
+
+  ipcMain.on(IPC.editableFocusChange, (_event, focused: boolean) => {
+    rendererHasEditableFocus = focused
   })
 })
 
