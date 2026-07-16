@@ -43,6 +43,10 @@ test {
     testLogging {
         events 'passed', 'skipped', 'failed'
     }
+    // The baseline-session capture-replay fixture is ~50MB decompressed / 24k envelopes;
+    // Gson's JsonElement trees for that many envelopes need more than the default 512MB
+    // worker heap (see docs/dps-engine.md, "Capture replay (Java)").
+    maxHeapSize = '2g'
 }
 
 // Run the WebSocket bridge without disturbing the library's main class.
