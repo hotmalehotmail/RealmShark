@@ -176,20 +176,57 @@ public class FakePacketSource {
     // watches for - one per tracked color (6 = white, 8 = orange/ST - see
     // docs/asset-pipeline.md), plus a boosted white-bag variant proving the
     // bridge's lootBagObjectTypes covers more than one entity per color and the
-    // tracker detects them all. Registered directly with IdToAsset (bypassing
-    // real extraction, which needs a game install) via IdToAsset.registerFake()
-    // below - the same "arbitrary plausible objectTypes" convention as
-    // WEAPON_ID/LOCAL_SKIN_ID above, extended with the Class=Bag + BagType
-    // metadata the loot pipeline reads.
-    private static final int WHITE_BAG_ICON_TYPE = 9000;
-    private static final int ORANGE_BAG_ICON_TYPE = 9001;
-    private static final int BOOSTED_WHITE_BAG_ICON_TYPE = 9002;
-    // Item objectTypes seeded with a BagType: 9100 white + 9200 orange (both
-    // tracked), and 9300 BagType 3 (NOT tracked - a filler item sharing a bag,
-    // which must never appear in the Loot panel, proving per-item filtering).
-    private static final int WHITE_ITEM_TYPE = 9100;
-    private static final int ORANGE_ITEM_TYPE = 9200;
-    private static final int FILLER_ITEM_TYPE = 9300;
+    // tracker detects them all. Seeded from the committed asset-facts.json
+    // (issue #189) so --fake traffic carries the REAL object ids and names -
+    // real bag entities are Class=Container identified only by their id string
+    // ("Loot Bag <N>[ Boost]"), so inventing Class=Bag entries here validated a
+    // scan that matches nothing on live assets (the loot saga, soaks
+    // #113/#144). The old synthetic ids remain as fallback for a build whose
+    // jar predates the facts resource.
+    private static final assets.facts.AssetFacts FACTS = assets.facts.AssetFacts.loadBundled();
+    private static final int WHITE_BAG_ICON_TYPE = factsEntityType(6, false, 9000);
+    private static final int ORANGE_BAG_ICON_TYPE = factsEntityType(8, false, 9001);
+    private static final int BOOSTED_WHITE_BAG_ICON_TYPE = factsEntityType(6, true, 9002);
+    // Item objectTypes seeded with a BagType: white + orange (both tracked),
+    // and a BagType-3 filler (NOT tracked - an item sharing a bag which must
+    // never appear in the Loot panel, proving per-item filtering). Real item
+    // ids from the facts file, or the legacy synthetic ids without it.
+    private static final int WHITE_ITEM_TYPE = factsItemType(6, 9100);
+    private static final int ORANGE_ITEM_TYPE = factsItemType(8, 9200);
+    private static final int FILLER_ITEM_TYPE = factsItemType(3, 9300);
+
+    /** Lowest-id facts entity with this bagType/boosted flag, or {@code fallback} when no facts are bundled. */
+    private static int factsEntityType(int bagType, boolean boosted, int fallback) {
+        if (FACTS == null || FACTS.entities == null) return fallback;
+        return FACTS.entities.entrySet().stream()
+            .filter(e -> e.getValue().bagType == bagType && e.getValue().boosted == boosted)
+            .mapToInt(e -> Integer.parseInt(e.getKey()))
+            .min()
+            .orElse(fallback);
+    }
+
+    /** Registers a facts item under its real id with real name/tier/bagType, so the Loot panel and tooltips show real data. */
+    private static void registerFactsItem(int type) {
+        if (FACTS == null || FACTS.items == null) return;
+        assets.facts.AssetFacts.Item item = FACTS.items.get(String.valueOf(type));
+        if (item == null) return;
+        IdToAsset.registerFake(
+            type, "Equipment", item.bagType,
+            item.tier == null ? "" : item.tier,
+            item.displayId != null ? item.displayId : item.name,
+            "Facts-seeded real item (" + item.name + ", asset-facts.json)."
+        );
+    }
+
+    /** Lowest-id facts item with this bagType, or {@code fallback} when no facts are bundled. */
+    private static int factsItemType(int bagType, int fallback) {
+        if (FACTS == null || FACTS.items == null) return fallback;
+        return FACTS.items.entrySet().stream()
+            .filter(e -> e.getValue().bagType == bagType)
+            .mapToInt(e -> Integer.parseInt(e.getKey()))
+            .min()
+            .orElse(fallback);
+    }
     // Fresh objectId per simulated bag drop, safely above every fixed entity id
     // (roster/pet <= 50, enemies/boss in the 100_000s).
     private static final int LOOT_BAG_ID_BASE = 200_000;
@@ -230,18 +267,34 @@ public class FakePacketSource {
         // any (real-mode-only, here always a no-op) background reload, so this
         // can't race away regardless of ObjectNames.init's own asset-loader
         // thread ordering.
-        IdToAsset.registerFake(WHITE_BAG_ICON_TYPE, "Bag", 6);
-        IdToAsset.registerFake(ORANGE_BAG_ICON_TYPE, "Bag", 8);
-        IdToAsset.registerFake(BOOSTED_WHITE_BAG_ICON_TYPE, "Bag", 6);
-        IdToAsset.registerFake(ORANGE_ITEM_TYPE, "Equipment", 8);
-        IdToAsset.registerFake(FILLER_ITEM_TYPE, "Equipment", 3);
+        if (FACTS != null && FACTS.entities != null) {
+            // Facts-seeded (issue #189): register every real tracked-color bag
+            // entity with its REAL id name and class. Like live assets, none of
+            // these matches the legacy Class=Bag scan - discovery goes through
+            // the id-name rule (IdToAsset.lootBagEntityTypes), so --fake mode
+            // exercises the same code path the real client does, boosted
+            // variants included.
+            FACTS.entities.forEach((key, entity) -> {
+                if (entity.bagType != 6 && entity.bagType != 8) return;
+                IdToAsset.registerFakeNamed(Integer.parseInt(key), entity.name, entity.clazz, -1);
+            });
+            registerFactsItem(ORANGE_ITEM_TYPE);
+            registerFactsItem(FILLER_ITEM_TYPE);
+            registerFactsItem(WHITE_ITEM_TYPE);
+        } else {
+            IdToAsset.registerFake(WHITE_BAG_ICON_TYPE, "Bag", 6);
+            IdToAsset.registerFake(ORANGE_BAG_ICON_TYPE, "Bag", 8);
+            IdToAsset.registerFake(BOOSTED_WHITE_BAG_ICON_TYPE, "Bag", 6);
+            IdToAsset.registerFake(ORANGE_ITEM_TYPE, "Equipment", 8);
+            IdToAsset.registerFake(FILLER_ITEM_TYPE, "Equipment", 3);
+            IdToAsset.registerFake(
+                WHITE_ITEM_TYPE, "Equipment", 6, "8",
+                "Fake Potion of Testing", "A synthetic loot item seeded by --fake mode for the item tooltip demo."
+            );
+        }
         IdToAsset.registerFake(
             WEAPON_ID, "Equipment", -1, "UT",
             "Fake Sword of Testing", "A synthetic weapon seeded by --fake mode for the item tooltip demo."
-        );
-        IdToAsset.registerFake(
-            WHITE_ITEM_TYPE, "Equipment", 6, "8",
-            "Fake Potion of Testing", "A synthetic loot item seeded by --fake mode for the item tooltip demo."
         );
 
         Thread t = new Thread(this::loop, "fake-packet-source");

@@ -135,6 +135,34 @@ public class IdToAsset {
     }
 
     /**
+     * Drops every {@link #registerFake}/{@link #registerFakeNamed} entry and
+     * reloads the base assets. Registered fakes are otherwise process-wide and
+     * permanent, which made shared-JVM tests order-dependent - call this in a
+     * test's setup for a hermetic start. Not used by the bridge at runtime.
+     */
+    public static void clearFakeEntries() {
+        fakeEntries.clear();
+        reloadAssets();
+    }
+
+    /**
+     * Like {@link #registerFake(int, String, int)} but with an explicit id
+     * name, for facts-seeded entries (issue #189) that must carry the REAL
+     * asset name - e.g. the ground-bag entities, whose BagType the live
+     * assets encode only in the id string ({@code "Loot Bag <N>[ Boost]"},
+     * see {@link #lootBagEntityTypes()}), so a fake entry named
+     * {@code Fake<id>} could never exercise that rule.
+     */
+    public static void registerFakeNamed(int id, String idName, String clazz, int bagType) {
+        IdToAsset entry = new IdToAsset(
+            "", id, idName == null || idName.isEmpty() ? "Fake" + id : idName,
+            "", clazz, null, "", "", "", String.valueOf(bagType), "", ""
+        );
+        fakeEntries.put(id, entry);
+        objectID.put(id, entry);
+    }
+
+    /**
      * Like {@link #registerFake(int, String, int)}, additionally seeding the
      * item-info fields (issue #109) so the {@code --fake} bridge mode can
      * demonstrate the item tooltip end-to-end with no game installed.
@@ -409,18 +437,30 @@ public class IdToAsset {
     private static final Map<Integer, Integer> KNOWN_BAG_ICON_IDS = Map.of(6, 1292, 8, 1295);
 
     /**
-     * Finds the ground-bag entity ({@code <Class>Bag</Class>}) that
-     * self-identifies as the given BagType, e.g. the white/orange bag sprite
-     * the Loot panel uses as a category header. Prefers asset-derived data
-     * (real or {@code --fake}-registered); falls back to {@link
+     * Finds the ground-bag entity for the given BagType, e.g. the white/orange
+     * bag sprite the Loot panel uses as a category header. Resolution order:
+     * the real assets' id-name rule ({@link #lootBagEntityTypes()}, preferring
+     * a non-boosted entity as the canonical icon), then the legacy
+     * {@code Class=Bag}+BagType scan (matches nothing on live assets - soaks
+     * #113/#144 - but kept for pre-facts synthetic entries), then {@link
      * #KNOWN_BAG_ICON_IDS} - and only when that id is actually a loaded
-     * object, so a minimal/synthetic asset set can't return a dangling id -
-     * when the scan finds no match.
+     * object, so a minimal/synthetic asset set can't return a dangling id.
      *
      * @param bagType BagType to find the bag entity for.
      * @return that bag entity's object id, or null if none is loaded.
      */
     public static Integer findBagIconObjectType(int bagType) {
+        // The real assets' rule first (issue #189): the non-boosted "Loot Bag
+        // <N>" entity is the canonical icon for its color.
+        Integer named = null;
+        for (Map.Entry<Integer, Integer> e : lootBagEntityTypes().entrySet()) {
+            if (e.getValue() != bagType) continue;
+            IdToAsset entity = objectID.get(e.getKey());
+            boolean boosted = entity != null && entity.idName != null && entity.idName.endsWith(" Boost");
+            if (!boosted) return e.getKey();
+            if (named == null) named = e.getKey();
+        }
+        if (named != null) return named;
         for (IdToAsset i : objectID.values()) {
             if (i.id > 0 && "Bag".equals(i.clazz) && i.bagType == bagType) {
                 return i.id;
@@ -429,6 +469,37 @@ public class IdToAsset {
         Integer known = KNOWN_BAG_ICON_IDS.get(bagType);
         if (known != null && objectID.containsKey(known)) return known;
         return null;
+    }
+
+    /**
+     * The real assets' ground-bag encoding rule, discovered from the actual
+     * game XML for issue #189: a ground-bag entity's id is {@code "Loot Bag
+     * <N>[ Boost]"} where {@code N} IS its BagType (white = "Loot Bag 6" =
+     * 1292, orange = "Loot Bag 8" = 1295, plus boosted variants 1296/1727) -
+     * class {@code Container}, with no {@code Class=Bag} and no {@code
+     * <BagType>} element anywhere on the entity. This replaces the
+     * {@code Class=Bag}+BagType scan as the primary discovery mechanism: that
+     * scan matches nothing on live assets (soaks #113/#144), and before this
+     * rule existed the boosted variants were never recognized at all - a
+     * boosted white/orange bag drop was silently invisible to the overlay's
+     * drop tracker.
+     */
+    private static final java.util.regex.Pattern LOOT_BAG_ID_PATTERN =
+        java.util.regex.Pattern.compile("^Loot Bag (\\d+)( Boost)?$");
+
+    /**
+     * Every loaded ground-bag entity matching {@link #LOOT_BAG_ID_PATTERN},
+     * as objectType → BagType. Real or {@code --fake facts-seeded} entries
+     * resolve identically, since both carry the real id names.
+     */
+    public static Map<Integer, Integer> lootBagEntityTypes() {
+        Map<Integer, Integer> result = new HashMap<>();
+        for (IdToAsset i : objectID.values()) {
+            if (i.id <= 0 || i.idName == null) continue;
+            java.util.regex.Matcher m = LOOT_BAG_ID_PATTERN.matcher(i.idName);
+            if (m.matches()) result.put(i.id, Integer.parseInt(m.group(1)));
+        }
+        return result;
     }
 
     /**
