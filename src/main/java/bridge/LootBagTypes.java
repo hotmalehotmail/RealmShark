@@ -13,11 +13,14 @@ import java.util.Map;
  * synthetic entries {@link IdToAsset#registerFake} adds) - so the overlay's
  * Loot panel can categorize picked-up items with no hand-maintained item
  * list. {@code lootBagObjectTypes} (the world objectTypes the drop tracker
- * watches for) is built primarily by scanning for a {@code Class=Bag} entry
- * whose own BagType matches, but that scan can find nothing on real assets
- * (soak #113/#144 - see {@link IdToAsset#findBagIconObjectType}), so each
- * tracked color's resolved icon id (real scan match, or the verified known
- * fallback) is also always included. Broadcast as a synthetic
+ * watches for) is built primarily from the real assets' id-name rule
+ * ({@link IdToAsset#lootBagEntityTypes()}: {@code "Loot Bag <N>[ Boost]"},
+ * N = BagType - discovered from the actual game XML in issue #189, and the
+ * only mechanism that covers the boosted variants), with the legacy
+ * {@code Class=Bag}+BagType scan kept for pre-facts synthetic entries even
+ * though it finds nothing on real assets (soak #113/#144 - see
+ * {@link IdToAsset#findBagIconObjectType}), and each tracked color's
+ * resolved icon id (or the verified known fallback) always included. Broadcast as a synthetic
  * {@code {"type":"lootBagTypes","data":{"bagTypeTable":{...},"lootBagIcons":{...},"lootBagObjectTypes":{...},"itemNames":{...}}}}
  * envelope through the normal packet-batch stream, independent of the sprite
  * pack's atlas-readiness gate ({@link bridge.sprites.SpritePackService#ready()})
@@ -67,6 +70,17 @@ public class LootBagTypes {
             String name = IdToAsset.objectName(id);
             if (name != null && !name.isEmpty()) itemNames.put(String.valueOf(id), name);
         }
+
+        // The real assets' discovery rule (issue #189): ground-bag entities are
+        // identified by id name ("Loot Bag <N>[ Boost]", N = the BagType) -
+        // Class=Container, no self-reported BagType, so the Class=Bag scan
+        // above can never find them. This is what recognizes the BOOSTED
+        // white/orange variants (1296/1727), which the fallback below (one
+        // icon id per color) never covered - before this rule a boosted bag
+        // drop was invisible to the overlay's drop tracker.
+        IdToAsset.lootBagEntityTypes().forEach((id, bt) -> {
+            if (bt == 6 || bt == 8) lootBagObjectTypes.putIfAbsent(String.valueOf(id), bt);
+        });
 
         Map<String, Integer> lootBagIcons = new LinkedHashMap<>();
         for (int bt : TRACKED_BAG_TYPES) {

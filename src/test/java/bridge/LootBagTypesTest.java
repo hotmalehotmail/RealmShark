@@ -24,6 +24,45 @@ import org.junit.Test;
  */
 public class LootBagTypesTest {
 
+    @org.junit.Before
+    public void hermeticFakes() {
+        // registerFake entries are process-wide and permanent; start clean so
+        // assertions here can't depend on which test class ran first.
+        IdToAsset.clearFakeEntries();
+    }
+
+    /**
+     * The facts-driven ground-truth test (issue #189): seed IdToAsset exactly
+     * the way {@code FakePacketSource} now does - every tracked-color bag
+     * entity from the committed {@code asset-facts.json}, registered with its
+     * REAL id name and real class ({@code Container}, no self-reported
+     * BagType, so the legacy {@code Class=Bag} scan sees nothing, just like
+     * the live client) - and require the envelope's
+     * {@code lootBagObjectTypes} to recognize ALL of them, boosted variants
+     * included. Against the pre-#189 pipeline this fails for 1296/1727: only
+     * the two fallback icon ids ever resolved, so a boosted white/orange bag
+     * drop was invisible to the overlay's drop tracker.
+     */
+    @Test
+    public void recognizesEveryRealTrackedBagEntityIncludingBoosted() {
+        assets.facts.AssetFacts facts = assets.facts.AssetFacts.loadBundled();
+        org.junit.Assert.assertNotNull("committed asset-facts.json missing", facts);
+        facts.entities.forEach((key, entity) -> {
+            if (entity.bagType != 6 && entity.bagType != 8) return;
+            IdToAsset.registerFakeNamed(Integer.parseInt(key), entity.name, entity.clazz, -1);
+        });
+
+        JsonObject objectTypes = JsonParser.parseString(new LootBagTypes().envelopeJson())
+            .getAsJsonObject()
+            .getAsJsonObject("data")
+            .getAsJsonObject("lootBagObjectTypes");
+
+        assertEquals(6, objectTypes.get("1292").getAsInt()); // Loot Bag 6 (white)
+        assertEquals(6, objectTypes.get("1296").getAsInt()); // Loot Bag 6 Boost
+        assertEquals(8, objectTypes.get("1295").getAsInt()); // Loot Bag 8 (orange)
+        assertEquals(8, objectTypes.get("1727").getAsInt()); // Loot Bag 8 Boost
+    }
+
     @Test
     public void lootBagObjectTypesIncludesResolvedIconEntityForEachTrackedColor() {
         // Known fallback ids (see IdToAsset.KNOWN_BAG_ICON_IDS: white=1292,

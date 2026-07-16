@@ -446,7 +446,11 @@ plumbing.
 - **`envelopeJson()`** — walks `IdToAsset.objectIds()` once, keeping ids whose
   `getBagType(id)` is 6 or 8. A `Class=Bag` **entity** among them goes into
   `lootBagObjectTypes` (bag entity id → BagType — the set the overlay's drop
-  tracker watches for, covering regular *and* boosted variants per color);
+  tracker watches for); that set is then extended with every entity matching
+  the real assets' id-name rule (`IdToAsset.lootBagEntityTypes()`,
+  `"Loot Bag <N>[ Boost]"` — the only mechanism real assets satisfy, and what
+  covers the boosted variants; see
+  [asset-pipeline.md](asset-pipeline.md)'s BagType section, issue #189);
   every other such id is an item, added to `bagTypeTable` (item id → BagType) +
   `itemNames` (item id → `IdToAsset.objectName`). Separately,
   `IdToAsset.findBagIconObjectType(bagType)` resolves each tracked BagType's one
@@ -495,8 +499,8 @@ downstream can tell the difference. It runs on a daemon thread
 | Weapon swap | id `2` (Bob), cycles `{4001,4010,4020,4030}` | a non-local player's INVENTORY_0 changes every ~10 ticks, exercising other-players' equipment updates |
 | Transient player | id `5`, `"Eve,7f2c"` | joins then leaves on a 24-tick cycle, exercising roster removal via `UpdatePacket.drops` |
 | `FAKE_NO_CREATE_SUCCESS` env | flag | simulate a mid-session attach (no `CreateSuccessPacket`) |
-| Bag icon ids | `9000` (white), `9001` (orange) | synthetic `Class=Bag` entries (`IdToAsset.registerFake`), the Loot panel's category-header sprites |
-| Loot item ids | `{9100,9100,9200,9300}` → BagTypes `{6,6,8,3}` | synthetic items registered the same way; `9100` repeats (exercises duplicate-pickup display), `9300` is untracked (must never appear in the Loot panel) |
+| Bag entity ids | real ids from `asset-facts.json` (white `1292`, orange `1295`, boosted white `1296`; synthetic `9000`/`9001`/`9002` only when the facts resource is absent) | registered with their REAL id names + `Class=Container` (`IdToAsset.registerFakeNamed`), so discovery goes through the same id-name rule the live client needs (issue #189) |
+| Loot item ids | real ids from `asset-facts.json` (lowest-id item per BagType `{6,8,3}`; synthetic `9100`/`9200`/`9300` without facts) | the white item repeats across drops (exercises duplicate-pickup display), the BagType-3 filler is untracked (must never appear in the Loot panel) |
 
 ### The emit loop (`FakePacketSource.java:116-184`)
 
