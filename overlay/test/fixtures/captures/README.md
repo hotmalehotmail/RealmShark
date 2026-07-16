@@ -9,6 +9,13 @@ shape, PRD §7.2) that power the replay regression tests in
 session recording into a committed `.ndjson.gz` fixture like
 `session-recording-sample.ndjson.gz` below.
 
+These fixtures also power the **Java** capture-replay harness
+(`src/test/java/bridge/replay/CaptureReplay.java`, `docs/dps-engine.md`'s
+"Capture replay (Java)" section) - the same files, read with a Java mirror of
+`loadCapture()`, replayed through `DpsEngine` directly instead of the TS
+trackers. Both harnesses read straight from this directory; there is no
+separate Java-side fixture copy.
+
 ## Provenance
 
 Issue #157 named three real soak-failure attachments as ground truth (soak
@@ -148,7 +155,35 @@ bag-entity drops, and real spam-type ratios (`UpdateAckPacket` ≈ 19%,
 future recording session rather than by editing this one: no dungeon/boss
 encounter (the sole `QuestObjectIdPacket` is `id=-1`), no realm event chain,
 and no white/orange bag drop (tracked-color recognition stays covered by
-`soak-144-loot-empty.json.gz`).
+`soak-144-loot-empty.json.gz`). **Newly discovered while building the Java
+replay harness (issue #192):** all of this capture's own combat predates its
+first `MapInfoPacket` - the recording started mid-fight, so the local
+player's own object id never resolves to attributed damage from this file
+alone (a bare JUnit replay also can't compute local self-damage at all - see
+`docs/dps-engine.md`), and none of the 13 in-file, `CreateSuccessPacket`-
+identified realm segments contain further combat. The Java side uses this
+fixture only as a real-world-scale robustness/no-exceptions check
+(`BaselineSessionReplayTest`); local-player attribution and the
+recompute-vs-recorded comparison are proven on `replay-attribution.json.gz`
+below instead, where every input is controlled.
+
+### `replay-attribution.json.gz` (synthetic, Java-only)
+
+**Not a soak fixture** - a small, hand-authored bug-report-shaped capture (issue #192) built
+specifically for the Java replay harness's `ReplayAttributionTest`. Establishes a local player
+(`CreateSuccessPacket` objectId 100) and another player (objectId 200), both using an
+object type never classified as a player character (mirroring the real issue #46 capture, where
+`assets/xml/players.xml` classification never succeeded for anyone), then attributes 50 damage
+to the local player and 30 to the other player - both via `DamagePacket` rather than the local
+weapon-reconstruction path (see `docs/dps-engine.md`'s "Capture replay (Java)" for why: a bare
+JUnit replay has no extracted weapon asset data, so `Projectile`-based self-damage is always 0
+regardless of fixture). Two `NewTickPacket`s drive the engine's fight-timer clock explicitly
+(`DpsEngine.timePc` only advances on a `NewTickPacket`, unlike everything else in the engine
+which takes a `timePc` parameter). Carries one recorded `dps` envelope with hand-verified exact
+expected values (`fightMs`, `damage`, `dps` per player) - the fixture this repo's
+recompute-vs-recorded assertion replays against, and the replacement for the old hand-transcribed
+`DpsEngineOtherPlayerAttributionTest` (now removed - the same scenario, from a committed capture
+instead of Java literals).
 
 ### `session-recording-sample.ndjson.gz` (synthetic, demonstrates the recorder format)
 

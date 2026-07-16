@@ -106,7 +106,7 @@ public class Entity implements Serializable {
     }
 
     private void lootTimers(ObjectStatusData status) {
-        long time = System.currentTimeMillis();
+        long time = EngineClock.now();
         for (StatData sd : status.stats) {
             if (sd.statType == StatType.LD_TIMER_STAT) {
                 lootDropTime = 0;

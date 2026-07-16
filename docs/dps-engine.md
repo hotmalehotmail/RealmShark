@@ -348,6 +348,115 @@ that tracker, see [overlay-renderer.md](overlay-renderer.md) — not duplicated 
   engine memory note that "char-list HTTP is unwired" is correct and extends to the
   whole char-list/PCStats cluster.
 
+## Capture replay (Java)
+
+`src/test/java/bridge/replay/CaptureReplay.java` is a JUnit-side harness that loads a
+committed capture fixture (the same files `overlay/test/replay.ts` reads — see
+`overlay/test/fixtures/captures/README.md`) and replays its packet envelopes back through the
+real pipeline (`packets.packetcapture.register.Register` → `DpsBroadcaster` → `DpsEngine`), so a
+bridge-side attribution bug is reproducible and regression-testable headlessly — the Java mirror
+of `overlay/test/replay.ts` (cross-referenced from
+[overlay-testing.md](overlay-testing.md)). Production code never depends on it; it lives
+entirely in `src/test/java`, except for the clock seam below (`bridge/dps/EngineClock.java`,
+`src/main/java`), which the engine itself needed.
+
+### Why this exists — TS replay can't cover attribution bugs
+
+DPS attribution is computed **bridge-side**: `DpsBroadcaster` runs `DpsEngine` and emits the
+precomputed `{type:"dps"}` envelope this doc describes above; the renderer's `DpsTracker` only
+*displays* it (falling back to its own rolling-window estimate — see "Two DPS paths" above). So
+replaying a capture through the TS harness can reproduce the *display* of wrong data, but not an
+attribution bug itself — that requires feeding the same packets through the real `DpsEngine`.
+Before this harness, the only way to test one was hand-transcribing a capture into Java packet
+literals by eye (`DpsEngineOtherPlayerAttributionTest` used to do exactly that — now superseded
+by `bridge/replay/ReplayAttributionTest`, driven from a committed fixture instead).
+
+### `loadCapture` — the envelope-loading contract
+
+Mirrors `loadCapture` in `overlay/test/replay.ts` field-for-field: gzip is detected by the
+`.gz` extension or, failing that, the gzip magic bytes (`0x1f 0x8b`); `.ndjson`/`.ndjson.gz` is
+parsed as one JSON envelope per line (a session recording); anything else is parsed as a single
+JSON document that is either a bare envelope array or a bug-report `{recentPackets: [...]}`
+object. Envelopes are always returned sorted by `time` ascending. `CaptureReplayLoadTest`
+exercises all of these against the real committed fixtures, including the magic-byte fallback
+(a renamed `.json` copy of a `.gz` file).
+
+### Envelope → `Packet` reconstruction
+
+An envelope's `type` is the packet class's **simple name** (`PacketSerializer.toJson`,
+`env.type = packet.getClass().getSimpleName()`), and `data` is a plain Gson reflection of the
+Java class's public fields (no custom serializers) — so `CaptureReplay` deserializes it back
+with `new Gson().fromJson(envelope.data, concreteClass)`, no field mapping needed. The
+`type → Class` table is built once from `packets.PacketType.values()` (`pt.getPacketClass()`),
+never hand-maintained, so a new `PacketType` entry is automatically replayable.
+
+Bridge-**synthesized** envelope types — `dps`, `lootBagTypes`, `objectNames`, `itemInfo`,
+`enchantNames` — are pipeline *output*, not valid input, and are always skipped (counted in
+`ReplayStats.skippedSynthesized`); an unknown/unmapped `type` string skips with a counted warning
+(`ReplayStats.skippedUnknown` / `unknownTypeCounts`) rather than throwing. A recorded `dps`
+envelope is instead read directly by a test as **expected output** to compare a recompute
+against (see `ReplayAttributionTest` below).
+
+### The clock seam — `EngineClock`
+
+`DpsEngine.setTime` and `Entity.lootTimers` used to call `System.currentTimeMillis()` directly.
+Replaying a session recorded hours or days ago through that code would stamp `timePc` (and
+therefore every fight-duration/DPS-rate number) with the *replay's* wall-clock time instead of
+the capture's own timeline. `bridge/dps/EngineClock.java` is the minimal seam this needed: a
+`now()` read backed by a swappable `LongSupplier`, defaulting to `System::currentTimeMillis` in
+production. `CaptureReplay.replayUntil` sets it once per envelope, right before feeding that
+envelope, to that envelope's own recorded `time` — the Java analog of the TS harness's
+`vi.setSystemTime(envelope.time)` per-envelope anchoring — and restores the real clock
+(`EngineClock.reset()`) in a `finally` block. This is the **only** production-behavior change
+this harness required; every other `System.currentTimeMillis()` read in the DPS engine (there
+were exactly two — `DpsEngine.java` and `Entity.java`) now goes through it.
+
+Note `DpsEngine.timePc` itself only advances when a `NewTickPacket` is processed (`setTime` is
+called only from `updateNewTick`) — a fixture that wants deterministic fight-duration math needs
+`NewTickPacket`s interspersed at the right envelope times, not just the damage-carrying packets.
+
+### Test fixtures and what each one proves
+
+- **`ReplayAttributionTest`** replays a small, hand-authored fixture
+  (`overlay/test/fixtures/captures/replay-attribution.json.gz`) that establishes a local player
+  (via `CreateSuccessPacket`) and another player, neither classified as a player character type
+  (mirroring the real issue #46 capture, and exercising `resolveLocalPlayer`/`resolveOtherPlayer`
+  rather than the `CharacterClass` gate — see "Resolving the local player" above), then attributes
+  damage to both via `DamagePacket`. The fixture also carries a hand-verified recorded `dps`
+  envelope, so this same test is the PRD's "recompute vs. recorded" assertion: replaying up to
+  that envelope's own `time` and comparing the recomputed `DpsBroadcaster.snapshotJson()` against
+  it (enemy id set, per-enemy attacking-player id set, `damage`, `fightMs`, `dps`) — all exact,
+  since every input here is fully controlled. This is also the replay-driven equivalent that
+  supersedes the old hand-transcribed `DpsEngineOtherPlayerAttributionTest`.
+- **`BaselineSessionReplayTest`** replays the real ~24k-envelope seed corpus
+  (`baseline-session.ndjson.gz`) end-to-end, as a scale/robustness check: the full pipeline must
+  survive a real, messy capture (13 realm/instance transitions, thousands of stat updates)
+  without throwing, and the file's own real combat burst must attribute nonzero damage to
+  multiple real players via the (asset-independent) `DamagePacket` path.
+- **`CaptureReplayLoadTest`** exercises `loadCapture` alone against every committed fixture shape.
+
+### Known replay-environment limitations (discovered writing this harness)
+
+- **Local self-damage is always 0 in a bare JUnit replay.** The local player's own damage
+  normally reaches the engine via the client-side reconstruction path this doc describes above
+  (`PlayerShootPacket` → seeded-RNG `Projectile` → `EnemyHitPacket`), which needs weapon
+  min/max damage from `IdToAsset` (backed by the extracted `assets/xml/Objects.xml` — see
+  [asset-pipeline.md](asset-pipeline.md)). That file only exists on a real game install, never
+  in CI/a bare JUnit environment, so `Projectile.getDamage()` is always `0` and
+  `Entity.userProjectileHit` silently drops the hit — independent of whether
+  `CreateSuccessPacket`/`resolveLocalPlayer` correctly identified the local player.
+  `ReplayAttributionTest` sidesteps this by carrying the local player's damage over
+  `DamagePacket` instead (a real, asset-independent wire path — other-player damage always
+  arrives this way already; nothing says the local player's damage cannot).
+- **`baseline-session.ndjson.gz`'s own combat all predates its first `MapInfoPacket`.** The
+  recording captured mid-session, already inside a fight; none of its 13 in-file
+  `CreateSuccessPacket`-identified realm segments (RotMG assigns a fresh object id per instance)
+  contain any further combat, and the capture's 276 recorded `dps` envelopes are all one
+  continuous re-broadcast of that same pre-boundary burst. Extends the "known gaps" already
+  called out in `overlay/test/fixtures/captures/README.md` (no dungeon/boss, no white/orange
+  drop) — filled, like those, by a future recording rather than this PR (out of scope per the
+  issue).
+
 ## Cross-references
 
 - [bridge-server.md](bridge-server.md) — how `DpsBroadcaster.feed` is driven and the
@@ -356,5 +465,6 @@ that tracker, see [overlay-renderer.md](overlay-renderer.md) — not duplicated 
   (`equip.xml`, `enchantments.xml`, `players.xml`) that the engine reads.
 - [overlay-renderer.md](overlay-renderer.md) — the renderer `DpsTracker` and DPS panel.
 - [architecture.md](architecture.md) — where the engine sits in the overall system.
+- [overlay-testing.md](overlay-testing.md) — the TS capture-replay harness this Java one mirrors.
 </content>
 </invoke>

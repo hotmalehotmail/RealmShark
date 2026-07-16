@@ -170,14 +170,20 @@ follow (see also `CLAUDE.md`'s FIX MODE instructions):
    same PR as the fix - see `overlay/test/loot-replay.test.ts` and
    `overlay/test/dps-replay.test.ts` for worked examples.
 
+## Java replay mirror
+
+Damage attribution is computed bridge-side (`DpsBroadcaster` runs `DpsEngine`; the TS tracker
+above only displays the precomputed `dps` envelope - see `docs/dps-engine.md`), so a TS-side
+replay of an attribution bug reproduces the *display* of wrong data, not the bug itself. A JUnit
+mirror of this same `loadCapture`/`replay` contract - `bridge/replay/CaptureReplay.java`,
+`src/test/java` - feeds decoded packets through `Register` into `DpsBroadcaster`/`DpsEngine`
+directly, so a bridge-side attribution bug (like #46, #98) is reproducible and
+regression-testable headlessly. It reads the *same* committed fixtures this directory documents.
+See `docs/dps-engine.md`'s "Capture replay (Java)" section for the envelope→`Packet`
+reconstruction contract, the clock seam, and what each Java-side test fixture proves.
+
 ## Out of scope here (later phases)
 
-- **Java replay mirror** (PRD §6.5): damage attribution is computed
-  bridge-side (`DpsBroadcaster` runs `DpsEngine`; the TS tracker only displays
-  the precomputed `dps` envelope - see `docs/dps-engine.md`), so a TS-side
-  replay of an attribution bug reproduces the *display* of wrong data, not the
-  bug itself. A `CaptureReplay.java` mirror that feeds decoded packets through
-  `DpsEngine` directly is a separate, later issue.
 - **Renderer screenshot harness**: visual bugs aren't covered by this vitest
   suite - see `docs/overlay-harness.md` for the separate browser harness +
   `npm run shots` pipeline that renders and screenshots every panel instead.
