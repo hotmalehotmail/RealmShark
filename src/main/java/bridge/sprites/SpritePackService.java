@@ -2,6 +2,7 @@ package bridge.sprites;
 
 import assets.IdToAsset;
 import assets.SpriteFlatBuffer;
+import assets.UiSpriteNames;
 import bridge.dps.enums.CharacterStatistics;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
@@ -174,14 +175,51 @@ public class SpritePackService {
         // an icon without any per-dungeon bridge traffic.
         JsonObject dungeonIcons = buildDungeonIcons();
         root.add("dungeonIcons", dungeonIcons);
+        // uiSprites: sprite name -> data:image/png;base64,... for the small
+        // allowlisted UI icons (rarity pips, shiny sparkle - issue #205),
+        // cropped bridge-side from the game's GUI Atlas at extraction time
+        // (assets.resextractor.UnityExtractor) and read here the same way the
+        // four atlases above are. Keyed by name, not objectType - these
+        // aren't game objects. Absent/empty when extraction never produced
+        // them (no game installed, headless CI/dev) - never a crash.
+        JsonObject uiSprites = buildUiSprites();
+        root.add("uiSprites", uiSprites);
         System.out.println("[sprite-pack] built " + v + ": table=" + table.size()
             + " maskTable=" + maskTable.size() + " dyeTable=" + dyeTable.size()
             + " animDyeTable=" + animDyeTable.size() + " animTable=" + animTable.size()
-            + " dungeonIcons=" + dungeonIcons.size());
+            + " dungeonIcons=" + dungeonIcons.size() + " uiSprites=" + uiSprites.size());
 
         cachedVersion = v;
         cachedPackJson = gson.toJson(root);
         return cachedPackJson;
+    }
+
+    private static final String UI_SPRITES_DIR = "assets/sprites/ui";
+
+    /**
+     * Reads each allowlisted ({@link UiSpriteNames#ALLOWLIST}) UI sprite's PNG
+     * - written by {@code assets.resextractor.UnityExtractor} at extraction
+     * time - into {@code name -> data:image/png;base64,...}. A name whose PNG
+     * doesn't exist (not yet extracted, or absent from this game version) is
+     * simply skipped, so a headless/no-game environment yields an empty
+     * object rather than throwing. Package-private so it's unit-testable
+     * without a real sprite pack build.
+     */
+    JsonObject buildUiSprites() {
+        JsonObject uiSprites = new JsonObject();
+        for (String name : UiSpriteNames.ALLOWLIST) {
+            File f = new File(UI_SPRITES_DIR, name + ".png");
+            if (!f.exists()) continue;
+            try {
+                byte[] bytes = Files.readAllBytes(f.toPath());
+                uiSprites.addProperty(name,
+                    "data:image/png;base64," + Base64.getEncoder().encodeToString(bytes));
+            } catch (Exception e) {
+                // Skip an unreadable UI sprite; the overlay just falls back to
+                // its existing CSS approximation for that one.
+            }
+        }
+        return uiSprites;
     }
 
     private JsonObject cachedDyeTable;

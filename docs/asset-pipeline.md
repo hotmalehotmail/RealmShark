@@ -28,6 +28,9 @@ side of both.
 | --- | --- |
 | `src/main/java/assets/AssetExtractor.java` | Orchestrator: locates `resources.assets`, freshness check, drives extraction, then parses XML → `ObjectID.list`/`TileID.list`. |
 | `src/main/java/assets/resextractor/*` | Reverse-engineered Unity serialized-file reader (ported from UnityPy). |
+| `src/main/java/assets/resextractor/Sprite.java` | Partial Unity `Sprite` (ClassID 213) reader - name + `m_RenderDataKey` only (issue #205). |
+| `src/main/java/assets/resextractor/GuiAtlasPixels.java` | Raw RGBA32 pixel read of the GUI Atlas's `.resS` stream + the bottom-up-to-top-left row flip (issue #205). |
+| `src/main/java/assets/UiSpriteNames.java` | The allowlist of named UI sprites (rarity pips, shiny icon) the pack exports - the one-line extension point for a future UI sprite (issue #205). |
 | `src/main/java/assets/resextractor/UnityExtractor.java` | Top-level extract step: writes atlas PNGs, `spritesheetf`, and XML files. |
 | `src/main/java/assets/resextractor/AssetProbe.java` | Diagnostic-only feasibility probe for enchant pip/icon sprite extraction (issue #107) — see "The asset probe" below. |
 | `src/main/java/assets/flattbuffer/*` | Generated FlatBuffers schema for RotMG's own sprite-sheet (`SpriteSheetRoot → SpriteSheet → Sprite`/`AnimatedSprite`, `Position`, `Color`). |
@@ -226,12 +229,23 @@ pixel format; RotMG's atlases are `RGBA32(4)`.
 `RenderDataMap` (per-sprite `textureRect`, offsets, `uvTransform`) using `Vec2f`
 / `Vec4f`.
 
-> **Non-obvious fact.** `SpriteAtlas` objects are parsed into
-> `Resources.assetSpriteAtlas` but **never consumed** — nothing reads that list.
-> The sprite rectangles the overlay actually uses come from RotMG's **own**
-> `spritesheetf` flatbuffer (a `TextAsset`), not from Unity's `SpriteAtlas`. So
-> the Unity atlas rects here are effectively informational/dead in the current
-> pipeline.
+> **Non-obvious fact — mostly still dead, now partly consumed.** `SpriteAtlas`
+> objects are parsed into `Resources.assetSpriteAtlas`, and for **every RotMG
+> object sprite** are still unconsumed — those rects come from RotMG's own
+> `spritesheetf` flatbuffer (a `TextAsset`), not from Unity's `SpriteAtlas`.
+> The one exception (issue #205): the game's single **GUI Atlas** *is* indexed
+> by `SpriteAtlas.m_RenderDataMap` (RotMG's own sprite-sheet system never
+> covers it — see "UI sprites" below), so that one atlas's `RenderDataMap` is
+> now read, joined against parsed `Sprite` (ClassID 213) objects by name.
+
+**`Sprite`** (`Sprite.java`, ClassID 213) — a **partial** reader, added for the
+UI-sprite pipeline below: reads only `name` and `m_RenderDataKey` (a 16-byte
+GUID + `long` fileID pointing into a `SpriteAtlas.m_RenderDataMap` entry), then
+stops — the trailing `m_RD` (`SpriteRenderData`) block is deliberately never
+parsed. `Resources.parseAllResources` had no `case Sprite` before this (the
+~1083 `Sprite` objects in `resources.assets` were silently skipped, like every
+other unlisted `ClassIDType`); it now dispatches to `parseSprite` into
+`Resources.assetSprite`.
 
 **`Resources`** (`Resources.java`) — the driver: `FileHeader` → `SerializedFile`
 → loop over `objects`, dispatching to the readers above (`:35-62`).
@@ -672,6 +686,16 @@ with:
   rest of the pack. The overlay's `dungeonIcon(name)` (`SpriteProvider.tsx`)
   looks a `MapInfoPacket.displayName` up in this table to resolve a DPS
   summary-panel instance row's icon — see `overlay-renderer.md` §5.
+- `uiSprites` — `spriteName → data:image/png;base64,…` for the allowlisted
+  named UI sprites (rarity pips, shiny icon — issue #205), built by
+  `buildUiSprites()`. Unlike every other section above, this one does no
+  atlas/XML work itself at pack-build time — it just reads whichever
+  `assets/sprites/ui/<name>.png` files `UnityExtractor` already wrote at
+  extraction time (see "UI sprites — named icons from the GUI Atlas" below)
+  and base64s them, mirroring how `atlases` reads the four atlas PNGs.
+  Missing files are skipped, so the section is simply absent/empty rather
+  than throwing when nothing was ever extracted (no game installed, headless
+  CI/dev) — covered by `SpritePackServiceTest`.
 
 **The dye table.** `buildDyeTable(sfb)` (`:175-243`) is the one piece that reads
 the XML directly: it regex-scans `assets/xml/*.xml` for `<Object>`s containing
@@ -683,6 +707,74 @@ dye id either `[1, r, g, b]` (solid, high byte `0x01`/`0x02`) or
 mask-compositing model, and the renderer side are documented in
 [dyes-and-textiles.md](dyes-and-textiles.md) — not repeated here.
 
+### UI sprites — named icons from the GUI Atlas (issue #205)
+
+The overlay approximates an item's enchant rarity with a CSS ring and marks
+shiny items with a CSS badge. The game's own art for these — four rarity
+"pip" gems and a shiny sparkle — lives in the game's **GUI Atlas**, a Unity
+`SpriteAtlas` the rest of this pipeline never touches (RotMG's own
+`spritesheetf` indexes only the four `Texture2D.SPRITESHEET_NAMES` atlases,
+not the GUI Atlas). This feature adds a general **named UI sprite** channel to
+the sprite pack, backend-only (the frontend render of these pips/badge is a
+separate issue) — extending it later is a one-line addition to
+`assets.UiSpriteNames.ALLOWLIST`, never a coordinates change, because the
+name → rect resolution happens at extraction time.
+
+**Why the GUI Atlas needed new plumbing.** It's the game's only `SpriteAtlas`
+(4096×2048 RGBA32, 668 `m_RenderDataMap` entries) and isn't indexed by
+`spritesheetf`, so nothing in this pipeline could previously resolve a rect
+in it. Its backing `Texture2D` also carries **empty StreamingInfo**
+(`offset=0, size=0, path=""`) — one of 22 such "orphan" textures in
+`resources.assets` (mostly TMP font atlases) — so the normal
+`Texture2D.image_data` path (used by the four extracted atlases) yields
+nothing for it either.
+
+**Naming + rects — the robust half.** Unity `Sprite` objects (ClassID 213,
+~1083 of them, previously unparsed — `Resources.parseAllResources` had no
+`case Sprite`) are now read by `Sprite.java`, far enough to get `name` and
+`m_RenderDataKey` (a 16-byte GUID + `long` fileID), then stop — the trailing
+`m_RD` (`SpriteRenderData`) is never parsed. `UnityExtractor.joinSpriteNamesToRects`
+joins every `Sprite`'s `m_RenderDataKey` against the GUI Atlas
+`SpriteAtlas`'s `m_RenderDataMap` entries (`first`=GUID, `second`=fileID) to
+get `name → textureRect` for all 668 atlas entries — no PPtr resolution
+needed, and no coordinates hardcoded anywhere in source.
+
+**Pixel location — the fragile half.** The GUI Atlas's pixels physically sit
+at **byte offset 0 of `resources.assets.resS`**, length `width×height×4`
+(the first mip) — found by elimination (the single large unclaimed region in
+that file), *not* from any Unity metadata (confirmed: all 668
+`RenderDataMap` texture PPtrs resolve back to the same empty-StreamingInfo
+texture). `GuiAtlasPixels` reads this raw, sanity-checked only by length and
+a non-zero-alpha check (`looksValid`) — there is no metadata-driven
+alternative, so a future game repack moving this data would silently break
+extraction (caught only by `looksValid` skipping the sprite, or by a soak).
+Unity texture rows are bottom-up; `GuiAtlasPixels.crop` reads each output row
+from the corresponding flipped source row directly (no whole-atlas
+materialization needed for five small icons).
+
+**Extraction-time crop, not client-side.** Unlike the four main atlases
+(shipped whole, cropped by the overlay), each UI sprite is cropped
+**bridge-side** at extraction time and written as its own small PNG under
+`assets/sprites/ui/<name>.png` (`UnityExtractor.extractUiSprites`, called
+from `extract()` alongside `extractSprites`/`extractXml`) — shipping the
+whole ~33 MB GUI Atlas for five tiny icons would be wasteful. `SpritePackService.buildUiSprites()`
+then just reads whichever of those PNGs exist and base64s them into the
+pack's `uiSprites` section (see above) — the same "read what's already on
+disk" pattern the four atlases already use, so no atlas/XML work happens at
+pack-build time for this section.
+
+**Degrades gracefully, same as the rest of the pipeline.** No GUI Atlas found,
+no `.resS` pixel data, an allowlisted name absent this game version, or no
+extraction ever having run (headless CI/dev, no game installed) — each is
+silently skipped, never thrown, at every layer (`UnityExtractor.extractUiSprites`
+catches broadly; `SpritePackService.buildUiSprites()` skips a missing file
+per name). `GuiAtlasPixelsTest` covers the crop/flip arithmetic and the
+missing-`.resS` case with a synthetic atlas (no real game install needed);
+`SpritePackServiceTest` covers the pack section coming back empty with no
+extracted assets on disk. **A live alpha soak (game installed) is what
+actually verifies the real extraction** — the same verification story as the
+four existing atlases (see docs/dev-loop-mechanisms.md's soak loop).
+
 ## Gotchas / non-obvious facts (recap)
 
 - **Best-effort everywhere.** Extraction runs on a daemon thread and swallows all
@@ -692,9 +784,14 @@ mask-compositing model, and the renderer side are documented in
   and `version()` key off `resources.assets` / `characters.png` last-modified
   time. Touching those files (without a real update) forces a re-extract / a new
   pack version.
-- **Only three Unity classes are consumed** (`TextAsset`, `Texture2D`,
-  `SpriteAtlas`), and `SpriteAtlas` is parsed but unused — sprite rects come from
-  RotMG's own `spritesheetf`, not Unity's atlas.
+- **Four Unity classes are consumed** (`TextAsset`, `Texture2D`, `SpriteAtlas`,
+  and — since issue #205 — `Sprite`). For every RotMG object sprite,
+  `SpriteAtlas`/`Sprite` are still unused — those rects come from RotMG's own
+  `spritesheetf`, not Unity's atlas. The one exception is the GUI Atlas (see
+  "UI sprites" above), which `spritesheetf` never indexes at all.
+- **The GUI Atlas's pixels aren't in `resources.assets`.** They're read
+  straight from byte offset 0 of the sibling `resources.assets.resS`, found
+  by elimination rather than any metadata pointer — see "UI sprites" above.
 - **RGBA32 is assumed**, not decoded from `TextureFormat`
   (`UnityExtractor.java:105-113`).
 - **`flattbuffer` (package) vs `flatbuffer` (folder)** — the spelling mismatch is
