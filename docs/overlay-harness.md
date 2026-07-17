@@ -168,6 +168,14 @@ worth knowing: because nothing in this fixture is animated, `npm run shots`
 has nothing JS-driven to freeze for determinism (see below) - the fixture's
 simplicity was a deliberate choice, not an oversight.
 
+The fixture also carries a `uiSprites` section (issue #205/#206) - five tiny
+hand-generated PNGs (a 16×16 gem per rarity tier, an 8×8 sparkle for
+`shiny_item_icon`), same "no real game art" rule as the base atlas above, so
+`npm run shots` exercises the real pip/shiny rendering path in
+`sprites/Sprite.tsx` instead of only its CSS-ring/SVG-badge fallback. A
+bridge that hasn't extracted `uiSprites` yet (predates #205, or has no game
+assets) still exercises the fallback path live, just not in this fixture.
+
 ## The `gallery.json` fixture
 
 Not hand-authored: recorded by running the real bridge

@@ -130,4 +130,15 @@ export interface SpritePack {
    * traffic.
    */
   dungeonIcons?: Record<string, number>
+  /**
+   * Named UI sprites (rarity pips + shiny indicator, issue #205/#206), keyed
+   * by their in-game sprite name (e.g. "RarityIcon_1", "shiny_item_icon") -
+   * each value is already a cropped data: URL the renderer can draw directly,
+   * no atlas/rect lookup needed (mirrors how `atlases` are shipped, just
+   * pre-cropped per name instead of per whole atlas). Absent on a bridge that
+   * predates this feature or has no game assets to extract from - callers
+   * fall back to the CSS rarity ring / SVG shiny badge (see
+   * `sprites/Sprite.tsx`).
+   */
+  uiSprites?: Record<string, string>
 }

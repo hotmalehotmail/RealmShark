@@ -517,6 +517,11 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
     [pack]
   )
 
+  const getUiSprite = useCallback(
+    (name: string): string | null => pack.uiSprites?.[name] ?? null,
+    [pack]
+  )
+
   return (
     <SpriteContext.Provider
       value={{
@@ -529,7 +534,8 @@ export function SpriteProvider({ children }: { children: React.ReactNode }): Rea
         frameMs,
         scrollSpeed,
         rotateSpeed,
-        dungeonIcon
+        dungeonIcon,
+        getUiSprite
       }}
     >
       {children}

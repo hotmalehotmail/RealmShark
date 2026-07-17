@@ -121,10 +121,25 @@ export function equipmentRarityFromUniqueDataString(value: string | null | undef
   return result
 }
 
-/** Tailwind ring-color utility class per rarity tier (see docs/overlay-ui-style.md "Rarity roles"). Tier 0 has no entry (no border). */
+/** Tailwind ring-color utility class per rarity tier (see docs/overlay-ui-style.md "Rarity roles"). Tier 0 has no entry (no border). CSS fallback when the real pip sprite (below) isn't available. */
 export const RARITY_RING_CLASS: Record<number, string> = {
   1: 'ring-1 ring-rarity-uncommon',
   2: 'ring-1 ring-rarity-rare',
   3: 'ring-1 ring-rarity-legendary',
   4: 'ring-1 ring-rarity-divine'
+}
+
+/**
+ * In-game rarity-pip sprite name per tier (issue #205/#206), keyed by the
+ * bridge's `uiSprites` pack section (`SpritePack.uiSprites`, via
+ * `useSprites().getUiSprite`). These are the game's own asset names,
+ * confirmed to match this same tier/color mapping - see #205's asset table.
+ * Tier 0 has no entry (no pip). Falls back to `RARITY_RING_CLASS` above when
+ * the pack has no `uiSprites` section (older bridge, or no game assets).
+ */
+export const RARITY_PIP_SPRITE_NAME: Record<number, string> = {
+  1: 'RarityIcon_1',
+  2: 'RarityIcon_2',
+  3: 'RarityIcon_3',
+  4: 'RarityIcon_4'
 }
