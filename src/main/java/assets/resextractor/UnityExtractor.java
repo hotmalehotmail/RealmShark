@@ -1,23 +1,35 @@
 package assets.resextractor;
 
 import assets.AssetExtractor;
+import assets.UiSpriteNames;
 
 import javax.imageio.ImageIO;
 import javax.swing.*;
 import java.awt.*;
 import java.awt.geom.AffineTransform;
+import java.awt.geom.Rectangle2D;
 import java.awt.image.*;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.TreeSet;
 
 /**
  * Class extracted from UnityPy https://github.com/K0lb3/UnityPy
  */
 public class UnityExtractor {
+    // Verified fallback for the GUI Atlas's dimensions (issue #205) - used
+    // only if the backing Texture2D can't be found by name, in which case
+    // its own m_Width/m_Height are read instead (no coordinates hardcoded).
+    private static final int GUI_ATLAS_FALLBACK_WIDTH = 4096;
+    private static final int GUI_ATLAS_FALLBACK_HEIGHT = 2048;
+    private static final String GUI_ATLAS_NAME = "GUI Atlas";
+
     private int counter = 0;
     private TreeSet<String> checkDupes = new TreeSet<>();
 
@@ -33,6 +45,8 @@ public class UnityExtractor {
         extractSprites(res, output[1]);
         AssetExtractor.setDisplay("Extracting Xml Files");
         extractXml(res, output[2]);
+        AssetExtractor.setDisplay("Extracting UI Sprites");
+        extractUiSprites(res, input, new File(output[1], "ui"));
     }
 
     private void createFolders(File[] output) {
@@ -130,4 +144,91 @@ public class UnityExtractor {
         }
     }
 
+    /**
+     * Crops the allowlisted named UI sprites ({@link UiSpriteNames#ALLOWLIST})
+     * out of the GUI Atlas and writes each as its own small PNG under
+     * {@code outputFolder} (issue #205) - a generic channel the frontend can
+     * grow without ever touching this pipeline again, since resolution is by
+     * name, not by hardcoded coordinates. Best-effort like the rest of
+     * extraction: any missing piece (no GUI Atlas, no .resS pixel data, a
+     * name not present this game version) is silently skipped, never thrown.
+     */
+    private void extractUiSprites(Resources res, File input, File outputFolder) {
+        try {
+            SpriteAtlas guiAtlas = findAtlasByName(res, GUI_ATLAS_NAME);
+            if (guiAtlas == null) return;
+
+            int width = GUI_ATLAS_FALLBACK_WIDTH;
+            int height = GUI_ATLAS_FALLBACK_HEIGHT;
+            for (Texture2D t : res.assetTexture2D) {
+                if (t.name != null && t.name.contains(GUI_ATLAS_NAME)) {
+                    width = t.m_Width;
+                    height = t.m_Height;
+                    break;
+                }
+            }
+
+            GuiAtlasPixels pixels = new GuiAtlasPixels(input, width, height);
+            if (!pixels.isAvailable()) return;
+
+            Map<String, Rectangle2D> rectsByName = joinSpriteNamesToRects(res, guiAtlas);
+            outputFolder.mkdirs();
+            for (String name : UiSpriteNames.ALLOWLIST) {
+                Rectangle2D rect = rectsByName.get(name);
+                if (rect == null) continue;
+                AssetExtractor.setDisplay("Extracting UI Sprite: " + name);
+                writeUiSpritePng(pixels, rect, new File(outputFolder, name + ".png"));
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private SpriteAtlas findAtlasByName(Resources res, String name) {
+        for (SpriteAtlas a : res.assetSpriteAtlas) {
+            if (name.equals(a.name)) return a;
+        }
+        return null;
+    }
+
+    /**
+     * Joins every parsed {@link Sprite}'s {@code m_RenderDataKey} to the
+     * atlas's {@code m_RenderDataMap} entries (matched by the GUID+fileID
+     * pair both sides carry) to resolve {@code name -> textureRect} for
+     * every sprite the atlas packs - the mechanism that lets the allowlist
+     * above be names only, with no coordinates in source.
+     */
+    private Map<String, Rectangle2D> joinSpriteNamesToRects(Resources res, SpriteAtlas atlas) {
+        Map<String, Rectangle2D> rectsByKey = new HashMap<>();
+        for (SpriteAtlas.RenderDataMap rdm : atlas.m_RenderDataMap) {
+            rectsByKey.put(renderDataKey(rdm.first, rdm.second), rdm.textureRect);
+        }
+        Map<String, Rectangle2D> rectsByName = new HashMap<>();
+        for (Sprite s : res.assetSprite) {
+            Rectangle2D rect = rectsByKey.get(renderDataKey(s.renderDataKeyGuid, s.renderDataKeyFileId));
+            if (rect != null) rectsByName.put(s.name, rect);
+        }
+        return rectsByName;
+    }
+
+    private String renderDataKey(byte[] guid, long fileId) {
+        return Base64.getEncoder().encodeToString(guid) + "_" + fileId;
+    }
+
+    private void writeUiSpritePng(GuiAtlasPixels pixels, Rectangle2D rect, File outputFile) throws IOException {
+        int x = (int) rect.getX();
+        int y = (int) rect.getY();
+        int w = (int) rect.getWidth();
+        int h = (int) rect.getHeight();
+        if (w <= 0 || h <= 0) return;
+
+        byte[] rgba = pixels.crop(x, y, w, h);
+        if (!GuiAtlasPixels.looksValid(rgba)) return;
+
+        DataBuffer buffer = new DataBufferByte(rgba, rgba.length);
+        WritableRaster raster = Raster.createInterleavedRaster(buffer, w, h, 4 * w, 4, new int[]{0, 1, 2, 3}, null);
+        ColorModel cm = new ComponentColorModel(ColorModel.getRGBdefault().getColorSpace(), true, true, Transparency.TRANSLUCENT, DataBuffer.TYPE_BYTE);
+        BufferedImage image = new BufferedImage(cm, raster, true, null);
+        ImageIO.write(image, "png", outputFile);
+    }
 }

@@ -445,17 +445,21 @@ send (`spritePack.ts:55`). Routed by `PacketBridge.handleClientMessage`
 | --- | --- |
 | assets not ready | `{"type":"spritePack","ready":false}` |
 | client already current | `{"type":"spritePack","ready":true,"upToDate":true,"version":"v…"}` |
-| full pack | `{"type":"spritePack","ready":true,"version":"v…","atlases":{…},"table":{…},"maskTable":{…},"dyeTable":{…},"animTable":{…}}` |
+| full pack | `{"type":"spritePack","ready":true,"version":"v…","atlases":{…},"table":{…},"maskTable":{…},"dyeTable":{…},"animTable":{…},"uiSprites":{…}}` |
 
 The full pack keys: `atlases` = `atlasId("1".."4") → data:image/png;base64,…`;
 `table` = `objectType → [atlasId,x,y,w,h]`; `maskTable` = `objectType →
 [3,x,y,w,h]`; `dyeTable` = `dyeId → [1,r,g,b]` (solid) or
 `[10,atlasId,x0,y0,w0,h0,...]` (textile, one 4-tuple per animation frame);
 `animTable` = `objectType → flat 9-ints/frame [x,y,w,h,aId,mx,my,mw,mh]` for
-animated (idle) character sprites. The
-`table`/`maskTable`/`dyeTable`/`animTable` semantics are documented in
+animated (idle) character sprites; `uiSprites` = `spriteName →
+data:image/png;base64,…` for the allowlisted named UI sprites (rarity pips,
+shiny icon — issue #205), keyed by name rather than `objectType` since these
+aren't game objects — see `docs/asset-pipeline.md`'s "UI sprites" section.
+The `table`/`maskTable`/`dyeTable`/`animTable` semantics are documented in
 [dyes-and-textiles.md](dyes-and-textiles.md); the TS mirror is `SpritePack` in
-`overlay/src/shared/ipc.ts:74`.
+`overlay/src/shared/ipc.ts:74` (`uiSprites` is backend-only as of issue #205 —
+the frontend consumer is a separate issue, so it's not yet in that type).
 
 **One-shot broadcast.** Assets load on a background thread, so early requests
 often get `ready:false`. A 2 s watchdog (`PacketBridge.maybeBroadcastSpritePack`,
