@@ -36,7 +36,7 @@ step that *runs* (driven) but is *not gated* (unenforced), or vice-versa.
 | 5.1 | PR hygiene + duplicate guard | `pull_request` (incl. `edited`/`labeled`) → `hygiene.yml` | `pr hygiene` required check; dedup auto-close | 🟡 built — required-check flip pending |
 | 6 | Fix loop (review → re-fire builder, capped) | `workflow_run` of `review` → `fixloop.yml`; `agent:retry` → `resume.yml`; conflict → `conflict-watch.yml` (+ sweep backstop) rebase | `review-verdict` status; `MAX_FIX_ROUNDS` (review) + `MAX_REBASE_ROUNDS` (conflicts); `agent:needs-human` freeze | 🟡 re-fire + escalate + resume + conflict-rebase built; live-verify pending |
 | 7 | Gatekeeper auto-merge | `workflow_run` → arm auto-merge | native auto-merge + required checks | 🟢 verified (#19) |
-| 7.4 | UI-signoff gate (opt-in) | `issues`/`pull_request_target: labeled` → `signoff.yml` label sync | gatekeeper + sweep hold `ui:signoff` w/o `ui:approved`; no backstop (human gate) | 🟡 built — unexercised |
+| 7.4 | UI-signoff gate (opt-in) | `issues`/`pull_request_target: labeled` → `signoff.yml` label sync | gatekeeper + sweep hold `ui:signoff` w/o `ui:approved`; no backstop (human gate) | 🟢 fixed (was silently broken — `pull-requests: read` couldn't apply the PR label; PRs #198/#199 merged un-signed-off) |
 | 8 | Release (ship button) | `workflow_dispatch` → `release.yml` | manual-only dispatch | 🟢 (captain notes + auto-bump built) |
 | 9 | Alpha soak → promote or fix | `soak:pass`/`soak:fail` labels; auto-cut on staging merge; latest-on-promotion | maintainer-only labels; `soak:pass` = stamped `review-verdict` on the promotion PR | 🟡 built pending deploy (PRs #41 #42) — fix-forward, auto-cut, labels, PR-based promote (no token) |
 | — | Branch protection | — | required checks (+ push restriction) | 🟢 verdict required (push restrict N/A on user repo) |
@@ -792,7 +792,22 @@ merge path entirely. **Deliberately NO crash/timeout backstop** — unlike the t
 gate (§7.3), this is a human gate: a held PR waits indefinitely. Reject-with-steer is
 the existing machinery: leave a steering comment + `agent:retry` (§6.3).
 
-**Status.** 🟡 Built; unexercised until a maintainer first applies `ui:signoff`.
+**Permissions gotcha (fixed).** `signoff.yml` writes the signoff labels onto a
+**PR**, and adding a label to a pull request requires the **`pull-requests: write`**
+scope — `issues: write` alone is *not* enough, despite labels being an "issues"
+concept and `gh pr edit --add-label` nominally riding the issues API. The job
+originally granted `pull-requests: read`, so every add returned 403; the failure was
+swallowed (`… >/dev/null 2>&1 || true`) and an unconditional "copied" line logged
+success anyway, so the label never landed on the PR and the gatekeeper/sweep hold
+never engaged. **PRs #198 and #199 (both closing `ui:signoff` issues #193/#194)
+merged with no sign-off** — the first real exercise of this gate. Fixed by granting
+`pull-requests: write` (matching every other label-writing gate — hygiene, fixloop,
+resume, conflict-watch) and by making a failed label-add a **loud `::error::`**
+instead of a false "copied".
+
+**Status.** 🟢 Fixed. Was silently broken from introduction until PRs #198/#199
+exposed it; the underlying gatekeeper/sweep hold logic was always correct — only the
+label never arrived.
 
 ## 8 · Release — the human ship button
 
