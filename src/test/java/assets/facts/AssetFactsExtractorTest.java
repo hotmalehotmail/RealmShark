@@ -25,7 +25,7 @@ import org.junit.rules.TemporaryFolder;
  * {@code Container}, no {@code <BagType>}), enchantment {@code id}/{@code
  * type} as attributes rather than children, class stat maxima in {@code max}
  * attributes, and the graceful no-dump degradation every asset entry point
- * must honor (see {@code AssetProbeTest}). The synthetic fragments below
+ * must honor. The synthetic fragments below
  * mirror that verified structure - they are shaped by real assets, but no
  * game content ships in this repo.
  */

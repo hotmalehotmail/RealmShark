@@ -38,10 +38,10 @@ import org.w3c.dom.NodeList;
  *   ./gradlew extractFacts -PxmlDir=$HOME/rotmg-assets/xml [-Pbuild=&lt;exalt build id&gt;]
  * </pre>
  *
- * <p>Follows {@link assets.resextractor.AssetProbe}'s graceful-degradation
- * contract: a missing/empty XML directory (no game dump on this machine - the
- * CI/dev default) produces a clear status message, never a crash; {@code main}
- * then exits nonzero so a scripted run can't mistake it for success.
+ * <p>Follows this pipeline's graceful-degradation contract: a missing/empty
+ * XML directory (no game dump on this machine - the CI/dev default) produces a
+ * clear status message, never a crash; {@code main} then exits nonzero so a
+ * scripted run can't mistake it for success.
  *
  * <p>Real-XML quirks this parser must (and tests verify it does) survive:
  * {@code type} attributes in inconsistent hex ({@code 0x050C} vs {@code 0x50f}
