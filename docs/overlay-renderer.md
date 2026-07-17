@@ -23,11 +23,12 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/consoleLog.ts` | In-renderer console capture buffer feeding the Console panel. |
 | `overlay/src/renderer/src/DpsList.tsx` | Presentational DPS rows (target + per-attacker list). |
 | `overlay/src/renderer/src/env.d.ts` | Vite client types only. |
-| `overlay/src/renderer/src/panels/PanelCanvas.tsx` | Owns the panel array, layout load/save, drag/size/pin/z-order dispatch. |
-| `overlay/src/renderer/src/panels/PanelFrame.tsx` | One panel's chrome: title bar, drag, size/pin buttons, visibility. |
+| `overlay/src/renderer/src/panels/PanelCanvas.tsx` | Owns the panel array, layout load/save, drag/size/pin/z-order dispatch, programmatic open/close. |
+| `overlay/src/renderer/src/panels/PanelFrame.tsx` | One panel's chrome: title bar, drag, size/pin/close buttons, visibility. |
+| `overlay/src/renderer/src/panels/panelSpawn.ts` | `PanelSpawnContext` / `usePanelSpawn()` - lets a panel body open/close another panel on the canvas (§2's "Programmatic panel spawn/close"). |
 | `overlay/src/renderer/src/panels/anchor.ts` | Percentage-anchor ↔ pixel math (`panelStyle`, `anchorFromPointer`). |
-| `overlay/src/renderer/src/panels/registry.ts` | `type → { title, per-size px dims, component }` and `PanelContentProps`. |
-| `overlay/src/renderer/src/panels/{Status,Dps,Console,Character,Instance,DpsSummary,Loot}Panel.tsx` | The seven panel bodies. |
+| `overlay/src/renderer/src/panels/registry.ts` | `type → { title, per-size px dims, component, closable? }` and `PanelContentProps`. |
+| `overlay/src/renderer/src/panels/{Status,Dps,Console,Character,Instance,DpsSummary,DpsDetail,Loot}Panel.tsx` | The eight panel bodies. |
 | `overlay/src/renderer/src/ui/*.tsx` | Shared UI primitives (`Button`, `EmptyState`, `Swatch`, `GearRow`, `MeterRow`, `StatRow`, `Tooltip`) — see `overlay-ui-style.md`. |
 | `overlay/src/renderer/src/ui/interactiveContext.ts` | `InteractiveContext` / `useInteractive()` - the click-through-mode flag, for `Tooltip` (§4.2). |
 | `overlay/src/renderer/src/assets/main.css` | Tailwind entry + the `@theme` design-token block — see `overlay-ui-style.md`. |
@@ -37,6 +38,7 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/sprites/EntityRegistry.tsx` | objectId → name/skin/equipment/equipmentRarity/enchantSlots/dyes, built from the packet stream. |
 | `overlay/src/renderer/src/sprites/context.ts` | The two React contexts + `useSprites` / `useEntityRegistry` hooks. |
 | `overlay/src/renderer/src/sprites/enchantRarity.ts` | Decodes `UNIQUE_DATA_STRING` into a per-slot rarity-border tier (issue #107) — see §4.1. |
+| `overlay/src/renderer/src/sprites/shiny.ts` | `isShinyItemName` - derives shininess from an item's resolved display name (issue #193) — see §4.3. |
 | `overlay/src/renderer/src/sprites/ItemSprite.tsx` | `<ItemSprite objectType>` - the shared item-rendering path (§4.2): wraps `Sprite` with the hover item/enchant tooltip. |
 | `overlay/src/renderer/src/items/ItemInfoProvider.tsx` | Ingests the `itemInfo`/`enchantNames` envelopes; provides item metadata + enchant-name lookups (§4.2). |
 | `overlay/src/renderer/src/items/context.ts` | `ItemInfoContext` + `useItemInfo()` hook. |
@@ -45,6 +47,8 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/dps/DpsTracker.ts` | Framework-agnostic class ingesting packets → `DpsSnapshot`; also retains a session-scoped per-instance damage history (§5.1). |
 | `overlay/src/renderer/src/dps/useDpsTracker.ts` | React hook wrapping `DpsTracker` (event-driven on bridge `dps` packets + 1 s fallback recompute). |
 | `overlay/src/renderer/src/dps/useDpsHistory.ts` | React hook owning a dedicated `DpsTracker` instance for the DPS summary panel; exposes `DpsHistoryEntry[]`. |
+| `overlay/src/renderer/src/dps/dpsDetailContext.ts` | `DpsDetailSelectionContext` / `useDpsDetailSelection()` - the selected `DpsHistoryEntry` the `dpsDetail` panel renders (§2's "Programmatic panel spawn/close"). |
+| `overlay/src/renderer/src/dps/DpsDetailSelectionProvider.tsx` | Owns the selection state for the context above; mounted once in `App`. |
 | `overlay/src/renderer/src/dps/types.ts` | Packet-field shapes the tracker reads. |
 | `overlay/src/renderer/src/loot/LootTracker.ts` | Framework-agnostic class ingesting packets → a session-scoped log of white/orange bags that dropped near the player, incl. per-item enchants (§7). |
 | `overlay/src/renderer/src/loot/useLootTracker.ts` | React hook wrapping `LootTracker` (event-driven on `onPacketBatch`, re-renders only when `ingest` reports a change). |
@@ -264,6 +268,11 @@ pre-load empty array never clobbers a saved layout.
 > panel whose `id` isn't present. So a panel type added in a new version appears
 > for existing users on upgrade, instead of only on a fresh `panels.json`.
 
+Both the load and the debounced save filter through `isPersistablePanel`
+first, dropping any panel whose registry entry sets `closable` — see §2's
+"Programmatic panel spawn/close" for why a spawned panel like `dpsDetail`
+must never round-trip through `panels.json`.
+
 The main process persists `panels.json`; see `overlay-main-process.md`.
 
 ### The `PanelContentProps` contract
@@ -295,11 +304,97 @@ inherit it and must not re-declare it (see `overlay-ui-style.md`).
    entry and silently skips unknown types (`PanelCanvas.tsx:99-100`), so a stale
    saved panel referencing a removed type won't crash.
 
+### Programmatic panel spawn/close (issue #194)
+
+Every panel in `defaultLayout()` is always present; nothing before issue #194
+let one panel body open *another* panel on demand. The DPS summary/detail
+split needed exactly that — clicking a session in the small `DpsSummaryPanel`
+opens its per-enemy/per-player breakdown in a separate, much larger,
+independently draggable/resizable `dpsDetail` panel instead of swapping the
+summary panel's own cramped content in place — so this is now a small generic
+mechanism any future panel can reuse, not a DPS-specific hack:
+
+- **`panels/panelSpawn.ts`** — `PanelSpawnContext` / `usePanelSpawn()`, giving
+  a panel body three calls: `openPanel(id, type, size?)` (creates a
+  `PanelInstance` at a fixed default anchor if `id` isn't already in the
+  canvas's `panels` array, otherwise just raises the existing one to front —
+  so re-targeting an already-open panel, e.g. selecting a different session,
+  never spawns a duplicate), `closePanel(id)` (removes it from the array
+  entirely), and `isOpen(id)` (whether a panel instance with that `id`
+  currently exists — lets a spawning panel body derive UI state, like a row
+  highlight, from the spawned panel's actual presence on the canvas instead
+  of tracking it separately). All three are implemented by `PanelCanvas`
+  (`openPanel`/`closePanel`/`isOpen` next to `updatePanel`/`bringToTop`) and
+  provided via `<PanelSpawnContext.Provider>` wrapping its rendered panels —
+  `PanelCanvas` itself has no DPS-specific knowledge; it only manipulates
+  `PanelInstance[]` generically.
+- **`registry.ts`'s `closable?: boolean`** on a `PanelSpec` — when set,
+  `PanelFrame` renders a ✕ button in that panel's title bar (alongside
+  pin/size) wired to `usePanelSpawn().closePanel(panel.id)` via the `onClose`
+  prop `PanelCanvas` passes every `PanelFrame`. Only `dpsDetail` sets this
+  today; an ordinary always-on panel (the other seven) leaves it unset and
+  gets no close control.
+- **A spawned panel is not in `defaultLayout()`** and is never added by
+  `mergeWithDefaults` — it only exists in the `panels` array while open, so
+  closing it and reopening later always respawns at `panelSpawn.ts`'s
+  `SPAWN_ANCHOR` default position rather than resuming wherever it was last
+  dragged. This was a deliberate simplicity tradeoff (position isn't preserved
+  across a close/reopen cycle), not a limitation of the mechanism itself.
+- **`closable` panels are excluded from persistence, in both directions.**
+  `PanelCanvas`'s `isPersistablePanel` filters any panel whose registry entry
+  sets `closable` out of `savePanelLayout`'s payload, and out of a freshly
+  loaded `panels.json` before it's merged with defaults. Without this, a
+  spawned `dpsDetail` panel open at quit time would round-trip into
+  `panels.json` like any ordinary panel and reappear on next launch — but its
+  selection lives in the separate, non-persisted `DpsDetailSelectionContext`
+  (below), which always starts `null`, so the restored panel would show a
+  permanent "No session selected" empty state with no way for the user to
+  populate it short of closing and reopening it. The load-side filter also
+  guards against a `panels.json` written before this fix (or by an older
+  build) still carrying a stale closable panel. This is what keeps the "only
+  exists in the `panels` array while open" claim above actually true.
+- **Cross-panel data still needs its own channel** — `PanelContentProps` is
+  still just `{ size }` (above), so `openPanel`/`closePanel` alone can't tell
+  the newly-opened panel *what* to show. The DPS case adds a small dedicated
+  context for this: `dps/dpsDetailContext.ts`'s `DpsDetailSelectionContext` /
+  `useDpsDetailSelection()` (state owned by
+  `dps/DpsDetailSelectionProvider.tsx`, mounted once in `App.tsx` alongside
+  `SpriteProvider`/`EntityRegistryProvider`/`ItemInfoProvider`) holds the
+  currently-selected `DpsHistoryEntry`. `DpsSummaryPanel`'s row click calls
+  both `select(entry)` (this context) and `openPanel('dpsDetail', 'dpsDetail',
+  'lg')` (the generic mechanism above); `DpsDetailPanel` reads `selected` back
+  out. A future panel needing the same shape (spawn + pass data) would add its
+  own equally small context rather than generalizing this one — the DPS
+  selection context has nothing panel-spawning-specific in it, and forcing a
+  shared generic payload type across unrelated features isn't worth the
+  indirection for a single consumer. `selected` is never explicitly cleared
+  on close — `DpsSummaryPanel`'s row highlight instead gates on
+  `usePanelSpawn().isOpen('dpsDetail')`, so it reads the canvas's actual
+  open/closed state rather than a copy that has to be manually kept in sync.
+  An earlier version tore down `selected` from `DpsDetailPanel`'s
+  unmount-only `useEffect` cleanup, but that's unsafe under React
+  StrictMode: on mount, StrictMode runs setup → cleanup → setup in
+  development, so the cleanup fired once immediately after the very first
+  mount and wiped the selection that had just been set, and the panel opened
+  showing "No session selected" until a second click. `isOpen()` has no such
+  lifecycle dependency.
+- **The harness mount (`harness/PanelMount.tsx`)** has no `PanelCanvas`, so it
+  wraps its single rendered panel in a no-op `PanelSpawnContext.Provider`
+  (`openPanel`/`closePanel` both no-ops) purely so `usePanelSpawn()` doesn't
+  throw — nothing in a static `npm run shots` screenshot ever calls it. It
+  also wraps in `DpsDetailSelectionProvider` and, only for the `dpsDetail`
+  type, mounts a small `AutoSelectFirstDpsSession` helper that auto-selects
+  the first retained history entry once the `gallery` fixture has produced
+  one — needed because nothing in the harness simulates the row click that
+  would normally populate the selection, and an unselected `dpsDetail` shot
+  would otherwise just show its "No session selected" empty state instead of
+  real per-enemy/per-player content.
+
 ---
 
 ## 3. The panels
 
-All seven bodies are thin; the data lives in the shared services. `size` maps
+All eight bodies are thin; the data lives in the shared services. `size` maps
 to per-panel scale tables at the top of each file. Every gear/loot icon below
 renders through `ItemSprite`, not `Sprite` directly, so it's hoverable for the
 item tooltip (§4.2) with no per-panel wiring.
@@ -311,8 +406,9 @@ item tooltip (§4.2) with no per-panel wiring.
 | `ConsolePanel` | "Console" | `consoleLog.ts` buffer | Live log with search (Ctrl/Cmd+F), level colours, clear. |
 | `CharacterPanel` | "Character" | `EntityRegistry` (local player) | Big dyed sprite + 4 equip icons + username. |
 | `InstancePanel` | "Instance" | `EntityRegistry.characters()` | Every named player in the instance, dyed sprites + gear. |
-| `DpsSummaryPanel` | "DPS Summary" | `useDpsHistory()` | Post-fight master/detail: a master list of retained past instances (icon + name + a "You: Xdmg (#rank)" headline), each opening a detail view of that instance's enemies ranked by total damage, expandable to a frozen per-player breakdown. See §5.1. |
-| `LootPanel` | "Loot" | `useLootTracker()` | Session log of white/orange bags (BagType 6/8) that dropped near the player, grouped under each color's own bag sprite, with per-item rarity border + enchant tooltip, chronological (not de-duplicated). See §7. |
+| `DpsSummaryPanel` | "DPS Summary" | `useDpsHistory()` | A master list only: retained past instances (icon + name + a "You: Xdmg (#rank)" headline). Clicking a row opens that instance's breakdown in the separate `dpsDetail` panel below rather than swapping this panel's own content — see §2's "Programmatic panel spawn/close" and §5.1. |
+| `DpsDetailPanel` | "DPS Detail" | `useDpsDetailSelection()` | The large, closable, independently draggable/resizable panel `DpsSummaryPanel` opens on row click (issue #194): the selected instance's enemies ranked by total damage, expandable to a frozen per-player breakdown (gear/dyes/enchants). A single reused panel instance re-targeted on each new selection, not one spawned per session. Renders "No session selected" if opened with nothing selected (shouldn't happen via the normal row-click path). See §2, §5.1. |
+| `LootPanel` | "Loot" | `useLootTracker()` | Session log of white/orange bags (BagType 6/8) that dropped near the player, both always shown under their own bag sprite + count (no text label), with per-item rarity border + shiny badge + enchant tooltip, chronological (not de-duplicated). See §7. |
 
 **StatusPanel** (`panels/StatusPanel.tsx`) is the only panel wired straight to
 the IPC surface rather than a shared service. It subscribes to `onBridgeStatus`,
@@ -446,8 +542,8 @@ decoded `atlasesRef` bitmaps are asset data, kept for the next attach.
 ### `Sprite` and `CharacterSprite`
 
 `Sprite` (`sprites/Sprite.tsx`) takes an `objectType` (+ optional `size`, dyes,
-`rarity`, `className`). It picks `getDyedSprite` when a dye is present else
-`getSprite` (`Sprite.tsx:51-53`), and renders an
+`rarity`, `shiny`, `className`). It picks `getDyedSprite` when a dye is present
+else `getSprite` (`Sprite.tsx:51-53`), and renders an
 `<img style={{imageRendering:'pixelated'}}>`. When the lookup returns `null`
 (no real pack / undecoded atlas) it renders a **deterministic HSL placeholder
 chip** so an unresolved objectType is still a stable coloured box
@@ -456,9 +552,15 @@ chip** so an unresolved objectType is still a stable coloured box
 whether this particular sprite has an idle-frame or textile-frame animation,
 and only then does a local `setInterval` at `frameMs` re-render it
 (`Sprite.tsx:37-45`) — static sprites and event-driven panels never tick.
-`rarity` (0-4, see §4.1) adds a `ring-2 ring-rarity-<tier>` class on whichever
+`rarity` (0-4, see §4.1) adds a `ring-1 ring-rarity-<tier>` class on whichever
 of the three render paths (canvas/`<img>`/placeholder) is taken, so it never
-changes the sprite's rendered layout size the way a `border` would.
+changes the sprite's rendered layout size the way a `border` would. `shiny`
+(see §4.3) similarly overlays a small rainbow-star badge in the top-left
+corner without affecting layout size — but unlike `rarity`, it needs an
+actual wrapper element (an absolutely-positioned `<svg>` badge can't be a
+Tailwind class on the sprite itself), so `Sprite` only wraps its output in a
+`position: relative` span when `shiny` is truthy, leaving every other caller's
+DOM shape unchanged.
 
 `CharacterSprite` (`sprites/CharacterSprite.tsx`) takes an **`objectId`** and
 resolves everything from the entity registry: base type is the equipped `skin` if
@@ -610,7 +712,7 @@ instead of `Sprite`.
   the `ownerObjectId`/`slotIndex` live `EntityRegistry` lookup — a caller
   holding its own resolved (possibly frozen) enchant code passes it directly
   instead. `GearRow`'s own optional `enchantSlots` prop forwards per-slot
-  codes this way; `DpsSummaryPanel`'s `EnemyRow` passes its frozen
+  codes this way; `DpsDetailPanel`'s `EnemyRow` passes its frozen
   `PlayerCosmetics.enchantSlots` (§5.1) so a past instance's gear tooltip
   still shows enchantments after `EntityRegistry` has moved on. The Loot panel
   (§7) has no equipping entity for most pickups (the protocol never
@@ -643,6 +745,37 @@ instead of `Sprite`.
     listener, no portal. The click-through contract is preserved by never
     attaching a hover target at all, not by hiding one — there is nothing for
     the browser to dispatch a hover event *to*.
+
+### 4.3 Shiny item badge (`sprites/shiny.ts`, issue #193)
+
+A "shiny" item has no dedicated wire signal — per the game-data ground-truth
+rule (root `CLAUDE.md`), `assets/facts/asset-facts.json` marks one purely by a
+trailing `" Shiny"` suffix on `items[id].name` (`displayId` carries the base
+name instead, e.g. id `1210`: `name: "Dirk of Cronus Shiny"`,
+`displayId: "Dirk of Cronus"`). `itemNames` (the Loot panel's `lootBagTypes`
+envelope, §7) already forwards that same `name` string unfiltered
+(`IdToAsset.objectName`), so `shiny.ts`'s `isShinyItemName` just re-derives
+shininess client-side from the string every consumer already has via
+`itemName(objectType)` — no bridge envelope change was needed. `displayId`
+being set is **not** a valid proxy (most items with a `displayId` aren't
+shiny — it also covers unrelated "nicer name" overrides), so the suffix check
+is the only correct rule.
+
+`LootPanel` computes `isShinyItemName(itemName(entry.objectType))` per entry
+and passes it as `ItemSprite`'s (→ `Sprite`'s) `shiny` prop, which renders a
+small rainbow-gradient star (`ShinyBadge` in `Sprite.tsx`) absolutely
+positioned over the sprite's top-left corner — the same "overlay without
+changing layout size" technique `rarity` uses (§4.1), except it needs an
+actual `position: relative` wrapper span since a badge can't be a class on
+the sprite element itself (see §4's `Sprite` writeup). The gradient's `<svg
+id>` is generated via `useId()` so multiple shiny badges on screen at once
+don't collide on a duplicate DOM id.
+
+`FakePacketSource` seeds one real facts item whose name keeps its `" Shiny"`
+suffix (`SHINY_ITEM_TYPE`, registered via `registerFactsItem(id, true)` to
+skip the usual `displayId` override) and drops it in a dedicated loot-bag
+cycle variant, so the badge is exercised in dev and in the committed
+`gallery.json` capture with no game installed.
 
 ---
 
@@ -766,8 +899,11 @@ Note `CreateSuccessPacket` does **not** reset — it only sets the local id.
 
 `DpsTracker` also retains a session-scoped, in-memory history of past
 instances' damage, so a separate **DPS summary panel** (`DpsSummaryPanel.tsx`)
-can show a post-fight master/detail view with no time pressure — unlike the
-live DPS panel (§3), which only ever shows the currently-focused enemy.
+can show a post-fight master list, and its companion **DPS detail panel**
+(`DpsDetailPanel.tsx`, opened on row click — §2's "Programmatic panel
+spawn/close") a per-enemy/per-player breakdown, with no time pressure —
+unlike the live DPS panel (§3), which only ever shows the currently-focused
+enemy.
 
 **The hook: `MapInfoPacket`, before `reset()`.** Every instance ends the same
 way the tracker learns about it starting: a `MapInfoPacket`. `ingest()` calls
@@ -836,7 +972,7 @@ clothingDye/accessoryDye), merged from `UpdatePacket` the same way
 `DpsHistoryEnemy.cosmetics` is a **snapshot copy** taken at retention time
 (each array field, including `enchantSlots`, sliced rather than aliased, so a
 later live mutation of the still-tracked `playerCosmetics` record can't leak
-into an already-retained history entry). `DpsSummaryPanel.tsx`'s
+into an already-retained history entry). `DpsDetailPanel.tsx`'s
 `FrozenCharacterSprite` renders directly from that frozen record (`<Sprite
 objectType clothingDye accessoryDye>`), never through
 `CharacterSprite`/`useEntityRegistry`; `EnemyRow`'s `GearRow` similarly passes
@@ -1116,18 +1252,26 @@ returns whether anything display-relevant changed (a new entry, or the
 
 ### `LootPanel` (`panels/LootPanel.tsx`)
 
-For each tracked BagType (6, 8), an empty category is hidden; if both are empty
-the panel shows the shared `EmptyState`. A non-empty category renders its
-bag-color sprite (`bagIcon(bagType)`, the ordinary `<Sprite objectType>` path)
-plus a count, then every dropped item through **`ItemSprite`** (§4.2) — the
-rarity border from `entry.rarity` and the hover tooltip (item name/tier/class/
-description from `itemInfo`, plus the enchant list decoded from
-`entry.enchantCode` via `ItemSprite`'s `enchantCode` prop, the same path
-`DpsSummaryPanel` uses for frozen history) — **newest first** so the latest
-drop is visible without scrolling. The resolved item name (`itemName`, from
-`lootBagTypes`'s `itemNames` table) renders beside the sprite at
-`size === 'lg'`. Sized/registered via the standard checklist (§2):
-`registry.ts`'s `loot` entry, a default-layout instance in `PanelCanvas.tsx`.
+Both tracked BagTypes (6, 8) always render, even at a 0 count (issue #193) —
+no per-category hiding and no whole-panel `EmptyState`, so the panel's layout
+is stable across a session instead of jumping around as categories fill in.
+Each category's header is just its bag-color sprite (`bagIcon(bagType)`, the
+ordinary `<Sprite objectType>` path) plus the count — no "White Bag"/"Orange
+Bag" text, the sprite is recognizable on its own. Every dropped item renders
+through **`ItemSprite`** (§4.2) — the rarity border from `entry.rarity`, the
+shiny badge from `isShinyItemName(itemName(entry.objectType))` (§4.3), and the
+hover tooltip (item name/tier/class/description from `itemInfo`, plus the
+enchant list decoded from `entry.enchantCode` via `ItemSprite`'s
+`enchantCode` prop, the same path `DpsDetailPanel` uses for frozen history)
+— **newest first** so the latest drop is visible without scrolling. The
+resolved item name (`itemName`, from `lootBagTypes`'s `itemNames` table)
+renders beside the sprite at `size === 'lg'`. The scroll container carries a
+`p-1.5` inset so the leftmost/topmost item's rarity ring and shiny badge —
+both outset overlays that extend past the sprite's own box — aren't clipped
+by the container edge (issue #193; with no inset, `overflow-y-auto` clips
+exactly at the content edge). Sized/registered via the standard checklist
+(§2): `registry.ts`'s `loot` entry, a default-layout instance in
+`PanelCanvas.tsx`.
 
 ---
 

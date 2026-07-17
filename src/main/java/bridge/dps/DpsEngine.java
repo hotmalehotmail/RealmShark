@@ -166,7 +166,7 @@ public class DpsEngine {
      */
     public void setTime(long serverRealTimeMS) {
         time = serverRealTimeMS;
-        timePc = System.currentTimeMillis();
+        timePc = EngineClock.now();
         if (timePcFirst == -1) timePcFirst = timePc;
     }
 

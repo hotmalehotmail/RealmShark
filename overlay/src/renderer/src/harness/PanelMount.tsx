@@ -1,4 +1,9 @@
+import { useEffect } from 'react'
+import { DpsDetailSelectionProvider } from '../dps/DpsDetailSelectionProvider'
+import { useDpsDetailSelection } from '../dps/dpsDetailContext'
+import { useDpsHistory } from '../dps/useDpsHistory'
 import { ItemInfoProvider } from '../items/ItemInfoProvider'
+import { PanelSpawnContext } from '../panels/panelSpawn'
 import { PANEL_REGISTRY } from '../panels/registry'
 import { EntityRegistryProvider } from '../sprites/EntityRegistry'
 import { SpriteProvider } from '../sprites/SpriteProvider'
@@ -7,6 +12,34 @@ import { InteractiveContext } from '../ui/interactiveContext'
 interface PanelMountProps {
   type: string
   size: 'sm' | 'md' | 'lg'
+}
+
+/**
+ * `usePanelSpawn()` and `useDpsDetailSelection()` require a real provider
+ * (they throw otherwise, by design - see their doc comments), but this
+ * single-panel harness mount has no `PanelCanvas` to supply one. A no-op
+ * spawn API is enough for a static shot (nothing here simulates a click).
+ */
+const NOOP_PANEL_SPAWN = {
+  openPanel: (): void => {},
+  closePanel: (): void => {},
+  isOpen: (): boolean => false
+}
+
+/**
+ * Only for the `dpsDetail` shot: that panel renders nothing until a session
+ * is selected, which normally only happens via a `DpsSummaryPanel` row
+ * click - unsimulated here. Auto-selects the first retained history entry
+ * once the `gallery` fixture has produced one, so `npm run shots` captures
+ * real per-enemy/per-player content instead of the empty-selection state.
+ */
+function AutoSelectFirstDpsSession(): null {
+  const history = useDpsHistory()
+  const { selected, select } = useDpsDetailSelection()
+  useEffect(() => {
+    if (!selected && history.length > 0) select(history[0])
+  }, [history, selected, select])
+  return null
 }
 
 /**
@@ -38,25 +71,30 @@ function PanelMount({ type, size }: PanelMountProps): React.JSX.Element {
     <SpriteProvider>
       <EntityRegistryProvider>
         <ItemInfoProvider>
-          <InteractiveContext.Provider value={true}>
-            <div
-              data-panel-frame=""
-              data-panel-type={type}
-              data-panel-size={size}
-              className="flex flex-col overflow-hidden rounded-lg border border-edge bg-panel shadow-lg backdrop-blur-sm"
-              style={{ width, height }}
-            >
-              <div className="flex shrink-0 items-center justify-between bg-surface px-2 py-1">
-                <span className="truncate text-xs font-medium text-fg-muted">{spec.title}</span>
-              </div>
-              <div
-                data-panel-content=""
-                className="min-h-0 flex-1 overflow-auto p-2 text-sm text-fg"
-              >
-                <Content size={size} />
-              </div>
-            </div>
-          </InteractiveContext.Provider>
+          <DpsDetailSelectionProvider>
+            <PanelSpawnContext.Provider value={NOOP_PANEL_SPAWN}>
+              <InteractiveContext.Provider value={true}>
+                {type === 'dpsDetail' && <AutoSelectFirstDpsSession />}
+                <div
+                  data-panel-frame=""
+                  data-panel-type={type}
+                  data-panel-size={size}
+                  className="flex flex-col overflow-hidden rounded-lg border border-edge bg-panel shadow-lg backdrop-blur-sm"
+                  style={{ width, height }}
+                >
+                  <div className="flex shrink-0 items-center justify-between bg-surface px-2 py-1">
+                    <span className="truncate text-xs font-medium text-fg-muted">{spec.title}</span>
+                  </div>
+                  <div
+                    data-panel-content=""
+                    className="min-h-0 flex-1 overflow-auto p-2 text-sm text-fg"
+                  >
+                    <Content size={size} />
+                  </div>
+                </div>
+              </InteractiveContext.Provider>
+            </PanelSpawnContext.Provider>
+          </DpsDetailSelectionProvider>
         </ItemInfoProvider>
       </EntityRegistryProvider>
     </SpriteProvider>

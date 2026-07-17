@@ -20,6 +20,8 @@ interface PanelFrameProps {
   onCycleSize: (id: string) => void
   onTogglePin: (id: string) => void
   onBringToTop: (id: string) => void
+  /** Only rendered as a title-bar control when `spec.closable` is set. */
+  onClose: (id: string) => void
 }
 
 function PanelFrame({
@@ -30,7 +32,8 @@ function PanelFrame({
   onDrag,
   onCycleSize,
   onTogglePin,
-  onBringToTop
+  onBringToTop,
+  onClose
 }: PanelFrameProps): React.JSX.Element {
   const Content = spec.component
   const draggingRef = useRef(false)
@@ -222,6 +225,17 @@ function PanelFrame({
             >
               {panel.size}
             </Button>
+            {spec.closable && (
+              <Button
+                variant="ghost"
+                size="xs"
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={() => onClose(panel.id)}
+                title="Close"
+              >
+                ✕
+              </Button>
+            )}
           </div>
         ) : (
           panel.pinned && (

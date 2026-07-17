@@ -30,8 +30,16 @@ on:
     types: [opened, edited]
 
 permissions:
-  issues: write # create/apply labels (PR labels ride the issues API)
-  pull-requests: read # list open PRs + read bodies
+  issues: write # create the ui:signoff / ui:approved repo labels
+  # write, NOT read: adding a label to a PULL REQUEST requires the pull-requests
+  # write scope — `issues: write` alone is NOT enough, even though labels are an
+  # "issues" concept and `gh pr edit --add-label` nominally rides the issues API.
+  # With `pull-requests: read` the add returned 403 and (swallowed) silently failed,
+  # so the ui:signoff label never landed on the PR and the gatekeeper/sweep hold
+  # never engaged (PRs #198/#199 merged un-signed-off). Every other label-writing
+  # gate here (hygiene/fixloop/resume/conflict-watch) grants pull-requests: write
+  # for exactly this reason.
+  pull-requests: write # list open PRs, read bodies, AND add the signoff labels
 
 jobs:
   sync:
@@ -74,9 +82,14 @@ jobs:
               if printf '%s' "$B" \
                    | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+#[0-9]+' \
                    | grep -oE '[0-9]+' | grep -qx "$ISSUE_NUM"; then
-                gh pr edit "$P" --repo "$REPO" --add-label "$LABEL" >/dev/null 2>&1 || true
-                echo "Copied $LABEL from issue #$ISSUE_NUM to PR #$P."
                 FOUND=1
+                # Do NOT swallow the failure: a failed add must be LOUD, never a false
+                # "copied" — that masking is exactly what hid the pull-requests: read bug.
+                if gh pr edit "$P" --repo "$REPO" --add-label "$LABEL" 2>/tmp/s016_err; then
+                  echo "Copied $LABEL from issue #$ISSUE_NUM to PR #$P."
+                else
+                  echo "::error::Failed to add $LABEL to PR #$P (the gatekeeper/sweep signoff hold will NOT engage): $(tr '\n' ' ' </tmp/s016_err)"
+                fi
               fi
             done
             [ "$FOUND" -eq 0 ] && echo "No open PR closes issue #$ISSUE_NUM yet — the pull_request_target path syncs when one opens."
@@ -95,8 +108,13 @@ jobs:
             for L in ui:signoff ui:approved; do
               if printf '%s\n' "$ILABELS" | grep -qx "$L"; then
                 ensure_labels
-                gh pr edit "$PR_NUM" --repo "$REPO" --add-label "$L" >/dev/null 2>&1 || true
-                echo "PR #$PR_NUM closes issue #$ISS which carries $L — copied."
+                # Do NOT swallow the failure (see the issues path above): a false
+                # "copied" on a 403 is what let PRs #198/#199 merge un-signed-off.
+                if gh pr edit "$PR_NUM" --repo "$REPO" --add-label "$L" 2>/tmp/s016_err; then
+                  echo "PR #$PR_NUM closes issue #$ISS which carries $L — copied."
+                else
+                  echo "::error::Failed to add $L to PR #$PR_NUM (the gatekeeper/sweep signoff hold will NOT engage): $(tr '\n' ' ' </tmp/s016_err)"
+                fi
               fi
             done
           done

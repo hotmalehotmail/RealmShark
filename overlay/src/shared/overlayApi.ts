@@ -49,4 +49,11 @@ export interface OverlayApi {
   reportBug: () => Promise<BugReportResult>
   /** Same capture-ring dump as `reportBug`, minus opening the issue form - just write the file and reveal it. */
   captureNow: () => Promise<BugReportResult>
+  /**
+   * Tell the main process whether a text-editable element (input/textarea/
+   * contenteditable) currently has focus in the renderer, so the global Esc
+   * dismiss can skip while a panel's own Esc affordance (e.g. Console's
+   * search-clear) should handle it instead.
+   */
+  setEditableFocused: (focused: boolean) => void
 }

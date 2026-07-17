@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import type { PanelInstance } from '../../../shared/panels'
+import type { PanelInstance, PanelSize } from '../../../shared/panels'
 import type { SizePx } from './anchor'
+import { PanelSpawnContext } from './panelSpawn'
 import PanelFrame, { SIZE_CYCLE } from './PanelFrame'
 import { PANEL_REGISTRY } from './registry'
 
 const SAVE_DEBOUNCE_MS = 500
+
+/** Default anchor a programmatically-spawned panel (`usePanelSpawn().openPanel`) appears at. */
+const SPAWN_ANCHOR = { pos: 'tl' as const, x: 15, y: 12 }
 
 // Positions are chosen so the default 'md'-size panels don't overlap: status
 // sits top-left, dps below it with enough vertical clearance, and console
@@ -64,6 +68,16 @@ function windowSize(): SizePx {
   return { width: window.innerWidth, height: window.innerHeight }
 }
 
+// A `closable` (programmatically-spawned) panel's selection lives in a
+// non-persisted context (e.g. dpsDetailContext.ts), so persisting the panel
+// instance itself would restore an empty shell on next launch with no way to
+// restore what it was showing. Exclude such panels both when saving (so they
+// never reach panels.json) and when loading (so a panels.json written before
+// this fix - or by an older build - doesn't resurrect a stray empty one).
+function isPersistablePanel(panel: PanelInstance): boolean {
+  return !PANEL_REGISTRY[panel.type]?.closable
+}
+
 interface PanelCanvasProps {
   interactive: boolean
 }
@@ -76,7 +90,7 @@ function PanelCanvas({ interactive }: PanelCanvasProps): React.JSX.Element {
 
   useEffect(() => {
     window.overlay.getPanelLayout().then((saved) => {
-      setPanels(mergeWithDefaults(saved))
+      setPanels(mergeWithDefaults(saved?.filter(isPersistablePanel)))
       loadedRef.current = true
     })
 
@@ -91,7 +105,7 @@ function PanelCanvas({ interactive }: PanelCanvasProps): React.JSX.Element {
     if (!loadedRef.current) return
     clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => {
-      window.overlay.savePanelLayout(panels)
+      window.overlay.savePanelLayout(panels.filter(isPersistablePanel))
     }, SAVE_DEBOUNCE_MS)
     return () => clearTimeout(saveTimer.current)
   }, [panels])
@@ -107,32 +121,54 @@ function PanelCanvas({ interactive }: PanelCanvasProps): React.JSX.Element {
     })
   }
 
+  // See panelSpawn.ts's doc comment - lets a panel body (e.g. DpsSummaryPanel)
+  // open/close another panel on this same canvas without PanelCanvas needing
+  // to know anything about that panel's purpose.
+  const openPanel = (id: string, type: string, size: PanelSize = 'lg'): void => {
+    setPanels((prev) => {
+      const maxZ = Math.max(0, ...prev.map((p) => p.zIndex))
+      if (prev.some((p) => p.id === id)) {
+        return prev.map((p) => (p.id === id && p.zIndex !== maxZ ? { ...p, zIndex: maxZ + 1 } : p))
+      }
+      return [...prev, { id, type, anchor: SPAWN_ANCHOR, size, zIndex: maxZ + 1 }]
+    })
+  }
+
+  const closePanel = (id: string): void => {
+    setPanels((prev) => prev.filter((p) => p.id !== id))
+  }
+
+  const isOpen = (id: string): boolean => panels.some((p) => p.id === id)
+
   return (
-    <div className="relative h-full w-full">
-      {panels.map((panel) => {
-        const spec = PANEL_REGISTRY[panel.type]
-        if (!spec) return null
-        return (
-          <PanelFrame
-            key={panel.id}
-            panel={panel}
-            spec={spec}
-            canvasSize={canvasSize}
-            interactive={interactive}
-            onDrag={(id, x, y) => updatePanel(id, { anchor: { pos: 'tl', x, y } })}
-            onCycleSize={(id) => {
-              const current = panels.find((p) => p.id === id)
-              if (current) updatePanel(id, { size: SIZE_CYCLE[current.size] })
-            }}
-            onTogglePin={(id) => {
-              const current = panels.find((p) => p.id === id)
-              if (current) updatePanel(id, { pinned: !current.pinned })
-            }}
-            onBringToTop={bringToTop}
-          />
-        )
-      })}
-    </div>
+    <PanelSpawnContext.Provider value={{ openPanel, closePanel, isOpen }}>
+      <div className="relative h-full w-full">
+        {panels.map((panel) => {
+          const spec = PANEL_REGISTRY[panel.type]
+          if (!spec) return null
+          return (
+            <PanelFrame
+              key={panel.id}
+              panel={panel}
+              spec={spec}
+              canvasSize={canvasSize}
+              interactive={interactive}
+              onDrag={(id, x, y) => updatePanel(id, { anchor: { pos: 'tl', x, y } })}
+              onCycleSize={(id) => {
+                const current = panels.find((p) => p.id === id)
+                if (current) updatePanel(id, { size: SIZE_CYCLE[current.size] })
+              }}
+              onTogglePin={(id) => {
+                const current = panels.find((p) => p.id === id)
+                if (current) updatePanel(id, { pinned: !current.pinned })
+              }}
+              onBringToTop={bringToTop}
+              onClose={closePanel}
+            />
+          )
+        })}
+      </div>
+    </PanelSpawnContext.Provider>
   )
 }
 

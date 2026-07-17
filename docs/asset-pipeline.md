@@ -38,6 +38,8 @@ side of both.
 | `src/main/java/bridge/sprites/SpritePackService.java` | Builds/serves the versioned sprite-pack JSON (atlases + `table` + `maskTable` + `dyeTable`). |
 | `src/main/java/bridge/ObjectNames.java` | Triggers extraction off-thread at bridge start (best-effort). |
 | `src/main/java/bridge/LootBagTypes.java` | Resolves BagType 6/8 item categorization from `IdToAsset`; emits the `lootBagTypes` envelope (see "BagType" below). |
+| `src/main/java/assets/facts/AssetFactsExtractor.java` | Maintainer-run distiller: extracted XML dump → committed facts-only JSON (see "Asset facts" below). |
+| `src/main/java/assets/facts/AssetFacts.java` | Loads the committed `asset-facts.json` (classpath); ground truth for tests and `--fake` seeding. |
 | `src/main/java/bridge/ItemInfo.java` | Resolves item name/tier/class/description/damage from `IdToAsset`; emits the `itemInfo` envelope (see "Item info" below). |
 
 ## The problem: input path in, `assets/` out
@@ -347,12 +349,18 @@ depending on the object, means one of two things:
   (ST/self-found) bag - the two colors players actually screenshot, and the
   only two the overlay's Loot panel tracks (issue #105); other values (and no
   `<BagType>` at all) are common and simply untracked.
-- **On a `Class=Bag` object** (the ground-bag entity itself - a separate
+- **On a ground-bag entity, in theory** (the bag object itself - a separate
   object with its own `objectType`/sprite, not the item inside it): which
-  color bag *this entity is*. This is the same field, read the same way -
-  items and bag entities both self-report a BagType, so one generic parse
-  path serves both categorization and icon resolution with no separate
-  hand-maintained table.
+  color bag *this entity is*. **Real assets never do this** (confirmed against
+  an actual game dump for issue #189, after soaks #113/#144 first hit the
+  gap): no real bag entity carries a `<BagType>` element or `Class=Bag` at
+  all. The real entities are `Class=Container` and encode their color **only
+  in the id string** - `"Loot Bag <N>[ Boost]"`, where `N` *is* the BagType
+  (white = `"Loot Bag 6"` = objectType 1292, orange = `"Loot Bag 8"` = 1295,
+  boosted variants `"Loot Bag 6 Boost"` = 1296 / `"Loot Bag 8 Boost"` = 1727).
+  That id-name rule (`IdToAsset.lootBagEntityTypes()`) is now the primary
+  discovery mechanism, and the committed facts file (see "Asset facts" below)
+  pins it against every future game update.
 
 `parseChildObjects` captures the raw `<BagType>` string the same way it
 already captures `<Tier>`/`<SlotType>` (`AssetExtractor.java`'s
@@ -363,21 +371,21 @@ when blank/unparseable, decimal or `0x`-hex accepted - `IdToAsset.parseBagType`)
 exposed via:
 
 - **`getBagType(id)`** — the parsed BagType for any loaded id, or `-1`.
-- **`findBagIconObjectType(bagType)`** — linear-scans loaded objects for the
-  first `Class=Bag` entry whose own BagType matches, returning its id (the
-  bag entity's `objectType`, i.e. its sprite) or `null`. Called once per
-  tracked BagType when building the `lootBagTypes` envelope (below), not
-  hot-path, so the scan cost doesn't matter. Soak testing against the real
-  client (issue soak #113) showed this scan alone finds nothing on real game
-  assets — the ground-bag entity's own `Object` XML entry doesn't reliably
-  carry a matching `Class=Bag`+`BagType` pair the way an item's own BagType
-  does — leaving `lootBagIcons` empty and the Loot panel's category header
-  rendering no sprite at all. `findBagIconObjectType` now falls back to a
-  small hardcoded table (`KNOWN_BAG_ICON_IDS`: white=1292, orange=1295),
-  verified against the live game the same way upstream Tomato's `LootBags`
-  enum hardcodes them, used only when the scan comes up empty and only when
-  that id is actually a loaded object (so a minimal/synthetic asset set can't
-  return a dangling id).
+- **`lootBagEntityTypes()`** — every loaded object whose id name matches the
+  real assets' rule `"Loot Bag <N>[ Boost]"`, as `objectType → BagType` (N).
+  Discovered from an actual game dump in issue #189; the only mechanism that
+  finds the ground-bag entities on real assets, boosted variants included.
+- **`findBagIconObjectType(bagType)`** — resolves one representative bag
+  entity id (the Loot panel's category-header sprite) in three tiers: the
+  id-name rule above, preferring a non-boosted entity as canonical; then the
+  legacy `Class=Bag`+own-BagType scan (soak #113 showed it finds **nothing**
+  on real assets - see the BagType bullet above - but it's kept for pre-facts
+  synthetic entries); then the hardcoded `KNOWN_BAG_ICON_IDS` fallback
+  (white=1292, orange=1295, matching upstream Tomato's `LootBags` enum), used
+  only when that id is actually a loaded object (so a minimal/synthetic asset
+  set can't return a dangling id). Called once per tracked BagType when
+  building the `lootBagTypes` envelope (below), not hot-path, so the scan
+  cost doesn't matter.
 
 **`bridge/LootBagTypes.java`** is the only consumer: it builds `bagTypeTable`
 (item id → BagType, filtered to 6/8 and excluding `Class=Bag` entries so a bag
@@ -389,39 +397,98 @@ boosted variants, that the overlay's drop tracker watches for), `lootBagIcons`
 them as the synthetic `lootBagTypes` envelope - see
 [bridge-server.md](bridge-server.md#6-lootbagtypes--synthetic-loot-categorization)
 for the bridge-side broadcast mechanics and
-[architecture.md](architecture.md) for the exact wire shape. Deliberately
+[architecture.md](architecture.md) for the exact wire shape. `itemNames`
+carries a shiny item's raw display name verbatim, trailing `" Shiny"` suffix
+and all - `objectName` never consults the facts snapshot's `displayId` field
+(that's a fake-mode/test-only concept, see the Item facts bullet below), so a
+real asset load's `display`/`idName` columns are untouched by it. The
+overlay's Loot panel (`sprites/shiny.ts`, issue #193) derives shininess
+purely from that suffix client-side, with no dedicated `shiny` boolean added
+to this envelope. Deliberately
 **not** part of `SpritePackService`'s pack: this data needs only `IdToAsset`
 (no atlas), so it's available - and broadcast - independent of the sprite
 pack's atlas-readiness gate.
 
-`lootBagObjectTypes` inherited the same real-asset gap as the icon lookup
-above: on real game assets its `Class=Bag`+own-`BagType` scan finds nothing
-(soak #113), so before soak #144 it stayed **empty** on a real client — the
-overlay's `LootTracker` never had a `bagEntityTypes` entry to match against,
-so no ground-bag entity was ever recognized in `UpdatePacket.newObjects` and
-the Loot panel stayed empty even for a correctly-dropped item, no startup
-race required. `LootBagTypes.envelopeJson()` now always includes each tracked
-color's `findBagIconObjectType` result (real scan match, or its known-id
-fallback) in `lootBagObjectTypes` too — not just `lootBagIcons` — so the drop
-tracker is guaranteed to watch for at least that entity regardless of what
-the ground-bag entity's own XML self-reports. A boosted variant the scan
-*does* find (a `Class=Bag` entry that genuinely self-reports the right
-BagType) is kept in addition, not replaced.
+`lootBagObjectTypes` is built primarily from `lootBagEntityTypes()`'s id-name
+rule - the only mechanism that works on real assets, and the one that covers
+the **boosted** variants (1296/1727). History, because each layer exists for a
+soak: the original `Class=Bag`+own-`BagType` scan finds nothing on real assets
+(soak #113), so before soak #144 the set stayed **empty** on a real client —
+the overlay's `LootTracker` never had a `bagEntityTypes` entry to match
+against, so no ground-bag entity was ever recognized in
+`UpdatePacket.newObjects` and the Loot panel stayed empty even for a
+correctly-dropped item. Soak #144's fix folded each tracked color's
+`findBagIconObjectType` resolution (then: known-id fallback) into
+`lootBagObjectTypes`, which covered exactly **one** entity per color - so a
+boosted white/orange bag drop was still silently invisible until the id-name
+rule (issue #189) recognized the full real entity set. The legacy `Class=Bag`
+scan and the per-color icon fold both remain as additional layers, so no
+prior behavior regressed.
 
 > **Non-obvious fact — `IdToAsset.registerFake` (real assets don't exist in
 > CI or most dev sandboxes).** Real game asset XML only exists on a machine
 > with RotMG installed (see "The problem" above) - `--fake` bridge mode and
 > CI have neither the game nor a prior extraction on disk, so `IdToAsset`
 > would otherwise never carry BagType data and the Loot panel could never be
-> demonstrated headlessly. `IdToAsset.registerFake(id, clazz, bagType)`
-> inserts a synthetic entry directly (bypassing `ObjectID.list` entirely) -
-> `FakePacketSource` registers a couple of `Class=Bag` icon ids and a handful
-> of item ids with known BagTypes at startup (see `bridge-server.md` §7), the
-> same "arbitrary plausible objectType" convention the rest of that class
-> already uses for weapon/skin/equipment ids. Entries registered this way are
-> tracked in a separate `fakeEntries` map and re-applied after every
-> `reloadAssets()` call (real or fake), so they survive regardless of
-> call-order races with `ObjectNames.init`'s own background reload.
+> demonstrated headlessly. `IdToAsset.registerFake(id, clazz, bagType)` /
+> `registerFakeNamed(id, idName, clazz, bagType)` insert a synthetic entry
+> directly (bypassing `ObjectID.list` entirely). Since issue #189,
+> `FakePacketSource` seeds these **from the committed facts file** (see
+> "Asset facts" below): every real tracked-color bag entity with its real id
+> name and real class (`Container` - so, like the live client, only the
+> id-name rule can discover them), plus real item ids for the white/orange/
+> filler demo drops - the old invented-value registrations (`Class=Bag`
+> entities that validated a scan real assets never satisfy - the loot saga's
+> circular-validation trap) remain only as a fallback for a jar built without
+> the facts resource. Entries registered this way are tracked in a separate
+> `fakeEntries` map and re-applied after every `reloadAssets()` call (real or
+> fake), so they survive regardless of call-order races with
+> `ObjectNames.init`'s own background reload; tests start hermetic via
+> `IdToAsset.clearFakeEntries()`.
+
+### Asset facts — the committed real-asset ground truth (issue #189, PRD §7.4)
+
+`IdToAsset`/`LootBagTypes`/`ParseEnchants`/`CharacterClass` read the game's
+extracted XML at runtime from a real install, so their real behavior was
+unobservable headless — which is precisely what produced the loot saga (issue
+#105 → soaks #113/#122/#136/#144): fake test data was generated *from the
+same assumptions under test*, and four live-game round-trips paid for it. The
+**asset facts** pipeline closes that loop:
+
+- **`AssetFactsExtractor`** (run via `./gradlew extractFacts
+  -PxmlDir=<extracted-xml-dir> [-Pbuild=<exalt build id>]`) distills an
+  extracted XML dump into `src/main/resources/assets/facts/asset-facts.json`
+  (~1.2 MB): **only the fields the code consumes** — ids, names, numeric
+  fields; no sprite/art data, no shipped assets. Sections: `items` (BagType /
+  Equipment objects: name, displayId, bagType, tier, slotType, first-projectile
+  damage), `entities` (the ground-bag containers with the id-name rule fields:
+  bagType-from-suffix, boosted flag, texture, minimap color), `enchants`
+  (id/type — **attributes** on real assets — displayId, description, the DPS
+  damage/rate mutators `ParseEnchants` multiplies), `classes` (the 8 stat
+  maxima from `max` attributes + the `Equipment` list `CharacterClass` reads).
+  Provenance fields (`gameBuild`, `extractedAt`, `sourceHash`) make staleness
+  detectable. Graceful degradation per `AssetProbe`'s contract: no dump → a
+  clear "nothing extracted" status (exit 2 from `main`), never a crash.
+- **The dump stays private.** The XML itself is DECA's content and is never
+  committed or attached anywhere public (PRD non-goal); the maintainer keeps a
+  local copy and reruns the extractor per game update, committing only the
+  refreshed facts JSON. The extractor lives in-repo so that rerun is one
+  command.
+- **Consumers.** (1) JUnit ground-truth tests (`AssetFactsBundledTest`,
+  `LootBagTypesTest`'s facts-seeded case) run real-asset semantics in CI — a
+  facts refresh that breaks an encoded invariant (e.g. the bag id-name rule)
+  fails in CI instead of in a soak. (2) `FakePacketSource` seeds
+  `IdToAsset.registerFake*` from the facts (real bag entities, real item ids),
+  so `--fake` traffic converges toward live behavior — see the
+  `registerFake` note above. (3) The extractor's structure expectations are
+  themselves pinned by `AssetFactsExtractorTest` against synthetic fragments
+  mirroring verified real-XML quirks (inconsistent hex `type` attributes,
+  attribute-style enchant ids, `max`-attribute stat maxima).
+- **What it already caught:** real bag entities are `Class=Container` with no
+  `BagType` (killing the `Class=Bag` scan assumption for good), and the
+  boosted bag variants (1296/1727) existed that the pre-#189 pipeline never
+  recognized — a boosted white/orange drop was invisible to the Loot panel's
+  drop tracker.
 
 ### The asset probe — enchant pip/icon extraction feasibility (issue #107)
 

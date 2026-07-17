@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { BridgeStatus } from '../../shared/ipc'
 import { ingestMainEntry } from './consoleLog'
+import { DpsDetailSelectionProvider } from './dps/DpsDetailSelectionProvider'
 import { ItemInfoProvider } from './items/ItemInfoProvider'
 import PanelCanvas from './panels/PanelCanvas'
 import { EntityRegistryProvider } from './sprites/EntityRegistry'
@@ -14,6 +15,11 @@ const STATUS_STYLES: Record<BridgeStatus, string> = {
 }
 
 const ATTACH_TOAST_MS = 2500
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
+}
 
 function App(): React.JSX.Element {
   const [status, setStatus] = useState<BridgeStatus>('connecting')
@@ -45,13 +51,38 @@ function App(): React.JSX.Element {
     }
   }, [])
 
+  // Tell the main process whether a text-editable element has focus, so its
+  // global Esc-dismiss handler (main/index.ts) can skip while a panel's own
+  // Esc affordance - e.g. ConsolePanel clearing its search box - should
+  // handle the key instead of the whole overlay dismissing to click-through.
+  useEffect(() => {
+    const onFocusIn = (e: FocusEvent): void => {
+      if (isEditableTarget(e.target)) window.overlay.setEditableFocused(true)
+    }
+    const onFocusOut = (e: FocusEvent): void => {
+      if (isEditableTarget(e.target)) window.overlay.setEditableFocused(false)
+    }
+    document.addEventListener('focusin', onFocusIn)
+    document.addEventListener('focusout', onFocusOut)
+    return () => {
+      document.removeEventListener('focusin', onFocusIn)
+      document.removeEventListener('focusout', onFocusOut)
+    }
+  }, [])
+
   return (
     <SpriteProvider>
       <EntityRegistryProvider>
         <ItemInfoProvider>
-          <InteractiveContext.Provider value={interactive}>
-            <AppShell status={status} interactive={interactive} showAttachToast={showAttachToast} />
-          </InteractiveContext.Provider>
+          <DpsDetailSelectionProvider>
+            <InteractiveContext.Provider value={interactive}>
+              <AppShell
+                status={status}
+                interactive={interactive}
+                showAttachToast={showAttachToast}
+              />
+            </InteractiveContext.Provider>
+          </DpsDetailSelectionProvider>
         </ItemInfoProvider>
       </EntityRegistryProvider>
     </SpriteProvider>

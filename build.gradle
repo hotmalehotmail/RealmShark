@@ -43,6 +43,10 @@ test {
     testLogging {
         events 'passed', 'skipped', 'failed'
     }
+    // The baseline-session capture-replay fixture is ~50MB decompressed / 24k envelopes;
+    // Gson's JsonElement trees for that many envelopes need more than the default 512MB
+    // worker heap (see docs/dps-engine.md, "Capture replay (Java)").
+    maxHeapSize = '2g'
 }
 
 // Run the WebSocket bridge without disturbing the library's main class.
@@ -67,6 +71,20 @@ task probeAssets(type: JavaExec) {
     classpath = sourceSets.main.runtimeClasspath
     mainClass = 'bridge.PacketBridge'
     args '--probe-assets'
+}
+
+// Maintainer-run distiller (issue #189, PRD "Agent Observability" §7.4):
+// boils an extracted game XML dump down to the committed facts-only JSON
+// (src/main/resources/assets/facts/asset-facts.json). The dump itself is
+// private and never committed - rerun this per game update, then commit the
+// refreshed facts file.
+//   ./gradlew extractFacts -PxmlDir=$HOME/rotmg-assets/xml [-Pbuild=<exalt build id>]
+task extractFacts(type: JavaExec) {
+    group = 'application'
+    description = 'Distills an extracted assets/xml dump into the committed asset-facts.json (assets.facts.AssetFactsExtractor).'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'assets.facts.AssetFactsExtractor'
+    args '--xml', (findProperty('xmlDir') ?: ''), '--build', (findProperty('build') ?: '')
 }
 
 // Self-contained fat jar for just the bridge, so the overlay app can bundle
