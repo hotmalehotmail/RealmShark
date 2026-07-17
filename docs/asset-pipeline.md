@@ -482,75 +482,57 @@ same assumptions under test*, and four live-game round-trips paid for it. The
   recognized — a boosted white/orange drop was invisible to the Loot panel's
   drop tracker.
 
-### UI art (enchant pips, icons) — why the pipeline cannot reach it
+### UI art (enchant pips, icons) — where it lives and why the base pipeline skips it
 
-The overlay's enchant rarity feature (issue #107 part 1 — see
-`docs/overlay-renderer.md` §4.1) only needs an item's enchant *count*, which
+The overlay's enchant-rarity feature (issue #107 part 1 — see
+`docs/overlay-renderer.md` §4.1) needs only an item's enchant *count*, which
 `bridge.dps.ParseEnchants.extractEnchantIds` decodes headlessly with no game
-assets. Rendering the game's own **pip** art is a different problem, and the
-answer — measured against a real `resources.assets` on 2026-07-17 — is that
-**the current pipeline structurally cannot reach any UI art**. The facts, so
-nobody re-derives them:
+assets. The game's own rarity **pip** art is a separate matter: it lives in the
+game's single Unity `SpriteAtlas`, **"GUI Atlas"**, which the four-atlas
+pipeline never touches. Measured against a real `resources.assets`
+(Unity `6000.0.58f2`), here is where UI art sits and why the base pipeline
+skips it:
 
-**The game ships 231 `Texture2D` assets. We extract 4.**
+**The game ships 231 `Texture2D` assets; the base pipeline extracts 4.**
 `UnityExtractor.extractSprites` writes only the four
 `Texture2D.SPRITESHEET_NAMES` atlases (`characters`, `characters_masks`,
-`groundTiles`, `mapObjects`). Those four are extractable because their pixels
-are **embedded** (`image_data_size != 0` — only 12 textures are). Measured
-breakdown of the 231:
+`groundTiles`, `mapObjects`) — they happen to have **embedded** pixels. The
+rest (12 + 197 + 22 = 231):
 
-| `image_data_size` | count | meaning |
+| pixel storage | count | notes |
 | --- | --- | --- |
-| `>= 4` | 12 | embedded — readable today (the 4 atlases are here) |
-| `== 0`, real `path` + `size > 0` | **197** | streamed to `resources.assets.resS` — readable *if* the loader existed |
-| `== 1` | **6** | **mis-parsed** — see below |
-| `== 0`, no path | 16 | no pixel data (e.g. `Font Texture` 0x0) |
+| embedded (`image_data_size != 0`) | 12 | readable today — the 4 extracted atlases are here |
+| streamed to `resources.assets.resS` | 197 | valid `m_StreamData` pointer, but `Texture2D` does **not** currently read streamed pixels (`streamingInfo()` is parsed then unused — a latent gap that never bites, because the 4 atlases the pipeline needs are all embedded) |
+| orphan — empty `StreamingInfo` | 22 | no self-pointer to pixels; **GUI Atlas** + the TextMeshPro font SDF atlases. Pixels located out-of-band |
 
-**The 197 streamed textures are unreachable only because the loader was never
-written.** `Texture2D` reads `streamingInfo()` (offset/size/path) and then
-does nothing with it — the body is commented-out Python transcribed from
-UnityPy during the port (`self.m_StreamData.path`, `self.assets_file`). The
-pointers are perfectly good: `Checkmark 64x64 → path=resources.assets.resS
-off=33554432 streamSize=21844`. (Note `21844 == 16384 × 4/3`: the stream size
-covers the whole mipmap chain, so a loader must take only the first mip.)
-Implementing it means: resolve `path` next to `resources.assets`, seek
-`offset`, read the first mip, hand the bytes to the existing
-`DataBufferByte`→`Raster`→flip→`ImageIO` path, which needs no changes.
+**GUI Atlas.** One `SpriteAtlas` object, backing `Texture2D`
+`sactx-0-4096x2048-Uncompressed-GUI Atlas-…` (4096×2048 RGBA32, **668**
+`m_RenderDataMap` entries). It is outside the RotMG sprite system — not indexed
+by `spritesheetf`, so `SpriteFlatBuffer`/`SpritePackService` cannot resolve it.
+Its texture record has **empty `StreamingInfo`** (`image_data_size=1`,
+`offset=0`, `size=0`, `path=""`). This is **not a parse bug** — two independent
+decoders agree on the bytes, and the existing `SpriteAtlas`/`Texture2D` parse
+is byte-correct for this Unity version; the record simply carries no pointer to
+its own pixels (one of the 22 orphans). The pixels physically sit at **offset 0
+of `resources.assets.resS`** (`4096×2048×4` bytes = the first mip), found by
+elimination as the single large unclaimed `.resS` region — a **fragile**
+locator, with no metadata-driven alternative (all 668 `RenderDataMap` texture
+PPtrs resolve back to the same orphan texture; a game repack could move it).
 
-**UI art lives in a Unity SpriteAtlas, not in `spritesheetf`.** The game has
-exactly **one** `SpriteAtlas` object: `GUI Atlas`
-(`sactx-0-4096x2048-Uncompressed-GUI Atlas-…`), carrying **668
-`m_RenderDataMap` entries** — the UI sprites. It is entirely outside the
-RotMG sprite system: not indexed by `spritesheetf`, so no sheet name will
-ever match it, and `SpriteFlatBuffer`/`SpritePackService` cannot resolve it.
+**Names + rects are recoverable.** Unity `Sprite` objects (ClassID 213, ~1083
+of them) are skipped by `Resources.parseAllResources` today, but each carries a
+`name` + `m_RenderDataKey` (GUID + fileID) that joins to the atlas's
+`RenderDataMap`, yielding `name → textureRect` for all **668/668** sprites (no
+PPtr resolution needed). The rarity pips are named **`RarityIcon_1..4`**
+(green / blue / purple / gold = tiers 1–4) and the shiny indicator
+**`shiny_item_icon`** — so the game's own asset names both confirm the pips and
+validate the tier→colour mapping in
+`overlay/src/renderer/src/sprites/enchantRarity.ts`.
 
-**But `Texture2D` mis-parses the GUI Atlas record** — it is one of the 6 that
-come out with `image_data_size == 1`, an empty stream `path`, and
-`offset == 0 / size == 0`. That is not a valid streamed texture; the reader
-desyncs somewhere in that record. **So where the GUI Atlas pixels live is
-currently unknown** — obtaining `resources.assets.resS` would not help until
-the desync is fixed. Do not assume the `.resS` is sufficient.
-
-**And SpriteAtlas entries have no names.** `RenderDataMap` is keyed by a
-16-byte GUID + fileID and carries only `textureRect` — the sprite *name*
-lives on Unity `Sprite` objects, which `Resources.parseAllResources` does not
-parse (its switch handles AudioClip/BuildSettings/GameObject/TextAsset/
-SpriteAtlas/MonoScript/Texture2D). So even fully decoded, GUI Atlas yields
-668 anonymous rects.
-
-**Whether the pips are in GUI Atlas is unconfirmed** — it is an inference by
-elimination (pips are UI; the game has exactly one UI atlas; the pip is not in
-`spritesheetf`, checked by template-matching a real in-game screenshot against
-all 35,152 sprites of atlases 1 and 4). Nobody has looked inside it.
-
-**Reaching UI art is therefore a four-part feature, not a lookup:** implement
-the streamed-texture (`m_StreamData` → `.resS`) path in `Texture2D` (unlocks
-the 197 that already parse cleanly); fix the reader desync on the 6 bad
-records, GUI Atlas among them; parse Unity `Sprite` objects to recover
-`GUID → name`; and extend the sprite pack past its four-atlas assumption
-(`SpritePackService.ATLASES`). Step 1 alone unlocks 197 textures — every
-standalone UI icon (`Checkmark`, `icon_*`, `UntieredItems`, …) — without
-touching GUI Atlas at all.
+**Wiring this into the overlay** — a `Sprite` (213) parser + the GUID join, the
+GUI Atlas offset-0 pixel read, an extensible `uiSprites` sprite-pack section,
+and the renderer change — is tracked in **#205** (bridge/backend) and **#206**
+(overlay/frontend); the implementing PR will document the mechanism here.
 
 > **Note on sprite identity.** A sprite has no name — only a
 > `(sheetName, index)` address, where the sheet is the *source art file* in
@@ -736,9 +718,11 @@ mask-compositing model, and the renderer side are documented in
   color, or (on a `Class=Bag` object) a bag entity's self-identified color —
   see "BagType — loot categorization" above. `IdToAsset.registerFake` is the
   seam that makes it demonstrable with no game installed.
-- **The pipeline sees 4 of the game's 231 textures.** Only 12 have embedded
-  pixels; 197 are streamed to `resources.assets.resS` and unreadable because
-  the `m_StreamData` loader was never written (commented-out UnityPy Python),
-  and 6 — including `GUI Atlas` — mis-parse outright. All UI art is out of
-  reach. See "UI art (enchant pips, icons)" above before promising any feature
-  that needs a game icon.
+- **The base pipeline extracts 4 of the game's 231 textures.** Only 12 have
+  embedded pixels; 197 stream to `resources.assets.resS` (the extractor doesn't
+  currently read streamed pixels — a latent gap that never bites, since the 4
+  needed atlases are embedded); the remaining 22 are orphans with empty
+  `StreamingInfo`, `GUI Atlas` among them (its pixels sit at `.resS` offset 0).
+  UI art lives in `GUI Atlas`; wiring it in is tracked in #205/#206 — see "UI
+  art (enchant pips, icons)" above before promising any feature that needs a
+  game icon.
