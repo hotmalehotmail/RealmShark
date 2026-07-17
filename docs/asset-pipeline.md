@@ -495,35 +495,62 @@ nobody re-derives them:
 **The game ships 231 `Texture2D` assets. We extract 4.**
 `UnityExtractor.extractSprites` writes only the four
 `Texture2D.SPRITESHEET_NAMES` atlases (`characters`, `characters_masks`,
-`groundTiles`, `mapObjects`). Those four are extractable because they are
-among the **18 textures with embedded pixel data**; the other **213 are
-streamed** — their pixels live in a sibling `resources.assets.resS`, and
-`Texture2D.java` cannot read them: the `m_StreamData` path is commented out
-(`if (image_data_size == 0 && path != null)`, the loader body left as `//`
-lines). A streamed texture parses to `image_data_size == 0` and is silently
-skipped.
+`groundTiles`, `mapObjects`). Those four are extractable because their pixels
+are **embedded** (`image_data_size != 0` — only 12 textures are). Measured
+breakdown of the 231:
+
+| `image_data_size` | count | meaning |
+| --- | --- | --- |
+| `>= 4` | 12 | embedded — readable today (the 4 atlases are here) |
+| `== 0`, real `path` + `size > 0` | **197** | streamed to `resources.assets.resS` — readable *if* the loader existed |
+| `== 1` | **6** | **mis-parsed** — see below |
+| `== 0`, no path | 16 | no pixel data (e.g. `Font Texture` 0x0) |
+
+**The 197 streamed textures are unreachable only because the loader was never
+written.** `Texture2D` reads `streamingInfo()` (offset/size/path) and then
+does nothing with it — the body is commented-out Python transcribed from
+UnityPy during the port (`self.m_StreamData.path`, `self.assets_file`). The
+pointers are perfectly good: `Checkmark 64x64 → path=resources.assets.resS
+off=33554432 streamSize=21844`. (Note `21844 == 16384 × 4/3`: the stream size
+covers the whole mipmap chain, so a loader must take only the first mip.)
+Implementing it means: resolve `path` next to `resources.assets`, seek
+`offset`, read the first mip, hand the bytes to the existing
+`DataBufferByte`→`Raster`→flip→`ImageIO` path, which needs no changes.
 
 **UI art lives in a Unity SpriteAtlas, not in `spritesheetf`.** The game has
 exactly **one** `SpriteAtlas` object: `GUI Atlas`
-(`sactx-0-4096x2048-Uncompressed-GUI Atlas-…`, 4096×2048, RGBA32, streamed).
-It carries **668 `m_RenderDataMap` entries** — the UI sprites. This atlas is
-entirely outside the RotMG sprite system: it is not indexed by
-`spritesheetf`, so no sheet name will ever match it, and
-`SpriteFlatBuffer`/`SpritePackService` cannot resolve it.
+(`sactx-0-4096x2048-Uncompressed-GUI Atlas-…`), carrying **668
+`m_RenderDataMap` entries** — the UI sprites. It is entirely outside the
+RotMG sprite system: not indexed by `spritesheetf`, so no sheet name will
+ever match it, and `SpriteFlatBuffer`/`SpritePackService` cannot resolve it.
+
+**But `Texture2D` mis-parses the GUI Atlas record** — it is one of the 6 that
+come out with `image_data_size == 1`, an empty stream `path`, and
+`offset == 0 / size == 0`. That is not a valid streamed texture; the reader
+desyncs somewhere in that record. **So where the GUI Atlas pixels live is
+currently unknown** — obtaining `resources.assets.resS` would not help until
+the desync is fixed. Do not assume the `.resS` is sufficient.
 
 **And SpriteAtlas entries have no names.** `RenderDataMap` is keyed by a
 16-byte GUID + fileID and carries only `textureRect` — the sprite *name*
 lives on Unity `Sprite` objects, which `Resources.parseAllResources` does not
 parse (its switch handles AudioClip/BuildSettings/GameObject/TextAsset/
-SpriteAtlas/MonoScript/Texture2D). So even with the `.resS` decoded, GUI
-Atlas yields 668 anonymous rects.
+SpriteAtlas/MonoScript/Texture2D). So even fully decoded, GUI Atlas yields
+668 anonymous rects.
 
-**Reaching UI art is therefore a three-part feature, not a lookup:**
-implement the streamed-texture (`m_StreamData` → `.resS`) path in
-`Texture2D`; parse Unity `Sprite` objects to recover `GUID → name`; extend
-the sprite pack past its four-atlas assumption
-(`SpritePackService.ATLASES`). That would unlock all 231 textures and every
-UI icon in the game.
+**Whether the pips are in GUI Atlas is unconfirmed** — it is an inference by
+elimination (pips are UI; the game has exactly one UI atlas; the pip is not in
+`spritesheetf`, checked by template-matching a real in-game screenshot against
+all 35,152 sprites of atlases 1 and 4). Nobody has looked inside it.
+
+**Reaching UI art is therefore a four-part feature, not a lookup:** implement
+the streamed-texture (`m_StreamData` → `.resS`) path in `Texture2D` (unlocks
+the 197 that already parse cleanly); fix the reader desync on the 6 bad
+records, GUI Atlas among them; parse Unity `Sprite` objects to recover
+`GUID → name`; and extend the sprite pack past its four-atlas assumption
+(`SpritePackService.ATLASES`). Step 1 alone unlocks 197 textures — every
+standalone UI icon (`Checkmark`, `icon_*`, `UntieredItems`, …) — without
+touching GUI Atlas at all.
 
 > **Note on sprite identity.** A sprite has no name — only a
 > `(sheetName, index)` address, where the sheet is the *source art file* in
@@ -709,8 +736,9 @@ mask-compositing model, and the renderer side are documented in
   color, or (on a `Class=Bag` object) a bag entity's self-identified color —
   see "BagType — loot categorization" above. `IdToAsset.registerFake` is the
   seam that makes it demonstrable with no game installed.
-- **The pipeline sees 4 of the game's 231 textures** — the four with embedded
-  pixel data. The other 213 are streamed into `resources.assets.resS`, which
-  `Texture2D` cannot read, so all UI art (including `GUI Atlas`) is out of
+- **The pipeline sees 4 of the game's 231 textures.** Only 12 have embedded
+  pixels; 197 are streamed to `resources.assets.resS` and unreadable because
+  the `m_StreamData` loader was never written (commented-out UnityPy Python),
+  and 6 — including `GUI Atlas` — mis-parse outright. All UI art is out of
   reach. See "UI art (enchant pips, icons)" above before promising any feature
   that needs a game icon.
