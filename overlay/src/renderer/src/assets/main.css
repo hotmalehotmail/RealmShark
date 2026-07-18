@@ -80,3 +80,18 @@ html.panel-dragging [data-panel-frame] {
   -webkit-backdrop-filter: none !important;
   box-shadow: none !important;
 }
+
+/*
+ * A <select>'s open option list renders in a separate native OS popup, not
+ * inside the app's own translucent chrome - so a select's `bg-surface-2`
+ * (a partial-alpha white fill meant to sit over the game) never reaches it,
+ * and the popup falls back to the OS default (opaque white), while `option`
+ * still inherits this app's white `--color-fg` text: white-on-white,
+ * unreadable (soak #232). Options need their own explicit, opaque
+ * background/text pair - `--color-shell` is already the token for solid,
+ * non-translucent surfaces (ConfigWindow's window background).
+ */
+select option {
+  background-color: var(--color-shell);
+  color: var(--color-fg);
+}
