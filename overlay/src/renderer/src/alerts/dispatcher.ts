@@ -54,7 +54,7 @@ export function dispatchEvent(
     if (kind.eventType !== event.type) continue
     const rule = resolveRuleSettings(kind, settings)
     if (!rule.enabled) continue
-    const payload = kind.match(event, rule.params)
+    const payload = kind.match(event, rule.params, settings)
     if (!payload) continue
     if (kind.cooldownMs != null) {
       const last = lastFiredAt.get(kind.id)

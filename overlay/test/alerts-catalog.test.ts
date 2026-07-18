@@ -19,6 +19,7 @@ function lootDrop(overrides: Partial<LootDropEvent> = {}): LootDropEvent {
     slotType: 0,
     enchantCount: 0,
     enchantCode: '',
+    bagIcon: null,
     ...overrides
   }
 }
@@ -31,21 +32,128 @@ describe('catalog (issue #218)', () => {
   })
 
   it('whiteBag matches only bagType 6', () => {
-    expect(whiteBag.match(lootDrop({ bagType: 6 }), {})).not.toBeNull()
-    expect(whiteBag.match(lootDrop({ bagType: 8 }), {})).toBeNull()
+    expect(whiteBag.match(lootDrop({ bagType: 6 }), {}, EMPTY_SETTINGS)).not.toBeNull()
+    expect(whiteBag.match(lootDrop({ bagType: 8 }), {}, EMPTY_SETTINGS)).toBeNull()
   })
 
   it('orangeBag matches only bagType 8', () => {
-    expect(orangeBag.match(lootDrop({ bagType: 8 }), {})).not.toBeNull()
-    expect(orangeBag.match(lootDrop({ bagType: 6 }), {})).toBeNull()
+    expect(orangeBag.match(lootDrop({ bagType: 8 }), {}, EMPTY_SETTINGS)).not.toBeNull()
+    expect(orangeBag.match(lootDrop({ bagType: 6 }), {}, EMPTY_SETTINGS)).toBeNull()
   })
 
-  it('whiteBag payload body includes the enchant count when present', () => {
-    const payload = whiteBag.match(
-      lootDrop({ bagType: 6, itemName: 'Doom Bow', enchantCount: 3 }),
-      {}
-    )
-    expect(payload?.body).toBe('Doom Bow (3 enchants)')
+  describe('loot-bag spoiler avoidance (soak #234)', () => {
+    it('whiteBag/orangeBag payloads do not reveal the item name or its icon by default', () => {
+      const payload = whiteBag.match(
+        lootDrop({
+          bagType: 6,
+          itemName: 'Doom Bow',
+          enchantCount: 3,
+          itemType: 1210,
+          bagIcon: 555
+        }),
+        {},
+        EMPTY_SETTINGS
+      )
+      expect(payload?.title).toBe('White bag!')
+      expect(payload?.body).not.toContain('Doom Bow')
+      // Shows the bag's own icon, not the item's.
+      expect(payload?.icon).toBe(555)
+    })
+
+    it('falls back to no icon when the bag icon has not resolved yet', () => {
+      const payload = whiteBag.match(
+        lootDrop({ bagType: 6, itemType: 1210, bagIcon: null }),
+        {},
+        EMPTY_SETTINGS
+      )
+      expect(payload?.icon).toBeUndefined()
+    })
+
+    it('reveals the item when the drop also fires enchantedDrop via a specific item-name override', () => {
+      const settings: NotificationsSettings = {
+        enabled: true,
+        volume: 1,
+        rules: {
+          enchantedDrop: {
+            enabled: true,
+            banner: true,
+            sound: true,
+            params: { tier: 4, slotTypeOverrides: {}, itemOverrides: { 'doom bow': 1 } }
+          }
+        }
+      }
+      const payload = whiteBag.match(
+        lootDrop({ bagType: 6, itemName: 'Doom Bow', itemType: 1210, enchantCount: 1 }),
+        {},
+        settings
+      )
+      expect(payload?.body).toBe('Doom Bow (1 enchant)')
+      expect(payload?.icon).toBe(1210)
+    })
+
+    it('reveals the item when the drop also fires enchantedDrop via a SlotType-category override', () => {
+      const settings: NotificationsSettings = {
+        enabled: true,
+        volume: 1,
+        rules: {
+          enchantedDrop: {
+            enabled: true,
+            banner: true,
+            sound: true,
+            params: { tier: 4, slotTypeOverrides: { 3: 1 }, itemOverrides: {} }
+          }
+        }
+      }
+      const payload = orangeBag.match(
+        lootDrop({ bagType: 8, slotType: 3, itemType: 1210, enchantCount: 1 }),
+        {},
+        settings
+      )
+      expect(payload?.body).toContain('enchant')
+      expect(payload?.icon).toBe(1210)
+    })
+
+    it('does NOT reveal the item when only the global enchantedDrop tier matched (no override)', () => {
+      const settings: NotificationsSettings = {
+        enabled: true,
+        volume: 1,
+        rules: {
+          enchantedDrop: {
+            enabled: true,
+            banner: true,
+            sound: true,
+            params: { tier: 1, slotTypeOverrides: {}, itemOverrides: {} }
+          }
+        }
+      }
+      const payload = whiteBag.match(
+        lootDrop({ bagType: 6, itemName: 'Doom Bow', enchantCount: 4 }),
+        {},
+        settings
+      )
+      expect(payload?.body).not.toContain('Doom Bow')
+    })
+
+    it('does NOT reveal the item when enchantedDrop is disabled, even with a matching override configured', () => {
+      const settings: NotificationsSettings = {
+        enabled: true,
+        volume: 1,
+        rules: {
+          enchantedDrop: {
+            enabled: false,
+            banner: true,
+            sound: true,
+            params: { tier: 4, slotTypeOverrides: {}, itemOverrides: { 'doom bow': 1 } }
+          }
+        }
+      }
+      const payload = whiteBag.match(
+        lootDrop({ bagType: 6, itemName: 'Doom Bow', enchantCount: 1 }),
+        {},
+        settings
+      )
+      expect(payload?.body).not.toContain('Doom Bow')
+    })
   })
 
   describe('enchantedDrop threshold resolution', () => {

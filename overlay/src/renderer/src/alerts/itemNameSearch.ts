@@ -8,7 +8,12 @@
  *   on every keystroke regardless of what was typed - the reported "laggy"
  *   item-override editor. This only ever returns up to `limit` matches, so
  *   the editor renders a handful of suggestion rows, not thousands of
- *   `<option>`s.
+ *   `<option>`s. Still scores every name against the query (soak #234:
+ *   "optimize the search bar performance further"), so it also refuses to
+ *   search at all below `MIN_QUERY_LENGTH` characters - a 1-2 character query
+ *   matches thousands of the ~11.4k names anyway (useless ranking, worst-case
+ *   scoring cost) - and `EnchantedDropParamsEditor` additionally debounces
+ *   the query so a fast typist doesn't re-run a scan on every keystroke.
  * - `buildDisplayNameIndex` resolves an already-stored override key (always
  *   lowercased - see `EnchantedDropParamsEditor.setItemOverride`) back to its
  *   canonical, properly-cased catalog name, so the override list shows e.g.
@@ -42,14 +47,17 @@ function fuzzyScore(query: string, target: string): number | null {
   return score
 }
 
-/** Fuzzy-filters `names` against `query`, best matches first, capped at `limit`. Empty/whitespace-only `query` returns no suggestions. */
+/** Below this many characters, `fuzzySearchItemNames` returns no suggestions rather than scoring the full ~11.4k-name catalog against a near-useless query (soak #234). */
+export const MIN_QUERY_LENGTH = 3
+
+/** Fuzzy-filters `names` against `query`, best matches first, capped at `limit`. Empty/whitespace-only query, or one shorter than {@link MIN_QUERY_LENGTH}, returns no suggestions. */
 export function fuzzySearchItemNames(
   query: string,
   names: readonly string[],
   limit = 8
 ): readonly string[] {
   const trimmed = query.trim().toLowerCase()
-  if (!trimmed) return []
+  if (trimmed.length < MIN_QUERY_LENGTH) return []
 
   const scored: { name: string; score: number }[] = []
   for (const name of names) {

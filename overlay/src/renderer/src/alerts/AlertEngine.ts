@@ -97,7 +97,8 @@ export class AlertEngine {
       bagType: entry.bagType,
       slotType: entry.slotType,
       enchantCount: entry.rarity,
-      enchantCode: entry.enchantCode
+      enchantCode: entry.enchantCode,
+      bagIcon: this.lootTracker.bagIcon(entry.bagType)
     }
     const now = Date.now()
     const result = dispatchEvent(event, this.catalog, this.settings, now, this.lastFiredAt)
