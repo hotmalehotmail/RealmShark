@@ -155,6 +155,25 @@ in `CAPTURE_ALLOWED_TYPES`, and this issue's allowlist is explicitly frozen
 the allowlist to cover them, if ever needed, is a separate deliberate change,
 not a silent gap this suite should paper over.
 
+**`TextPacket` (`AlertEngine`'s chat detector, issue #222) is a second, but
+different, deliberate exemption.** Unlike `ItemInfoProvider`'s, this one is a
+privacy floor, not a scope boundary: `docs/prd-notifications.md` §6 requires
+`CAPTURE_ALLOWED_TYPES` to never cover chat (`TextPacket` includes DMs, and
+captures/recordings go to public GitHub issues or a user's own disk), so
+`AlertEngine.CONSUMED_ENVELOPE_TYPES` legitimately includes a type the
+allowlist will never retain. `allowlist.test.ts` carries this as a named
+`TEXT_PACKET_EXEMPTION` set (with its own assertion that `TextPacket` stays
+out of `CAPTURE_ALLOWED_TYPES`) rather than silently widening the tripwire's
+subset check - do not "fix" a future red test here by adding `TextPacket` to
+the allowlist. The accepted cost: `partyChat` bugs can never be reproduced
+from a user's bug-report capture or session recording, only from a synthetic
+`FakePacketSource` fixture (its periodic chat cycle - see `CLAUDE.md`'s
+"Local testing without Windows or the game" section and
+`src/main/java/bridge/FakePacketSource.java`'s own class doc comment)
+replayed through `AlertEngine` directly, e.g.
+`overlay/test/alerts-engine.test.ts`'s "AlertEngine chat detector" suite and
+`overlay/test/alerts-chatTypes.test.ts`.
+
 ## Writing a new regression test from a capture
 
 The contract every future bug-fix PR that ships with a repro capture should

@@ -63,11 +63,11 @@ moving parts, each with its own doc below.
   writing any panel UI.**
 - **[notifications.md](notifications.md)** — the overlay notification
   ("alerts") system: the framework-agnostic core (`AlertEngine`, the rule
-  catalog, the multi-match dispatcher, the fired-alert store, the settings
-  schema, the `SlotType` id → name table) and its delivery layer
-  (`AlertToastHost`'s banner stack, the coalesced ping sound). History panel
-  and settings gear still to come — see `prd-notifications.md` for the full
-  six-issue plan.
+  catalog including the `chat`-event `partyChat` rule, the multi-match
+  dispatcher, the fired-alert store, the settings schema, the `SlotType` id →
+  name table), its delivery layer (`AlertToastHost`'s banner stack, the
+  coalesced ping sound), the Notifications history panel, and the per-panel
+  settings gear — see `prd-notifications.md` for the full six-issue plan.
 - **[overlay-testing.md](overlay-testing.md)** — the vitest suite
   (`overlay/test/`): the capture-replay harness (`loadCapture`/`replay`, fake-
   timer anchoring), the fixtures convention, the capture-allowlist tripwire,

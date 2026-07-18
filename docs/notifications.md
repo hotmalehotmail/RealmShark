@@ -5,21 +5,25 @@ Design doc: [prd-notifications.md](prd-notifications.md). This doc covers the
 detection, rule catalog, dispatcher, fired-alert store, settings schema),
 issue #219 (the two delivery surfaces — a banner toast host and a ping
 sound), issue #220 (the Notifications history panel — a second, independent
-viewer over the same store), and issue #221 (the per-panel settings gear —
+viewer over the same store), issue #221 (the per-panel settings gear —
 `overlay-renderer.md` §2's "Per-panel settings gear" covers the generic
 mechanism; this doc covers its first user, the Notifications panel's
-settings view). Naming: the subsystem is `alerts` internally, "Notifications"
-user-facing (PRD §1).
+settings view), and issue #222 (the `partyChat` rule — phase 2, the first
+consumer of a `chat` `GameEvent`, gated on the party-channel wire shape
+pinned via the Status panel's chat-probe diagnostic, see "Chat detector &
+`partyChat`" below). Naming: the subsystem is `alerts` internally,
+"Notifications" user-facing (PRD §1).
 
 ## Files
 
 | File | Role |
 | --- | --- |
-| `overlay/src/renderer/src/alerts/types.ts` | `GameEvent` (currently just `loot-drop`), `AlertKind`, `AlertPayload`, `RuleSettings`, `FiredAlert`. |
-| `overlay/src/renderer/src/alerts/catalog.ts` | `whiteBag`/`orangeBag`/`enchantedDrop` rule definitions, `CATALOG` (the banner-priority order), `resolveRuleSettings`. |
+| `overlay/src/renderer/src/alerts/types.ts` | `GameEvent` (`loot-drop` \| `chat`), `AlertKind`, `AlertPayload`, `RuleSettings`, `FiredAlert`. |
+| `overlay/src/renderer/src/alerts/catalog.ts` | `whiteBag`/`orangeBag`/`enchantedDrop`/`partyChat` rule definitions, `CATALOG` (the banner-priority order), `resolveRuleSettings`. |
+| `overlay/src/renderer/src/alerts/chatTypes.ts` | (issue #222) `TextPacketData`/`CreateSuccessPacketData`/`UpdatePacketData` wire shapes the chat detector reads, plus `classifyChatChannel` — the pure function classifying `TextPacket.recipient` into `ChatEvent.channel`. |
 | `overlay/src/renderer/src/alerts/dispatcher.ts` | `dispatchEvent` — the multi-match resolution (cooldown filter, banner/sound/history semantics). |
 | `overlay/src/renderer/src/alerts/store.ts` | `FiredAlertStore` — the bounded, subscribable fired-alert session log. |
-| `overlay/src/renderer/src/alerts/AlertEngine.ts` | The framework-agnostic engine: owns a wide `LootTracker`, wires it through `dispatchEvent` into `store`. |
+| `overlay/src/renderer/src/alerts/AlertEngine.ts` | The framework-agnostic engine: owns a wide `LootTracker`, wires it through `dispatchEvent` into `store`; also runs the chat detector directly (issue #222 — no existing tracker to delegate to). |
 | `overlay/src/renderer/src/alerts/useAlertEngine.ts` | React hook mounting one `AlertEngine` at App level, wiring packet/settings/detach IPC. |
 | `overlay/src/renderer/src/alerts/slotTypeNames.ts` | SlotType id → display name, empirically derived (see its own doc comment). |
 | `overlay/src/shared/settings.ts` | `NotificationsSettings`/`NotificationRuleSettings` — the persisted schema slice. |
@@ -36,6 +40,7 @@ user-facing (PRD §1).
 | `overlay/src/renderer/src/alerts/paramsEditorTypes.ts` | `ParamsEditorProps` (issue #221) — split into its own type-only file so `paramsEditors.ts` and an editor component never need a value import from each other. |
 | `overlay/src/renderer/src/alerts/EnchantedDropParamsEditor.tsx` | `enchantedDrop`'s params editor (issue #221, PRD §3): tier dropdown + add/remove SlotType-category and item-name override rows. Registered under `paramsEditors.ts`. Its item-name suggestion dropdown is debounced and portaled to `document.body` (soak #234 - see `itemNameSearch.ts` and below). |
 | `overlay/src/renderer/src/alerts/useItemNameCatalog.ts` | `useItemNameCatalog()` (issue #221) — every distinct name from the bridge's `lootBagTypes.itemNames` (issue #217's widened, all-color table), for the item-override autocomplete. A standalone `onPacketBatch` subscription, not routed through `AlertEngine`'s internal `LootTracker` — a UI-only concern outside the layering contract below. |
+| `overlay/src/renderer/src/alerts/PartyChatParamsEditor.tsx` | `partyChat`'s params editor (issue #222): a plain add/remove keyword-list editor — no autocomplete, keywords are free text. Registered under `paramsEditors.ts`. |
 
 ## Architecture
 
@@ -70,6 +75,13 @@ logic entirely rather than re-implementing it. Each new `LootEntry` (via
 `enchantCount` is `LootEntry.rarity`, which already *is* the filled-enchant
 count (`sprites/enchantRarity.ts`'s `slotRarityTier`), so no separate
 enchant-counting logic is needed here.
+
+The chat path (issue #222) runs the same `ingest → GameEvent → dispatchEvent
+→ store` pipeline the diagram above shows for loot, just without a
+`LootTracker`-equivalent sub-tracker in between: `ingest()` handles
+`CreateSuccessPacket`/`UpdatePacket`/`TextPacket` directly and turns a
+non-self `TextPacket` straight into a `chat` `GameEvent` — see "Chat detector
+& `partyChat`" below.
 
 ## The layering contract (PRD §1 — binding)
 
@@ -118,6 +130,14 @@ homogeneous array with no variance workarounds.
    `itemOverrides[name.toLowerCase()] ?? slotTypeOverrides[slotType] ?? tier`
    (default `tier = 4`, divine). Item-name matching is case-insensitive exact
    (`"Doom Bow Shiny"` does **not** match an override keyed `"doom bow"`).
+4. **`partyChat`** (issue #222) — fires on a `chat` event whose `channel` is
+   `'party'`, optionally filtered by a `keywords: string[]` param (empty =
+   every party message; non-empty = case-insensitive substring match against
+   `ChatEvent.text` — never `cleanText`, the profanity-filtered display
+   variant). Default **off** (chat notifications are opt-in, unlike the loot
+   trio) with a 3000ms `cooldownMs` — chat can burst in a way a single loot
+   drop never does. See "Chat detector & `partyChat`" below for the detector
+   itself and its privacy/testing constraints.
 
 ### Loot-bag spoiler avoidance (`whiteBag`/`orangeBag`, soak #234)
 
@@ -153,6 +173,64 @@ and `params` is a shallow object merge (`{ ...kind.defaults.params,
 gets the catalog's default (empty) `slotTypeOverrides`/`itemOverrides`. A
 `rules` entry for a removed catalog id is simply never read — nothing
 iterates `settings.rules` directly, only `CATALOG.map(resolveRuleSettings)`.
+
+## Chat detector & `partyChat` (issue #222)
+
+The first (and, as of this issue, only) consumer of the `chat` `GameEvent` —
+proving the PRD §1 extensibility claim "a genuinely new event kind needs a
+detector; a new rule over an existing kind needs neither." Unlike loot, there
+is no existing chat tracker to delegate to, so `AlertEngine` runs the
+detector directly rather than owning a private sub-tracker instance.
+
+**Wire shape** (pinned 2026-07-18 from a live-session capture via the Status
+panel's chat-probe diagnostic — `docs/overlay-main-process.md` "Chat probe",
+PR #231 — see `docs/prd-notifications.md` §6 for why this had to be verified
+rather than assumed):
+
+| channel | `TextPacket.recipient` | `objectId` | notes |
+| --- | --- | --- | --- |
+| party (another member) | `"*Party*"` — exact literal sentinel, asterisks included | `-1` | sender may not be in the local object space; `numStars`/`starBackground` populated |
+| local/world | `""` (empty string) | sender's live entity id | |
+
+Guild and `/tell` sentinels were not sampled (out of scope for this issue) —
+`chatTypes.ts`'s `classifyChatChannel` classifies anything besides the two
+verified shapes as `'unknown'` rather than guessing at an unverified
+sentinel, so a future guild/PM rule can't silently misfire against the wrong
+shape. No party-specific packet (`PartyListMessagePacket` etc.) appeared
+alongside the sampled party messages — party chat travels as plain
+`TextPacket`, so no other packet type is consulted.
+
+**Local-player identity & self-ignore.** `AlertEngine` resolves "who is the
+local player" the same two-source way `DpsTracker.ts` does:
+`CreateSuccessPacket.objectId` for *which* entity is "you", and
+`UpdatePacket`'s `NAME_STAT` roster (stripped of the `,titleCode` suffix,
+same as `DpsTracker.ts`) for *what name* that objectId currently carries.
+`onChatMessage` then ignores a `TextPacket` whose `name` equals the resolved
+local-player name — **matched by name, never `objectId`**, because a party
+sender arrives with `objectId: -1` regardless of who sent it (whether a
+self-sent party message even echoes back as a `TextPacket` was not sampled;
+name-based self-ignore is correct either way — a harmless no-op if there's no
+echo). This identity state lives in `AlertEngine` itself (`localPlayerId`,
+`entityNames`), separate from `DpsTracker`'s own copy — the two trackers are
+independent consumers of the same wire facts, not wired together. It's
+cleared only on `reset()` (overlay detach), not on `MapInfoPacket` — the same
+local player is still logged in across an instance change, so re-deriving it
+every map would be pure churn.
+
+**Privacy/testing constraint (PRD §6, binding).** `overlay/src/shared/capture.ts`'s
+`CAPTURE_ALLOWED_TYPES` deliberately excludes `TextPacket` — bug captures go
+to public GitHub issues and the session recorder writes to a user's own disk,
+and chat includes DMs. `AlertEngine.CONSUMED_ENVELOPE_TYPES` still declares
+`TextPacket` (it genuinely consumes it), so `overlay/test/allowlist.test.ts`
+carries a **named, documented exemption** for it rather than silently
+skipping the tripwire or "fixing" it by widening the allowlist — see that
+test's own doc comment and `docs/overlay-testing.md`'s allowlist section.
+Consequences accepted up front (PRD §6): `partyChat` bugs are never
+reproducible from a user's bug-report capture or session recording — every
+`partyChat` regression test uses a synthetic fixture built from
+`FakePacketSource`'s chat cycle instead (`overlay/test/alerts-engine.test.ts`,
+`overlay/test/alerts-chatTypes.test.ts`) — see `docs/overlay-testing.md`'s
+chat caveat.
 
 ## Multi-match semantics (`dispatcher.ts`, PRD §3)
 

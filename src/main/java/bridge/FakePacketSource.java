@@ -14,6 +14,7 @@ import packets.incoming.MapInfoPacket;
 import packets.incoming.NewTickPacket;
 import packets.incoming.QuestObjectIdPacket;
 import packets.incoming.ServerPlayerShootPacket;
+import packets.incoming.TextPacket;
 import packets.incoming.UpdatePacket;
 import packets.data.SlotObjectData;
 import packets.outgoing.EnemyHitPacket;
@@ -102,6 +103,15 @@ import java.util.Random;
  * followed by the correlated {@link NewTickPacket} slot deltas - the same
  * shape a real client sends), exercising the Character/Instance panels
  * re-rendering a live equip/unequip.
+ * <p>
+ * Also emits a periodic chat cycle ({@link #chatMessage}, issue #222) exercising
+ * the overlay's {@code partyChat} notification: a party message from another
+ * roster member (recipient {@code "*Party*"}, objectId -1 - the wire shape
+ * pinned via the Status panel's chat-probe diagnostic, PR #231), a local/world
+ * message from another player (recipient {@code ""}, the sender's own live
+ * entity id - wrong channel, must never fire the rule), and a party message
+ * FROM the local player (must be self-ignored by name, since a party sender's
+ * objectId is never a real local-player id to match against).
  */
 public class FakePacketSource {
 
@@ -171,6 +181,29 @@ public class FakePacketSource {
     // icon (a distinct placeholder colour per type even without real assets).
     private static final int SWAP_PLAYER_ID = ROSTER_IDS[1]; // Bob
     private static final int[] SWAP_WEAPONS = {4001, 4010, 4020, 4030};
+
+    // Chat notification demo (issue #222, phase 2): a party message from
+    // another roster member and a local/world message, matching the wire
+    // shape pinned via the Status panel's chat-probe diagnostic (PR #231,
+    // docs/overlay-main-process.md "Chat probe") - party senders carry
+    // recipient="*Party*" and objectId=-1 (they may not be in the local
+    // object space); local/world senders carry recipient="" and their own
+    // live entity id. `text` carries the uncensored message; `cleanText`
+    // simulates the profanity filter on a different word so a test can prove
+    // AlertEngine's keyword matching reads `text`, not `cleanText` (PRD §6).
+    // A third message is also emitted FROM the local player on the party
+    // channel (self-ignore demo - AlertEngine.ts's chat detector must ignore
+    // it by name, since a party sender's objectId is never the local
+    // player's real id either way).
+    private static final String PARTY_CHAT_SENDER_NAME = "Bob";
+    private static final String PARTY_CHAT_TEXT = "anyone want to help with the boss?";
+    private static final String PARTY_CHAT_CLEAN_TEXT = "anyone want to help with the ****?";
+    private static final int LOCAL_CHAT_SENDER_ID = ROSTER_IDS[2]; // Carol
+    private static final String LOCAL_CHAT_SENDER_NAME = "Carol";
+    private static final String LOCAL_CHAT_TEXT = "gl all";
+    private static final String LOCAL_PLAYER_NAME = "Alice";
+    private static final String SELF_PARTY_CHAT_TEXT = "on my way";
+    private static final int CHAT_CYCLE_TICKS = 20;
 
     // A transient player who joins then leaves on a cycle, so the roster is exercised
     // reacting to players LEAVING (UpdatePacket.drops), not only joining.
@@ -450,6 +483,28 @@ public class FakePacketSource {
             if (tick > 0 && tick % LOOT_CYCLE_TICKS == 0) {
                 Register.INSTANCE.emitPacketLogs(lootBagDrop(tick / LOOT_CYCLE_TICKS));
             }
+            // Chat notification demo (issue #222) - three distinct TextPackets on a
+            // cycle: a party message from another player (should fire partyChat), a
+            // local/world message from another player (should never fire it,
+            // wrong channel), and a party message FROM the local player (should
+            // never fire it, self-ignore) - see the constants' doc comment above.
+            int chatOffset = tick % CHAT_CYCLE_TICKS;
+            if (chatOffset == 3) {
+                Register.INSTANCE.emitPacketLogs(chatMessage(
+                    "*Party*", -1, PARTY_CHAT_SENDER_NAME, (short) 5, 0,
+                    PARTY_CHAT_TEXT, PARTY_CHAT_CLEAN_TEXT
+                ));
+            } else if (chatOffset == 7) {
+                Register.INSTANCE.emitPacketLogs(chatMessage(
+                    "", LOCAL_CHAT_SENDER_ID, LOCAL_CHAT_SENDER_NAME, (short) 0, 0,
+                    LOCAL_CHAT_TEXT, LOCAL_CHAT_TEXT
+                ));
+            } else if (chatOffset == 11) {
+                Register.INSTANCE.emitPacketLogs(chatMessage(
+                    "*Party*", -1, LOCAL_PLAYER_NAME, (short) 5, 0,
+                    SELF_PARTY_CHAT_TEXT, SELF_PARTY_CHAT_TEXT
+                ));
+            }
             // A NewTickPacket every tick, like a real client. It carries the
             // server clock the DPS engine uses as its time base - without it the
             // engine can't measure fight duration, so every computed DPS is 0.
@@ -584,6 +639,31 @@ public class FakePacketSource {
         p.serverRealTimeMS = tick * 300;
         p.serverLastTimeRTTMS = 0;
         p.status = new ObjectStatusData[0];
+        return p;
+    }
+
+    /**
+     * A chat message (issue #222, phase 2) matching the wire shape pinned via
+     * the Status panel's chat-probe diagnostic (docs/overlay-main-process.md
+     * "Chat probe"). `text`/`cleanText` are populated independently - a real
+     * client's `cleanText` is the profanity-filtered variant of `text` (see
+     * the class doc comment for why the fake data deliberately differs
+     * between the two).
+     */
+    private TextPacket chatMessage(
+        String recipient, int objectId, String name, short numStars, int starBackground,
+        String text, String cleanText
+    ) {
+        TextPacket p = new TextPacket();
+        p.name = name;
+        p.objectId = objectId;
+        p.numStars = numStars;
+        p.bubbleTime = 10;
+        p.recipient = recipient;
+        p.text = text;
+        p.cleanText = cleanText;
+        p.isSupporter = false;
+        p.starBackground = starBackground;
         return p;
     }
 
