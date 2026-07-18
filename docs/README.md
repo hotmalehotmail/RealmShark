@@ -111,6 +111,11 @@ moving parts, each with its own doc below.
   plus the agent/human ownership split and the phased issue plan. A styled,
   viewable version is at
   [prd-agent-observability.html](prd-agent-observability.html) (same content).
+- **[prd-notifications.md](prd-notifications.md)** — PRD: the overlay notification
+  system ("alerts"). Detector → catalog → dispatcher pipeline, the binding layering
+  contract (swappable banner UI, one-catalog-entry extensibility), tiered
+  `enchantedDrop` thresholds grounded in the asset facts, the per-panel settings
+  gear, the `TextPacket` privacy constraint, and the six-issue implementation plan.
 
 ---
 
