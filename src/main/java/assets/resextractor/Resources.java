@@ -13,6 +13,7 @@ public class Resources {
     ArrayList<TextAsset> assetTextAsset = new ArrayList<>();
     ArrayList<SpriteAtlas> assetSpriteAtlas = new ArrayList<>();
     ArrayList<Texture2D> assetTexture2D = new ArrayList<>();
+    ArrayList<Sprite> assetSprite = new ArrayList<>();
     TextAsset spritesheet;
     TextAsset manifest_json;
     TextAsset manifest_xml;
@@ -56,6 +57,9 @@ public class Resources {
                 case Texture2D:
                     parseTexture2D(o);
                     break;
+                case Sprite:
+                    parseSprite(o);
+                    break;
                 case MonoBehaviour:
                     break;
             }
@@ -82,5 +86,10 @@ public class Resources {
     private void parseTexture2D(ObjectReader o) throws IOException {
         Texture2D t = new Texture2D(o);
         assetTexture2D.add(t);
+    }
+
+    private void parseSprite(ObjectReader o) throws IOException {
+        Sprite s = new Sprite(o);
+        assetSprite.add(s);
     }
 }

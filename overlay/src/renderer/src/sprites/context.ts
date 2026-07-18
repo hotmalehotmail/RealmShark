@@ -66,6 +66,13 @@ export interface SpriteContextValue {
    * the pack predates this table). See `SpritePack.dungeonIcons`.
    */
   dungeonIcon: (name: string | null | undefined) => number | null
+  /**
+   * Data URL of a named UI sprite (rarity pip / shiny indicator) from
+   * `SpritePack.uiSprites`, or null when the pack has no `uiSprites` section
+   * (bridge predates issue #205, or no game assets) or lacks this name -
+   * callers fall back to the CSS rarity ring / SVG shiny badge.
+   */
+  getUiSprite: (name: string) => string | null
 }
 
 export const SpriteContext = createContext<SpriteContextValue>({
@@ -78,7 +85,8 @@ export const SpriteContext = createContext<SpriteContextValue>({
   frameMs: 200,
   scrollSpeed: 1.5,
   rotateSpeed: 0.15,
-  dungeonIcon: () => null
+  dungeonIcon: () => null,
+  getUiSprite: () => null
 })
 
 export function useSprites(): SpriteContextValue {

@@ -1,7 +1,8 @@
 import { useEffect, useId, useState } from 'react'
 import { AnimatedDyeCanvas } from './AnimatedDyeCanvas'
 import { useSprites } from './context'
-import { RARITY_RING_CLASS } from './enchantRarity'
+import { RARITY_PIP_SPRITE_NAME, RARITY_RING_CLASS } from './enchantRarity'
+import { SHINY_ICON_SPRITE_NAME } from './shiny'
 
 interface SpriteProps {
   /** The RotMG objectType to render. Null/undefined renders nothing. */
@@ -13,21 +14,30 @@ interface SpriteProps {
   /** Accessory dye objectType (Tex2) to composite onto a character sprite. */
   accessoryDye?: number | null
   /**
-   * Enchant rarity-border tier (0=common/no border..4=divine) - see
-   * sprites/enchantRarity.ts. Renders as a coloured ring around the sprite so
-   * it never changes the sprite's own layout size.
+   * Enchant rarity tier (0=common/none..4=divine) - see
+   * sprites/enchantRarity.ts. Renders as the real `RarityIcon_N` pip sprite in
+   * the bottom-right corner when the bridge's `uiSprites` pack section is
+   * available (#205/#206), else falls back to a coloured ring around the
+   * sprite. Either way it never changes the sprite's own layout size.
    */
   rarity?: number | null
   /**
-   * Whether to render the shiny-item badge (a small rainbow star in the
-   * top-left corner) - see sprites/shiny.ts. Like `rarity`, this overlays
-   * without changing the sprite's own layout size.
+   * Whether to render the shiny-item indicator in the top-left corner - see
+   * sprites/shiny.ts. Renders the real `shiny_item_icon` sprite when the
+   * bridge's `uiSprites` pack section is available (#205/#206), else falls
+   * back to a small SVG rainbow star. Like `rarity`, this overlays without
+   * changing the sprite's own layout size.
    */
   shiny?: boolean
   className?: string
 }
 
-/** A small rainbow-gradient star, absolutely positioned over the sprite's top-left corner. */
+/**
+ * CSS fallback for the shiny indicator (issue #193), used only when the
+ * bridge's real `shiny_item_icon` UI sprite isn't available (see #205/#206).
+ * A small rainbow-gradient star, absolutely positioned over the sprite's
+ * top-left corner.
+ */
 function ShinyBadge({ size }: { size: number }): React.JSX.Element {
   const gradientId = useId()
   const badgeSize = Math.max(7, Math.round(size * 0.42))
@@ -64,9 +74,18 @@ function placeholderColor(objectType: number): string {
   return `hsl(${hue} 45% 40%)`
 }
 
-/** Ring utility classes for a rarity tier, or '' for tier 0/unset (no border). */
+/**
+ * CSS fallback for the rarity indicator, used only when the bridge's real
+ * per-tier `RarityIcon_N` UI sprite isn't available (see #205/#206). Ring
+ * utility classes for a rarity tier, or '' for tier 0/unset (no border).
+ */
 function rarityRingClassName(rarity: number | null | undefined): string {
   return rarity ? (RARITY_RING_CLASS[rarity] ?? '') : ''
+}
+
+/** Pixel size for a corner-overlay UI sprite (rarity pip / shiny icon), scaled off the sprite's own display size. Matches the previous CSS badge's sizing so the swap doesn't shift layout. */
+function overlaySize(size: number): number {
+  return Math.max(7, Math.round(size * 0.42))
 }
 
 /**
@@ -92,7 +111,8 @@ export function Sprite({
     bakeAnimatedDye,
     frameMs,
     scrollSpeed,
-    rotateSpeed
+    rotateSpeed,
+    getUiSprite
   } = useSprites()
 
   // If this sprite animates, tick locally so it advances; static sprites never
@@ -116,7 +136,15 @@ export function Sprite({
 
   const dyed =
     (clothingDye != null && clothingDye > 0) || (accessoryDye != null && accessoryDye > 0)
-  const rarityClass = rarityRingClassName(rarity)
+
+  // Real rarity pip / shiny icon (#205/#206), falling back to the CSS ring /
+  // SVG badge below when the bridge's uiSprites pack section is unavailable
+  // (older bridge, no game assets - see SpritePack.uiSprites).
+  const pipName = rarity ? RARITY_PIP_SPRITE_NAME[rarity] : undefined
+  const pipUrl = pipName ? getUiSprite(pipName) : null
+  const shinyUrl = shiny ? getUiSprite(SHINY_ICON_SPRITE_NAME) : null
+
+  const rarityClass = pipUrl ? '' : rarityRingClassName(rarity)
   const combinedClassName = [className, rarityClass].filter(Boolean).join(' ') || undefined
 
   let rendered: React.JSX.Element | null = null
@@ -164,12 +192,36 @@ export function Sprite({
     )
   }
 
-  if (!shiny) return rendered
+  if (!shiny && !pipUrl) return rendered
+
+  const badgeSize = overlaySize(size)
 
   return (
     <span className="relative inline-block" style={{ width: size, height: size, flexShrink: 0 }}>
       {rendered}
-      <ShinyBadge size={size} />
+      {pipUrl && (
+        <img
+          src={pipUrl}
+          width={badgeSize}
+          height={badgeSize}
+          className="pointer-events-none absolute -bottom-1 -right-1"
+          style={{ imageRendering: 'pixelated' }}
+          alt=""
+        />
+      )}
+      {shiny &&
+        (shinyUrl ? (
+          <img
+            src={shinyUrl}
+            width={badgeSize}
+            height={badgeSize}
+            className="pointer-events-none absolute -left-1 -top-1"
+            style={{ imageRendering: 'pixelated' }}
+            alt=""
+          />
+        ) : (
+          <ShinyBadge size={size} />
+        ))}
     </span>
   )
 }

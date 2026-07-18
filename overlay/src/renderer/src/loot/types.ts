@@ -41,4 +41,12 @@ export interface LootBagTypesData {
   lootBagObjectTypes?: Record<string, number>
   /** item objectType -> display name, for the tracked BagType items only. */
   itemNames?: Record<string, string>
+  /**
+   * objectTypes of shiny item variants among the tracked BagType items (issue
+   * #215), from `IdToAsset.isShiny` - a dedicated signal, NOT derivable from
+   * `itemNames`: a real shiny item's resolved display name is usually the
+   * shared, suffix-stripped base name (`IdToAsset.objectName` prefers
+   * `displayId` when set), so name-based detection silently misses it.
+   */
+  shinyItemTypes?: number[]
 }

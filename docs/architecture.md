@@ -318,7 +318,8 @@ Loot panel's session log (issue #105) — from the same extracted asset data
     "bagTypeTable": { "<itemObjectType>": 6 },
     "lootBagIcons": { "6": <bagObjectType>, "8": <bagObjectType> },
     "lootBagObjectTypes": { "<bagObjectType>": 6, "<bagObjectType>": 8 },
-    "itemNames": { "<itemObjectType>": "<display name>" }
+    "itemNames": { "<itemObjectType>": "<display name>" },
+    "shinyItemTypes": [ <itemObjectType>, ... ]
   }
 }
 ```
@@ -339,7 +340,11 @@ single representative bag entity per color — the sprite the Loot panel renders
 as a category header, resolved through the same `objectType → atlas rect` path
 as any other sprite (`sprites/Sprite.tsx`, no special-casing). `itemNames` is
 `IdToAsset.objectName` for the tracked items (the always-visible inline label).
-Built by `LootBagTypes.envelopeJson()` (`bridge/LootBagTypes.java`).
+`shinyItemTypes` (issue #215) is a **separate** list of shiny item objectTypes
+from `IdToAsset.isShiny` — deliberately not derived from `itemNames`, since a
+real shiny item's `objectName` result is usually its shared, suffix-stripped
+display name (see `asset-pipeline.md`'s `LootBagTypes` bullet). Built by
+`LootBagTypes.envelopeJson()` (`bridge/LootBagTypes.java`).
 
 **Unlike the sprite pack (one-shot broadcast), this is re-sent on every 2 s
 readiness poll** once `IdToAsset.loadedObjectCount() > 1`
@@ -445,17 +450,24 @@ send (`spritePack.ts:55`). Routed by `PacketBridge.handleClientMessage`
 | --- | --- |
 | assets not ready | `{"type":"spritePack","ready":false}` |
 | client already current | `{"type":"spritePack","ready":true,"upToDate":true,"version":"v…"}` |
-| full pack | `{"type":"spritePack","ready":true,"version":"v…","atlases":{…},"table":{…},"maskTable":{…},"dyeTable":{…},"animTable":{…}}` |
+| full pack | `{"type":"spritePack","ready":true,"version":"v…","atlases":{…},"table":{…},"maskTable":{…},"dyeTable":{…},"animTable":{…},"uiSprites":{…}}` |
 
 The full pack keys: `atlases` = `atlasId("1".."4") → data:image/png;base64,…`;
 `table` = `objectType → [atlasId,x,y,w,h]`; `maskTable` = `objectType →
 [3,x,y,w,h]`; `dyeTable` = `dyeId → [1,r,g,b]` (solid) or
 `[10,atlasId,x0,y0,w0,h0,...]` (textile, one 4-tuple per animation frame);
 `animTable` = `objectType → flat 9-ints/frame [x,y,w,h,aId,mx,my,mw,mh]` for
-animated (idle) character sprites. The
-`table`/`maskTable`/`dyeTable`/`animTable` semantics are documented in
+animated (idle) character sprites; `uiSprites` = `spriteName →
+data:image/png;base64,…` for the allowlisted named UI sprites (rarity pips,
+shiny icon — issue #205), keyed by name rather than `objectType` since these
+aren't game objects — see `docs/asset-pipeline.md`'s "UI sprites" section.
+The `table`/`maskTable`/`dyeTable`/`animTable` semantics are documented in
 [dyes-and-textiles.md](dyes-and-textiles.md); the TS mirror is `SpritePack` in
-`overlay/src/shared/ipc.ts:74`.
+`overlay/src/shared/ipc.ts` (which now includes `uiSprites`, consumed by the
+renderer's rarity-pip / shiny indicator — issue #206). `spritePack.ts`'s
+`onSpritePackMessage` reconstructs the cached pack from a hand-maintained field
+list, so every `SpritePack` section — `uiSprites` included — must be copied
+there or it never reaches the renderer.
 
 **One-shot broadcast.** Assets load on a background thread, so early requests
 often get `ready:false`. A 2 s watchdog (`PacketBridge.maybeBroadcastSpritePack`,
@@ -468,8 +480,10 @@ re-asking. The client handles a top-level `spritePack` message
 > **Non-obvious fact — `version` is the atlas file mtime.** `version()` returns
 > `"v" + characters.png.lastModified()` (`SpritePackService.java:58`). A game
 > update re-extracts the atlas, changing the mtime, which invalidates the cache.
-> Separately, `spritePack.ts:59` forces a full refetch if a cached pack predates
-> `maskTable`/`dyeTable`/`animTable` even when the version matches.
+> Separately, `spritePack.ts`'s `requestSpritePack` forces a full refetch if a
+> cached pack predates a later-added section
+> (`maskTable`/`dyeTable`/`animTable`/`animDyeTable`/`uiSprites`) even when the
+> version matches.
 
 ### Message summary
 

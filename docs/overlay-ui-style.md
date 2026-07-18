@@ -76,18 +76,23 @@ across the whole gradient, not just at the low-share end.
 
 | Token | Meaning | Examples |
 | --- | --- | --- |
-| `--color-rarity-uncommon` | 1 filled enchant slot | `Sprite`'s rarity ring on an equipped item (`GearRow`) |
+| `--color-rarity-uncommon` | 1 filled enchant slot | `Sprite`'s rarity ring fallback on an equipped item (`GearRow`) |
 | `--color-rarity-rare` | 2 filled enchant slots | same |
 | `--color-rarity-legendary` | 3 filled enchant slots | same |
 | `--color-rarity-divine` | 4 filled enchant slots | same |
 
-Rendered as a `ring-2 ring-rarity-<tier>` on the item's `<Sprite>` (a
+**Primary rendering (issue #205/#206):** the item's `<Sprite>` draws the
+game's own `RarityIcon_N` pip sprite in the bottom-right corner, resolved
+from the bridge's `uiSprites` pack section - see `docs/overlay-renderer.md`
+§4.1. These `--color-rarity-*` tokens back a **CSS fallback** for when that
+pack section is unavailable (no game assets - always true in a headless
+dev/CI sandbox): a `ring-1 ring-rarity-<tier>` on the item's `<Sprite>` (a
 box-shadow ring, not a layout `border`, so it never changes the sprite's
 rendered size) - see `sprites/enchantRarity.ts` for the tier derivation
 (count of an item's filled enchant slots, decoded from its
 `UNIQUE_DATA_STRING`) and `docs/overlay-renderer.md` §4 for how that was
-verified. An unenchanted (0 filled slots) item renders no ring, same as
-today.
+verified. An unenchanted (0 filled slots) item renders no pip/ring either
+way.
 
 **Rule: raw Tailwind palette classes (`emerald-500`, `sky-600`, `white/40`,
 `neutral-900`, …) are allowed only inside `src/renderer/src/ui/`.** Everywhere
