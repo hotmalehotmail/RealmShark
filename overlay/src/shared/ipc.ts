@@ -27,8 +27,22 @@ export const IPC = {
   editableFocusChange: 'editable-focus-change',
   chatProbeStart: 'chat-probe-start',
   chatProbeStop: 'chat-probe-stop',
-  getChatProbeStatus: 'get-chat-probe-status'
+  getChatProbeStatus: 'get-chat-probe-status',
+  replayMetadata: 'replay-metadata'
 } as const
+
+/**
+ * The bridge's synthetic, versioned metadata-table envelopes (issue #239:
+ * edge-triggered delivery — sent on connect / readiness / content change,
+ * never periodically). The main process caches the latest envelope per type
+ * (`shared/metadataCache.ts`) so a renderer consumer that subscribes AFTER
+ * the one-shot delivery — a late-mounted settings view, or App itself when
+ * the WS connected before React finished mounting (issue #245) — can request
+ * a replay via `IPC.replayMetadata`. Replays re-arrive through the normal
+ * `packet-batch` path and are idempotent: every consumer skips a
+ * same-`metaVersion` envelope with a string compare.
+ */
+export const METADATA_ENVELOPE_TYPES = ['lootBagTypes', 'itemInfo', 'enchantNames'] as const
 
 /** Result of an IPC.reportBug / IPC.captureNow call: where the capture bundle was written on disk. */
 export interface BugReportResult {

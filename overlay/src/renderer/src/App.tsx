@@ -52,6 +52,14 @@ function App(): React.JSX.Element {
     window.overlay.getBufferedMainLogs().then((entries) => entries.forEach(ingestMainEntry))
     const offMainLog = window.overlay.onMainLogEntry(ingestMainEntry)
 
+    // Backfill the bridge's one-shot metadata tables the same way (issue
+    // #245): when the supervisor finds an already-running bridge, the WS can
+    // connect and deliver them before this render tree's subscribers exist.
+    // App's own effect runs after every descendant's (React flushes effects
+    // bottom-up), so all packet consumers are subscribed by now; a table
+    // that DID arrive normally is re-skipped by its metaVersion.
+    void window.overlay.replayMetadata()
+
     return () => {
       offStatus()
       offInteractive()

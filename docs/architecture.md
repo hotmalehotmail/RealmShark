@@ -373,8 +373,13 @@ changed). This replaced an earlier re-send-every-poll design whose "the
 payload is tiny" rationale silently expired when issue #217 widened the table
 to all bag colors (~630 KB — issue #239's rhythmic overlay-wide hitch).
 Consumers skip a same-`metaVersion` re-delivery (a WS reconnect legitimately
-redelivers) instead of rebuilding their tables. Consumed at
-`LootTracker.ingest` (`overlay/src/renderer/src/loot/LootTracker.ts`).
+redelivers) instead of rebuilding their tables. One hop up, the Electron main
+process keeps the latest envelope per metadata type and re-sends them over
+the ordinary `packet-batch` IPC on `IPC.replayMetadata` — the same late-joiner
+treatment for *renderer subscribers* that the connect listener gives late
+*socket connections* (issue #245; see `docs/overlay-main-process.md`
+"Metadata replay"). Consumed at `LootTracker.ingest`
+(`overlay/src/renderer/src/loot/LootTracker.ts`).
 
 ### 4g. `itemInfo` envelope (inside a batch) — synthetic, versioned, edge-triggered
 

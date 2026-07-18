@@ -13,6 +13,7 @@ import {
   type SaveSettingsResult
 } from '../shared/ipc'
 import { CaptureRing } from '../shared/capture'
+import { LatestMetadataCache } from '../shared/metadataCache'
 import type { PanelInstance } from '../shared/panels'
 import type { OverlaySettings } from '../shared/settings'
 import { startBridgeClient, stopBridgeClient } from './bridgeClient'
@@ -273,6 +274,7 @@ app.whenReady().then(() => {
   // for the ring's capacity/quota model and the replay tests that consume its
   // output shape.
   const captureRing = new CaptureRing()
+  const metadataCache = new LatestMetadataCache()
 
   // Shared by both capture entry points (IPC.reportBug/IPC.captureNow and the
   // tray's "Capture now" item) - the only difference is whether the
@@ -341,6 +343,11 @@ app.whenReady().then(() => {
       // probe retains exactly the chat/party types those exclude, locally
       // and only while user-armed - see main/chatProbe.ts.
       pushChatProbeBatch(packets as PacketEnvelope[])
+      // Latest metadata tables, kept for IPC.replayMetadata (issue #245) -
+      // the bridge delivers them edge-triggered (#239), so a renderer
+      // consumer that subscribes after the one-shot delivery re-requests
+      // them from here instead of never seeing them.
+      for (const p of packets as PacketEnvelope[]) metadataCache.push(p)
     },
     onConnected: requestSpritePack,
     onSpritePack: onSpritePackMessage
@@ -373,6 +380,19 @@ app.whenReady().then(() => {
   ipcMain.handle(IPC.chatProbeStart, () => startChatProbe())
   ipcMain.handle(IPC.chatProbeStop, () => stopChatProbe())
   ipcMain.handle(IPC.getChatProbeStatus, () => chatProbeStatus())
+
+  // Re-send the cached metadata tables through the normal packet-batch path
+  // (issue #245; see METADATA_ENVELOPE_TYPES in shared/ipc.ts). Requested by
+  // App on mount (the WS can connect before React's subscribers exist when
+  // the supervisor found an already-running bridge) and by late-mounted
+  // consumers (the settings view's item-name catalog). Safe to call any
+  // time: consumers skip same-metaVersion envelopes with a string compare.
+  ipcMain.handle(IPC.replayMetadata, () => {
+    const cached = metadataCache.snapshot()
+    if (cached.length > 0 && overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.webContents.send(IPC.packetBatch, cached)
+    }
+  })
 
   startUpdatePolling((info) => {
     if (overlayWindow && !overlayWindow.isDestroyed()) {

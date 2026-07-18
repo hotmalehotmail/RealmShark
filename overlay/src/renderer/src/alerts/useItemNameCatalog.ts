@@ -39,6 +39,12 @@ export function useItemNameCatalog(): readonly string[] {
         }
       }
     })
+    // This hook mounts with the settings view - long after the bridge's
+    // one-shot, edge-triggered `lootBagTypes` delivery (#239) - so without
+    // asking main to re-send its cached copy the catalog stays empty forever
+    // (issue #245: "the item filter dropdown no longer appears"). Requested
+    // after subscribing above so the replayed batch can't race the listener.
+    void window.overlay.replayMetadata()
     return offBatch
   }, [])
 

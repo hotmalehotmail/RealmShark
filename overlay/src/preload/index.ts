@@ -129,6 +129,7 @@ const overlayApi: OverlayApi = {
   startChatProbe: (): Promise<ChatProbeStatus> => ipcRenderer.invoke(IPC.chatProbeStart),
   stopChatProbe: (): Promise<ChatProbeResult> => ipcRenderer.invoke(IPC.chatProbeStop),
   getChatProbeStatus: (): Promise<ChatProbeStatus> => ipcRenderer.invoke(IPC.getChatProbeStatus),
+  replayMetadata: (): Promise<void> => ipcRenderer.invoke(IPC.replayMetadata),
   setEditableFocused: (focused: boolean): void => {
     ipcRenderer.send(IPC.editableFocusChange, focused)
   }
