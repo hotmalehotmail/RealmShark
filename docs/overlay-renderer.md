@@ -28,7 +28,8 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/panels/panelSpawn.ts` | `PanelSpawnContext` / `usePanelSpawn()` - lets a panel body open/close another panel on the canvas (§2's "Programmatic panel spawn/close"). |
 | `overlay/src/renderer/src/panels/anchor.ts` | Percentage-anchor ↔ pixel math (`panelStyle`, `anchorFromPointer`). |
 | `overlay/src/renderer/src/panels/registry.ts` | `type → { title, per-size px dims, component, closable? }` and `PanelContentProps`. |
-| `overlay/src/renderer/src/panels/{Status,Dps,Console,Character,Instance,DpsSummary,DpsDetail,Loot}Panel.tsx` | The eight panel bodies. |
+| `overlay/src/renderer/src/panels/panelLayout.ts` | `defaultLayout()`/`mergeWithDefaults()`/`isPersistablePanel()` - split out of `PanelCanvas.tsx` (a component file can't also export plain functions - `react-refresh/only-export-components`), same rationale as `dps/dpsDetailContext.ts`. |
+| `overlay/src/renderer/src/panels/{Status,Dps,Console,Character,Instance,DpsSummary,DpsDetail,Loot,Notifications}Panel.tsx` | The nine panel bodies. |
 | `overlay/src/renderer/src/ui/*.tsx` | Shared UI primitives (`Button`, `EmptyState`, `Swatch`, `GearRow`, `MeterRow`, `StatRow`, `Tooltip`) — see `overlay-ui-style.md`. |
 | `overlay/src/renderer/src/ui/interactiveContext.ts` | `InteractiveContext` / `useInteractive()` - the click-through-mode flag, for `Tooltip` (§4.2). |
 | `overlay/src/renderer/src/assets/main.css` | Tailwind entry + the `@theme` design-token block — see `overlay-ui-style.md`. |
@@ -58,6 +59,7 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/alerts/{types,catalog,dispatcher,store}.ts` | The engine's React-free core: event/rule types, the `whiteBag`/`orangeBag`/`enchantedDrop` catalog, multi-match dispatch, the bounded fired-alert log. |
 | `overlay/src/renderer/src/alerts/useAlertEngine.ts` | React hook mounting one `AlertEngine` at App level (§8), wiring packet/settings/detach IPC. |
 | `overlay/src/renderer/src/alerts/slotTypeNames.ts` | SlotType id → display name, empirically derived from the facts file. |
+| `overlay/src/renderer/src/alerts/alertStoreContext.ts` | `AlertStoreContext`/`useAlertStore()` (issue #220) - exposes `AlertEngine.store` to panels mounted under `PanelCanvas`, with no direct parent/child relationship to `App.tsx`. |
 
 ---
 
@@ -398,7 +400,7 @@ mechanism any future panel can reuse, not a DPS-specific hack:
 
 ## 3. The panels
 
-All eight bodies are thin; the data lives in the shared services. `size` maps
+All nine bodies are thin; the data lives in the shared services. `size` maps
 to per-panel scale tables at the top of each file. Every gear/loot icon below
 renders through `ItemSprite`, not `Sprite` directly, so it's hoverable for the
 item tooltip (§4.2) with no per-panel wiring.
@@ -413,6 +415,7 @@ item tooltip (§4.2) with no per-panel wiring.
 | `DpsSummaryPanel` | "DPS Summary" | `useDpsHistory()` | A master list only: retained past instances (icon + name + a "You: Xdmg (#rank)" headline). Clicking a row opens that instance's breakdown in the separate `dpsDetail` panel below rather than swapping this panel's own content — see §2's "Programmatic panel spawn/close" and §5.1. |
 | `DpsDetailPanel` | "DPS Detail" | `useDpsDetailSelection()` | The large, closable, independently draggable/resizable panel `DpsSummaryPanel` opens on row click (issue #194): the selected instance's enemies ranked by total damage, expandable to a frozen per-player breakdown (gear/dyes/enchants). A single reused panel instance re-targeted on each new selection, not one spawned per session. Renders "No session selected" if opened with nothing selected (shouldn't happen via the normal row-click path). See §2, §5.1. |
 | `LootPanel` | "Loot" | `useLootTracker()` | Session log of white/orange bags (BagType 6/8) that dropped near the player, both always shown under their own bag sprite + count (no text label), with per-item rarity border + shiny badge + enchant tooltip, chronological (not de-duplicated). See §7. |
+| `NotificationsPanel` | "Notifications" | `useAlertStore()` | Session log of fired alerts (issue #220), newest first: time, payload icon (`ItemSprite`, when set), title/body, matched catalog kind ids (hidden at `sm`). A pure viewer over the same `FiredAlertStore` `AlertToastHost` reads - see §8/`docs/notifications.md`. |
 
 **StatusPanel** (`panels/StatusPanel.tsx`) is the only panel wired straight to
 the IPC surface rather than a shared service. It subscribes to `onBridgeStatus`,
@@ -1347,7 +1350,7 @@ no inset, `overflow-y-auto` clips exactly at the content edge). Sized/registered
 
 ---
 
-## 8. Notification system (issues #218-#219)
+## 8. Notification system (issues #218-#220)
 
 `useAlertEngine()` mounts one `AlertEngine` instance in `App.tsx` (called
 unconditionally near the top of the component, alongside the other
@@ -1368,8 +1371,8 @@ Each new entry (`onEntry`, issue #217) becomes a `loot-drop` `GameEvent`,
 matched against a small rule catalog (`whiteBag`/`orangeBag`/
 `enchantedDrop`), and any match is appended to a bounded, subscribable
 `FiredAlertStore` — the store's subscribe API is the contract every UI
-surface reads from, so a future history panel/settings gear (issues
-#220-#221) never needs to reach into `AlertEngine` internals.
+surface reads from, so the history panel (issue #220) and a future settings
+gear (issue #221) never need to reach into `AlertEngine` internals.
 
 `AlertToastHost` (issue #219, rendered in `AppShell` above `PanelCanvas` —
 §2's panel system doesn't apply to it, it's not a `PANEL_REGISTRY` entry)
@@ -1380,9 +1383,22 @@ a capped/auto-dismissing toast (`toastQueue.ts`'s `ToastQueue`), one with
 the ping plays with no prior user gesture — a fired alert is a game event,
 not a click.
 
+`NotificationsPanel` (issue #220) is the store's **second** UI surface, and
+unlike `AlertToastHost` it *is* an ordinary §2 `PANEL_REGISTRY` entry
+(`registry.ts`'s `notifications` key, in `PanelCanvas.tsx`'s
+`defaultLayout()`). It reads the same `alertEngine.store` instance via
+`alertStoreContext.ts`'s `AlertStoreContext` — a context rather than a prop,
+since the panel is mounted by registry lookup with no direct parent/child
+relationship to `App.tsx` (`App.tsx` provides the context around `AppShell`
+alongside the existing `alertStore` prop it already passes to
+`AlertToastHost`). A pure viewer, newest-first, showing each fired alert's
+time/icon/title/body/`matchedKindIds` — deleting it from the layout doesn't
+stop alerts firing, same "pure viewer" property `LootPanel` has over
+`LootTracker`.
+
 Full architecture, the multi-match dispatch semantics, the delivery layer,
-the settings schema, and the SlotType name derivation: see
-**[notifications.md](notifications.md)**.
+the history panel, the settings schema, and the SlotType name derivation:
+see **[notifications.md](notifications.md)**.
 
 ---
 

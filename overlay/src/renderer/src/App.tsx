@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { BridgeStatus } from '../../shared/ipc'
 import { AlertToastHost } from './alerts/AlertToastHost'
+import { AlertStoreContext } from './alerts/alertStoreContext'
 import type { FiredAlertStore } from './alerts/store'
 import { useAlertEngine } from './alerts/useAlertEngine'
 import { ingestMainEntry } from './consoleLog'
@@ -85,13 +86,19 @@ function App(): React.JSX.Element {
         <ItemInfoProvider>
           <DpsDetailSelectionProvider>
             <InteractiveContext.Provider value={interactive}>
-              <AppShell
-                status={status}
-                interactive={interactive}
-                showAttachToast={showAttachToast}
-                alertStore={alertEngine.store}
-                alertVolume={alertVolume}
-              />
+              {/* Issue #220: lets NotificationsPanel (mounted deep under
+                  PanelCanvas, no direct parent/child relationship to App)
+                  read the same store AlertToastHost gets as a prop below,
+                  without reaching into AlertEngine internals. */}
+              <AlertStoreContext.Provider value={alertEngine.store}>
+                <AppShell
+                  status={status}
+                  interactive={interactive}
+                  showAttachToast={showAttachToast}
+                  alertStore={alertEngine.store}
+                  alertVolume={alertVolume}
+                />
+              </AlertStoreContext.Provider>
             </InteractiveContext.Provider>
           </DpsDetailSelectionProvider>
         </ItemInfoProvider>

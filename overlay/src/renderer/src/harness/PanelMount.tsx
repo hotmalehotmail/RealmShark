@@ -1,4 +1,6 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
+import { AlertStoreContext } from '../alerts/alertStoreContext'
+import { FiredAlertStore } from '../alerts/store'
 import { DpsDetailSelectionProvider } from '../dps/DpsDetailSelectionProvider'
 import { useDpsDetailSelection } from '../dps/dpsDetailContext'
 import { useDpsHistory } from '../dps/useDpsHistory'
@@ -8,6 +10,7 @@ import { PANEL_REGISTRY } from '../panels/registry'
 import { EntityRegistryProvider } from '../sprites/EntityRegistry'
 import { SpriteProvider } from '../sprites/SpriteProvider'
 import { InteractiveContext } from '../ui/interactiveContext'
+import { seedGallery } from './alertGallerySeed'
 
 interface PanelMountProps {
   type: string
@@ -56,6 +59,16 @@ function AutoSelectFirstDpsSession(): null {
  * re-render it at its natural height for the `-full` variant shot.
  */
 function PanelMount({ type, size }: PanelMountProps): React.JSX.Element {
+  // Only the `notifications` shot needs seeded alert data; every other panel
+  // type gets an empty, harmless store - same unconditional-but-idle
+  // provider pattern this mount already uses for Sprite/EntityRegistry/
+  // ItemInfo. Hooks must run before the unknown-type early return below.
+  const [alertStore] = useState(() => {
+    const store = new FiredAlertStore()
+    if (type === 'notifications') seedGallery(store)
+    return store
+  })
+
   const spec = PANEL_REGISTRY[type]
   if (!spec) {
     return (
@@ -71,30 +84,34 @@ function PanelMount({ type, size }: PanelMountProps): React.JSX.Element {
     <SpriteProvider>
       <EntityRegistryProvider>
         <ItemInfoProvider>
-          <DpsDetailSelectionProvider>
-            <PanelSpawnContext.Provider value={NOOP_PANEL_SPAWN}>
-              <InteractiveContext.Provider value={true}>
-                {type === 'dpsDetail' && <AutoSelectFirstDpsSession />}
-                <div
-                  data-panel-frame=""
-                  data-panel-type={type}
-                  data-panel-size={size}
-                  className="flex flex-col overflow-hidden rounded-lg border border-edge bg-panel shadow-lg backdrop-blur-sm"
-                  style={{ width, height }}
-                >
-                  <div className="flex shrink-0 items-center justify-between bg-surface px-2 py-1">
-                    <span className="truncate text-xs font-medium text-fg-muted">{spec.title}</span>
-                  </div>
+          <AlertStoreContext.Provider value={alertStore}>
+            <DpsDetailSelectionProvider>
+              <PanelSpawnContext.Provider value={NOOP_PANEL_SPAWN}>
+                <InteractiveContext.Provider value={true}>
+                  {type === 'dpsDetail' && <AutoSelectFirstDpsSession />}
                   <div
-                    data-panel-content=""
-                    className="min-h-0 flex-1 overflow-auto p-2 text-sm text-fg"
+                    data-panel-frame=""
+                    data-panel-type={type}
+                    data-panel-size={size}
+                    className="flex flex-col overflow-hidden rounded-lg border border-edge bg-panel shadow-lg backdrop-blur-sm"
+                    style={{ width, height }}
                   >
-                    <Content size={size} />
+                    <div className="flex shrink-0 items-center justify-between bg-surface px-2 py-1">
+                      <span className="truncate text-xs font-medium text-fg-muted">
+                        {spec.title}
+                      </span>
+                    </div>
+                    <div
+                      data-panel-content=""
+                      className="min-h-0 flex-1 overflow-auto p-2 text-sm text-fg"
+                    >
+                      <Content size={size} />
+                    </div>
                   </div>
-                </div>
-              </InteractiveContext.Provider>
-            </PanelSpawnContext.Provider>
-          </DpsDetailSelectionProvider>
+                </InteractiveContext.Provider>
+              </PanelSpawnContext.Provider>
+            </DpsDetailSelectionProvider>
+          </AlertStoreContext.Provider>
         </ItemInfoProvider>
       </EntityRegistryProvider>
     </SpriteProvider>
