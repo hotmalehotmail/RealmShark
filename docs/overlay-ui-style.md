@@ -135,6 +135,7 @@ apart; new code must use them instead of re-rolling the markup.
 | `GearRow` | a player's 4 equipment-slot icons (placeholder swatches for empty slots), hoverable for the item tooltip | `equipment` (nullable), `rarity` (nullable, parallel enchant-tier array - see "Rarity roles" above), `slotSize` (px; `<= 0` renders nothing), `ownerObjectId?` (for equipped-slot enchant tooltips) |
 | `MeterRow` | list row with a damage-share bar (width **and** color) behind its content | `fillPct` (0–100, clamped — drives both fill width and its hot/cool color), `highlight?` (local player: accent ring only, independent of fill color), `textSize?` (`'2xs'\|'xs'\|'sm'`, default `'xs'`), `height?` (px, fixed-height lists), `onClick?` (renders a `<button>`), `className?` |
 | `Button` | every button | `variant`: `subtle` (default) \| `ghost` \| `primary` \| `success` \| `warn`; `size`: `xs` \| `sm` (default) \| `md`; `active?` (ghost toggles, e.g. the pin); plus native button props |
+| `Select` | every `<select>` | plain native `<select>` props; `className` is layout-only. Pairs with `main.css`'s `select option` rule, which gives the option list its own opaque background/text (the native popup can't inherit the app's translucent chrome — soak #232) |
 | `StatRow` | label-left / mono-tabular-value-right line | `label`, `children`, `className?` |
 | `Tooltip` | hover tooltip that escapes a panel's clipping (portals to `document.body`) and clamps to the viewport | `content` (`ReactNode`), `children` (the hover trigger), `className?` (trigger wrapper only) |
 
