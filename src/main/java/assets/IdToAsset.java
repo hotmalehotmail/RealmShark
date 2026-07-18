@@ -11,6 +11,17 @@ import java.util.Map;
  * Id to asset class. Used to convert incoming realm IDs to the corresponding asset.
  */
 public class IdToAsset {
+    /**
+     * Suffix marking a "shiny" item variant on its raw XML {@code id} (issue
+     * #193/#215) - e.g. {@code "Dirk of Cronus Shiny"}. Checked against
+     * {@link #idName}, NOT {@link #display}/{@link #objectName}: a shiny
+     * item's {@code <DisplayId>} is the shared base name with the suffix
+     * stripped (real assets, confirmed on soak #215's alpha - the same shared
+     * name a non-shiny variant of the same item also carries), so deriving
+     * shininess from the resolved display name silently loses the signal for
+     * every real shiny item that has a display name at all.
+     */
+    private static final String SHINY_SUFFIX = " Shiny";
     private final String l;
     private final int id;
     private final String idName;
@@ -22,6 +33,8 @@ public class IdToAsset {
     private Projectile[] projectiles = null;
     private final String texture;
     private Texture[] textures = null;
+    /** Whether {@link #idName} carries the {@link #SHINY_SUFFIX}. Computed once at construction. */
+    private final boolean shiny;
     /**
      * Parsed {@code <BagType>} value (a 0-9 enum; 6 = white bag, 8 = orange/ST
      * bag - see docs/asset-pipeline.md), or -1 when the object carries none.
@@ -72,6 +85,7 @@ public class IdToAsset {
         this.bagType = parseBagType(bagType);
         this.tier = tier == null ? "" : tier;
         this.description = description == null ? "" : description;
+        this.shiny = idName != null && idName.endsWith(SHINY_SUFFIX);
     }
 
     /**
@@ -97,6 +111,7 @@ public class IdToAsset {
         bagType = -1;
         tier = "";
         description = "";
+        shiny = idName != null && idName.endsWith(SHINY_SUFFIX);
     }
 
     /*
@@ -177,8 +192,30 @@ public class IdToAsset {
     public static void registerFake(
         int id, String clazz, int bagType, String tier, String display, String description
     ) {
+        registerFake(id, clazz, bagType, tier, "Fake" + id, display, description);
+    }
+
+    /**
+     * Like {@link #registerFake(int, String, int, String, String, String)},
+     * additionally taking an explicit raw {@code idName} instead of the
+     * hardcoded {@code "Fake<id>"} - needed to simulate a real shiny item in
+     * {@code --fake} mode (issue #215), since {@link #isShiny} checks the raw
+     * id, not {@code display}.
+     *
+     * @param id          Synthetic object id (must not collide with a real one).
+     * @param clazz       Class of the fake object (e.g. "Equipment").
+     * @param bagType     BagType to report for this id.
+     * @param tier        Fake {@code <Tier>} value, or "" for none.
+     * @param idName      Fake raw id name, or "" to fall back to "Fake&lt;id&gt;".
+     * @param display     Fake display name, or "" to fall back to "Fake&lt;id&gt;".
+     * @param description Fake description, or "" for none.
+     */
+    public static void registerFake(
+        int id, String clazz, int bagType, String tier, String idName, String display, String description
+    ) {
         IdToAsset entry = new IdToAsset(
-            "", id, "Fake" + id, display == null ? "" : display, clazz, null, "", "", "",
+            "", id, idName == null || idName.isEmpty() ? "Fake" + id : idName,
+            display == null ? "" : display, clazz, null, "", "", "",
             String.valueOf(bagType), tier == null ? "" : tier, description == null ? "" : description
         );
         fakeEntries.put(id, entry);
@@ -285,6 +322,21 @@ public class IdToAsset {
         if (i == null) return null;
         if (i.display.equals("")) return i.idName;
         return i.display;
+    }
+
+    /**
+     * Whether an object id is a "shiny" item variant (issue #193/#215) - the
+     * raw XML id carries the {@link #SHINY_SUFFIX}, independent of whatever
+     * {@link #objectName} resolves to. See {@code bridge/LootBagTypes.java}'s
+     * {@code shinyItemTypes}, the wire signal that replaced deriving this from
+     * the (frequently suffix-stripped) resolved display name.
+     *
+     * @param id Id of the object.
+     * @return true if this id is a shiny variant, false if not or unknown.
+     */
+    public static boolean isShiny(int id) {
+        IdToAsset i = objectID.get(id);
+        return i != null && i.shiny;
     }
 
     /**

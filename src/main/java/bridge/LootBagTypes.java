@@ -3,7 +3,9 @@ package bridge;
 import assets.IdToAsset;
 import com.google.gson.Gson;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -21,10 +23,14 @@ import java.util.Map;
  * though it finds nothing on real assets (soak #113/#144 - see
  * {@link IdToAsset#findBagIconObjectType}), and each tracked color's
  * resolved icon id (or the verified known fallback) always included. Broadcast as a synthetic
- * {@code {"type":"lootBagTypes","data":{"bagTypeTable":{...},"lootBagIcons":{...},"lootBagObjectTypes":{...},"itemNames":{...}}}}
+ * {@code {"type":"lootBagTypes","data":{"bagTypeTable":{...},"lootBagIcons":{...},"lootBagObjectTypes":{...},"itemNames":{...},"shinyItemTypes":[...]}}}
  * envelope through the normal packet-batch stream, independent of the sprite
  * pack's atlas-readiness gate ({@link bridge.sprites.SpritePackService#ready()})
- * since this data needs no atlas.
+ * since this data needs no atlas. {@code shinyItemTypes} (issue #215) is a
+ * dedicated id list from {@link IdToAsset#isShiny} - NOT derivable from
+ * {@code itemNames}, since {@link IdToAsset#objectName} prefers a real shiny
+ * item's shared (suffix-stripped) display name whenever one is set, which on
+ * real assets is true for nearly every shiny item.
  */
 public class LootBagTypes {
 
@@ -50,6 +56,7 @@ public class LootBagTypes {
 
         Map<String, Integer> bagTypeTable = new LinkedHashMap<>();
         Map<String, String> itemNames = new LinkedHashMap<>();
+        List<Integer> shinyItemTypes = new ArrayList<>();
         Map<String, Integer> lootBagObjectTypes = new LinkedHashMap<>();
         for (int id : IdToAsset.objectIds()) {
             if (id <= 0) continue;
@@ -69,6 +76,7 @@ public class LootBagTypes {
             bagTypeTable.put(String.valueOf(id), bt);
             String name = IdToAsset.objectName(id);
             if (name != null && !name.isEmpty()) itemNames.put(String.valueOf(id), name);
+            if (IdToAsset.isShiny(id)) shinyItemTypes.add(id);
         }
 
         // The real assets' discovery rule (issue #189): ground-bag entities are
@@ -108,6 +116,7 @@ public class LootBagTypes {
         env.data.lootBagIcons = lootBagIcons;
         env.data.lootBagObjectTypes = lootBagObjectTypes;
         env.data.itemNames = itemNames;
+        env.data.shinyItemTypes = shinyItemTypes;
 
         cachedJson = gson.toJson(env);
         cachedObjectCount = count;
@@ -119,6 +128,7 @@ public class LootBagTypes {
         Map<String, Integer> lootBagIcons;
         Map<String, Integer> lootBagObjectTypes;
         Map<String, String> itemNames;
+        List<Integer> shinyItemTypes;
     }
 
     /** Envelope shape matching {@link PacketSerializer}'s, so overlay clients treat it uniformly. */

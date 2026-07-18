@@ -105,6 +105,8 @@ export class LootTracker {
   private bagTypeTable = new Map<number, TrackedBagType>()
   private lootBagIcons = new Map<TrackedBagType, number>()
   private itemNames = new Map<number, string>()
+  /** objectTypes of shiny item variants (issue #215) - see `LootBagTypesData.shinyItemTypes`. */
+  private shinyItemTypes = new Set<number>()
   /** Loot-bag ENTITY objectType -> BagType (from `lootBagObjectTypes`); the world objectTypes we watch for. */
   private bagEntityTypes = new Map<number, TrackedBagType>()
 
@@ -187,6 +189,10 @@ export class LootTracker {
     this.itemNames.clear()
     for (const [k, v] of Object.entries(data.itemNames ?? {})) {
       this.itemNames.set(Number(k), v)
+    }
+    this.shinyItemTypes.clear()
+    for (const objectType of data.shinyItemTypes ?? []) {
+      this.shinyItemTypes.add(objectType)
     }
 
     if (!this.bagTypesReady) {
@@ -289,6 +295,11 @@ export class LootTracker {
     return this.itemNames.get(objectType) ?? null
   }
 
+  /** Whether an item objectType is a shiny variant (issue #215) - see `LootBagTypesData.shinyItemTypes`. */
+  isShiny(objectType: number): boolean {
+    return this.shinyItemTypes.has(objectType)
+  }
+
   /** Chronological (oldest-first) entries for one bag type. Not de-duplicated - two identical drops both appear. */
   entriesFor(bagType: TrackedBagType): LootEntry[] {
     return this.entries.filter((e) => e.bagType === bagType)
@@ -307,8 +318,9 @@ export class LootTracker {
   reset(): void {
     this.resetPerInstance()
     this.entries = []
-    // bagTypeTable/lootBagIcons/bagEntityTypes/itemNames are asset-derived, not
-    // per-session, so they're deliberately NOT cleared here - mirrors DpsTracker
-    // keeping its retained history's supporting data alive across a reset.
+    // bagTypeTable/lootBagIcons/bagEntityTypes/itemNames/shinyItemTypes are
+    // asset-derived, not per-session, so they're deliberately NOT cleared here
+    // - mirrors DpsTracker keeping its retained history's supporting data
+    // alive across a reset.
   }
 }

@@ -405,22 +405,29 @@ exposed via:
 entity can't be mistaken for a pickupable item), `lootBagObjectTypes` (the
 complement — every `Class=Bag` **entity** id for the tracked colors, incl.
 boosted variants, that the overlay's drop tracker watches for), `lootBagIcons`
-(BagType → one representative bag entity id, via `findBagIconObjectType`), and
-`itemNames` (item id → `IdToAsset.objectName`) for the tracked items, and ships
+(BagType → one representative bag entity id, via `findBagIconObjectType`),
+`itemNames` (item id → `IdToAsset.objectName`) for the tracked items, and
+`shinyItemTypes` (item ids → `IdToAsset.isShiny`, issue #215), and ships
 them as the synthetic `lootBagTypes` envelope - see
 [bridge-server.md](bridge-server.md#6-lootbagtypes--synthetic-loot-categorization)
 for the bridge-side broadcast mechanics and
-[architecture.md](architecture.md) for the exact wire shape. `itemNames`
-carries a shiny item's raw display name verbatim, trailing `" Shiny"` suffix
-and all - `objectName` never consults the facts snapshot's `displayId` field
-(that's a fake-mode/test-only concept, see the Item facts bullet below), so a
-real asset load's `display`/`idName` columns are untouched by it. The
-overlay's Loot panel (`sprites/shiny.ts`, issue #193) derives shininess
-purely from that suffix client-side, with no dedicated `shiny` boolean added
-to this envelope. Deliberately
-**not** part of `SpritePackService`'s pack: this data needs only `IdToAsset`
-(no atlas), so it's available - and broadcast - independent of the sprite
-pack's atlas-readiness gate.
+[architecture.md](architecture.md) for the exact wire shape.
+
+`itemNames`' value is `objectName`'s "best descriptive name" — it **prefers
+the item's `displayId`** (the real asset load's `display` column, populated
+from the XML `<DisplayId>` element the same way regardless of shininess) over
+the raw id whenever one is set, falling back to the raw id only when
+`display` is empty. On real assets nearly every shiny item *does* have a
+`displayId` (it's the shared name with its non-shiny counterpart), so
+`itemNames` reports a shiny item's **clean, suffix-stripped** name almost
+always — an alpha soak (#215) found the overlay's Loot panel deriving
+shininess from that string (a trailing `" Shiny"` check) silently never fired
+on a real drop because of exactly this. Shininess is now a **dedicated**
+`shinyItemTypes` list built from `IdToAsset.isShiny`, which checks the raw id
+directly and is never affected by what `objectName`/`displayId` resolve to.
+Deliberately **not** part of `SpritePackService`'s pack: this data needs only
+`IdToAsset` (no atlas), so it's available - and broadcast - independent of
+the sprite pack's atlas-readiness gate.
 
 `lootBagObjectTypes` is built primarily from `lootBagEntityTypes()`'s id-name
 rule - the only mechanism that works on real assets, and the one that covers

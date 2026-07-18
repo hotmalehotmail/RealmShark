@@ -2,7 +2,6 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { LootTracker } from '../src/renderer/src/loot/LootTracker'
-import { isShinyItemName } from '../src/renderer/src/sprites/shiny'
 import { loadCapture, replay } from './replay'
 
 const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures/captures')
@@ -84,12 +83,18 @@ describe('LootTracker capture replay', () => {
     expect(entries[0].objectType).toBe(1001)
   })
 
-  it('issue #193: a shiny item (name suffixed " Shiny" in itemNames) is detected via isShinyItemName', () => {
+  it('issue #193/#215: a shiny item is detected via the dedicated shinyItemTypes signal, not its (suffix-stripped) display name', () => {
     // Synthesized like the #122 (mutated) case above - no committed fixture
     // contains a real shiny drop. Wire shapes lifted from
-    // `bridge/LootBagTypes.java` (itemNames carries the facts-derived name
-    // verbatim, "Shiny" suffix included - see FakePacketSource.registerFactsItem's
-    // fullName path) and `packets/data/enums/StatType.java`.
+    // `bridge/LootBagTypes.java` and `packets/data/enums/StatType.java`.
+    // Soak #215: on real assets, `itemNames`' value for a shiny item is its
+    // CLEAN display name (`IdToAsset.objectName` prefers the item's shared
+    // `displayId` over the raw `" Shiny"`-suffixed id whenever one is set,
+    // which is true for nearly every real shiny item) - so this fixture
+    // deliberately gives the shiny item's `itemNames` entry no " Shiny"
+    // suffix at all, matching the live client, and relies solely on
+    // `shinyItemTypes` to flag it. A regression back to name-suffix
+    // detection would fail this.
     const envelopes: Parameters<typeof replay>[1] = [
       {
         type: 'lootBagTypes',
@@ -99,7 +104,8 @@ describe('LootTracker capture replay', () => {
           bagTypeTable: { '1210': 6, '1001': 6 },
           lootBagIcons: { '6': 2000 },
           lootBagObjectTypes: { '3000': 6 },
-          itemNames: { '1210': 'Dirk of Cronus Shiny', '1001': 'Potion of Life' }
+          itemNames: { '1210': 'Dirk of Cronus', '1001': 'Potion of Life' },
+          shinyItemTypes: [1210]
         }
       },
       {
@@ -132,7 +138,7 @@ describe('LootTracker capture replay', () => {
 
     const shiny = entries.find((e) => e.objectType === 1210)
     const plain = entries.find((e) => e.objectType === 1001)
-    expect(isShinyItemName(tracker.itemName(shiny!.objectType))).toBe(true)
-    expect(isShinyItemName(tracker.itemName(plain!.objectType))).toBe(false)
+    expect(tracker.isShiny(shiny!.objectType)).toBe(true)
+    expect(tracker.isShiny(plain!.objectType)).toBe(false)
   })
 })

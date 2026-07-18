@@ -452,7 +452,10 @@ plumbing.
   covers the boosted variants; see
   [asset-pipeline.md](asset-pipeline.md)'s BagType section, issue #189);
   every other such id is an item, added to `bagTypeTable` (item id → BagType) +
-  `itemNames` (item id → `IdToAsset.objectName`). Separately,
+  `itemNames` (item id → `IdToAsset.objectName`) + `shinyItemTypes` (item ids
+  flagged by `IdToAsset.isShiny`, issue #215 - a dedicated signal, since
+  `objectName` usually resolves a real shiny item's shared, suffix-stripped
+  display name instead of its raw `" Shiny"`-suffixed id). Separately,
   `IdToAsset.findBagIconObjectType(bagType)` resolves each tracked BagType's one
   representative `Class=Bag` entity id into `lootBagIcons` (the panel's category
   header sprite) — **and** (soak #144) is also folded into `lootBagObjectTypes`
