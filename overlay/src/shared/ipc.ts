@@ -24,7 +24,10 @@ export const IPC = {
   updateProgress: 'update-progress',
   reportBug: 'report-bug',
   captureNow: 'capture-now',
-  editableFocusChange: 'editable-focus-change'
+  editableFocusChange: 'editable-focus-change',
+  chatProbeStart: 'chat-probe-start',
+  chatProbeStop: 'chat-probe-stop',
+  getChatProbeStatus: 'get-chat-probe-status'
 } as const
 
 /** Result of an IPC.reportBug / IPC.captureNow call: where the capture bundle was written on disk. */

@@ -320,9 +320,13 @@ exact value for party chat is a wire fact we don't have pinned, and
 `PartyListMessagePacket` also exists in the stream — per the ground-truth rule,
 guessing then testing against the same guess is exactly the loot-saga failure mode
 (#105 → soaks #113/#122/#136/#144). Since chat is excluded from both capture paths,
-verification needs a one-off local observation on the Windows machine (a temporary
-local-only allowlist addition or console print — not shipped). This is why the
-phasing in §9 splits chat out.
+verification uses the Status panel's **chat-probe** diagnostic (a shipped,
+explicitly user-armed, local-only capture of exactly these types —
+`docs/overlay-main-process.md` "Chat probe"): arm it, produce a scripted message
+matrix in-game (local / party-from-self / party-from-other / guild / tell + a party
+command), disarm, and read the field values off the NDJSON. The raw file stays on
+the user's machine; only redacted shape facts (exact sentinel strings, usernames
+removed) go into issue #222. This is why the phasing in §9 splits chat out.
 
 ## 7. Edge cases and guards
 
@@ -391,7 +395,8 @@ Modified:
 ## 10. Open items
 
 - Pin the party-chat wire shape (`TextPacket.recipient`? `PartyListMessagePacket`?)
-  from a live session before building phase 2.
+  from a live session before building phase 2 — via the Status panel's chat-probe
+  button (§6).
 - Verify the `save-settings` main handler is cheap/idempotent for unchanged
   hotkey/title fields before adopting apply-on-change saves.
 - Pick/produce the bundled ping sound (CC0, short, quiet-mix friendly).

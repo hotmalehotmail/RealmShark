@@ -333,6 +333,38 @@ disk, so a bug can be captured *after* the fact instead of requiring
   (and `.ndjson`) the same way it reads `.json.gz` - see
   `docs/overlay-testing.md`.
 
+### Chat probe (local wire-shape diagnostic)
+
+A user-armed diagnostic for observing the chat/party envelope types that both
+capture paths above deliberately drop (`TextPacket` incl. DMs — see the
+`CAPTURE_ALLOWED_TYPES` privacy rationale). It exists to pin the party-chat
+wire shape for issue #222 (`docs/prd-notifications.md` §6) without weakening
+that posture: the output is local-only, never bundled into any capture, and
+only ever written on an explicit user action.
+
+- **Where the logic lives.** Same pure/Electron split as the session
+  recorder: `shared/chatProbe.ts` holds `CHAT_PROBE_TYPES` (chat + party
+  packets; `ChatHelloPacket` deliberately excluded — handshake packets are
+  where session-ish fields live), the ~2000-entry oldest-evicted
+  `ChatProbeBuffer`, and the `ChatProbeStatus`/`ChatProbeResult` shapes;
+  `main/chatProbe.ts` is the Electron wrapper (arm/feed/disarm + file
+  output). `overlay/test/chatProbe.test.ts` pins the filter, the cap, and
+  the invariant that `CHAT_PROBE_TYPES` and `CAPTURE_ALLOWED_TYPES` stay
+  disjoint.
+- **Flow.** The Status panel's "Chat probe" button toggles it over
+  `IPC.chatProbeStart`/`chatProbeStop` (+ `getChatProbeStatus`, which the
+  panel polls once per second while armed for a live captured-count in the
+  button label). `onBatch` feeds `pushChatProbeBatch(packets)`
+  unconditionally — a no-op while disarmed, same pattern as `recordBatch`.
+- **Output.** Plain (not gzipped — meant to be read in a text editor, not
+  attached anywhere) NDJSON of the retained envelopes, written on disarm to
+  `userData/diagnostics/chat-probe-<timestamp>.ndjson` and revealed via
+  `shell.showItemInFolder`. Nothing captured ⇒ no file. Not rotated/retained:
+  each probe run is one small file the user deletes when done.
+- **Lifecycle.** Armed state is in-memory only (a quit while armed discards
+  the buffer — deliberate: nothing chat-related is ever persisted without
+  the explicit stop action).
+
 ### Quit / teardown
 
 `will-quit` (`index.ts:383`): `globalShortcut.unregisterAll()`, then

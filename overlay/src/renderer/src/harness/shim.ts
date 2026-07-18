@@ -142,6 +142,11 @@ export function installHarness(): void {
     onUpdateProgress: updateProgress.on,
     reportBug: (): Promise<BugReportResult> => Promise.resolve({ file: '' }),
     captureNow: (): Promise<BugReportResult> => Promise.resolve({ file: '' }),
+    // No main process to buffer/write anything - the probe reports inactive
+    // and captures nothing in the harness.
+    startChatProbe: () => Promise.resolve({ active: false, captured: 0 }),
+    stopChatProbe: () => Promise.resolve({ file: null, captured: 0 }),
+    getChatProbeStatus: () => Promise.resolve({ active: false, captured: 0 }),
     // No main process to gate here - the harness has no global Esc dismiss.
     setEditableFocused: (): void => {}
   }
