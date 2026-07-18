@@ -34,9 +34,9 @@ function formatTime(ms: number): string {
  */
 function NotificationsPanel({ size }: PanelContentProps): React.JSX.Element {
   const store = useAlertStore()
-  const [alerts, setAlerts] = useState<readonly FiredAlert[]>(() => store.getAll())
+  const [alerts, setAlerts] = useState<readonly FiredAlert[]>(() => [...store.getAll()])
 
-  useEffect(() => store.subscribe(setAlerts), [store])
+  useEffect(() => store.subscribe((next) => setAlerts([...next])), [store])
 
   if (alerts.length === 0) {
     return (
