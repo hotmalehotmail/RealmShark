@@ -407,20 +407,20 @@ Filed as six dependency-ordered issues, each one agent PR into `staging`, sized 
 be implementable and testable headless (FakePacketSource + vitest + gradle, no
 game). The §1 layering contract is binding acceptance criteria in every one of them.
 
-1. **Bridge: all-color loot metadata + item slot types** — the data layer:
+1. **#217 — Bridge: all-color loot metadata + item slot types** — the data layer:
    `LootBagTypes` widening + `slotTypes`, `IdToAsset` item-`SlotType` parsing,
    `LootTracker` tracked-set parameter + `onEntry`, `FakePacketSource` enchanted
    non-white/orange drop. Loot panel behavior explicitly unchanged.
-2. **Alert engine core (no UI)** — engine, catalog (the three loot rules with
+2. **#218 — Alert engine core (no UI)** — engine, catalog (the three loot rules with
    tiered thresholds), dispatcher, fired-alert store, settings schema,
    `slotTypeNames`. Deliberately ships nothing visible: the store's subscribe API
    is the contract every UI surface builds on.
-3. **Banner toast host + ping sound** — pure presentation over the store; the PR
+3. **#219 — Banner toast host + ping sound** — pure presentation over the store; the PR
    that establishes the "banner redesign touches `AlertToastHost` only" boundary.
-4. **Notifications history panel** — a second, independent viewer over the store.
-5. **Per-panel settings gear + notifications settings UI** — the generic gear
+4. **#220 — Notifications history panel** — a second, independent viewer over the store.
+5. **#221 — Per-panel settings gear + notifications settings UI** — the generic gear
    mechanism plus its first user (params editors in the UI-side registry).
-6. **Party-chat rule (phase 2)** — blocked on the §6 wire verification; the issue
+6. **#222 — Party-chat rule (phase 2)** — blocked on the §6 wire verification; the issue
    must carry the verified party-channel shape before `agent:build` is applied.
 
 Label them (`agent:build`) **sequentially, each after the previous PR lands** —
