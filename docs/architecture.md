@@ -304,10 +304,15 @@ The engine internals are [dps-engine.md](dps-engine.md).
 
 ### 4f. `lootBagTypes` envelope (inside a batch) — synthetic, re-sent periodically
 
-Resolves which item ids are BagType 6 (white bag) / 8 (orange/ST bag) — the
-Loot panel's session log (issue #105) — from the same extracted asset data
-`ObjectNames` reads, independent of the sprite pack's atlas-readiness gate
-(this data needs no atlas, only `IdToAsset`; see `asset-pipeline.md`):
+Resolves which item ids are loot items and which are ground-bag entities, for
+**every BagType present in the loaded assets** (issue #217 widened this from
+the original BagType 6/white or 8/orange-only scope) — feeding both the Loot
+panel's session log (issue #105, which still only tracks 6/8 via
+`LootTracker`'s default constructor argument) and the notification system's
+all-color rules (`docs/prd-notifications.md` §2) — from the same extracted
+asset data `ObjectNames` reads, independent of the sprite pack's
+atlas-readiness gate (this data needs no atlas, only `IdToAsset`; see
+`asset-pipeline.md`):
 
 ```json
 {
@@ -319,32 +324,39 @@ Loot panel's session log (issue #105) — from the same extracted asset data
     "lootBagIcons": { "6": <bagObjectType>, "8": <bagObjectType> },
     "lootBagObjectTypes": { "<bagObjectType>": 6, "<bagObjectType>": 8 },
     "itemNames": { "<itemObjectType>": "<display name>" },
-    "shinyItemTypes": [ <itemObjectType>, ... ]
+    "shinyItemTypes": [ <itemObjectType>, ... ],
+    "slotTypes": { "<itemObjectType>": <slotType> }
   }
 }
 ```
 
-`bagTypeTable` maps a **string** item objectType to its BagType (only 6/8
-entries — untracked BagTypes are omitted, and the ground-bag entities
+`bagTypeTable` maps a **string** item objectType to its BagType (every BagType
+present in the loaded assets, not just 6/8 — the ground-bag entities
 themselves, `Class=Bag`, are excluded so they can't be mistaken for
 pickupable items). `lootBagObjectTypes` is the complement: every `Class=Bag`
-**entity** objectType for the tracked colors (regular *and* boosted variants),
-mapped to its BagType — the set the Loot panel's drop tracker watches for in
+**entity** objectType for every color (regular *and* boosted variants),
+mapped to its BagType — the set a drop tracker watches for in
 `UpdatePacket.newObjects` to read a dropped bag's contents (its
 `INVENTORY_0..7` items + `UNIQUE_DATA_STRING` enchants). This always includes
-each tracked color's `findBagIconObjectType` result too (soak #144) — on real
-assets the `Class=Bag`+own-`BagType` scan alone finds nothing (soak #113), so
-without this fallback the drop tracker had no entity to watch for at all.
-`lootBagIcons` is a
-single representative bag entity per color — the sprite the Loot panel renders
-as a category header, resolved through the same `objectType → atlas rect` path
-as any other sprite (`sprites/Sprite.tsx`, no special-casing). `itemNames` is
-`IdToAsset.objectName` for the tracked items (the always-visible inline label).
-`shinyItemTypes` (issue #215) is a **separate** list of shiny item objectTypes
-from `IdToAsset.isShiny` — deliberately not derived from `itemNames`, since a
-real shiny item's `objectName` result is usually its shared, suffix-stripped
-display name (see `asset-pipeline.md`'s `LootBagTypes` bullet). Built by
-`LootBagTypes.envelopeJson()` (`bridge/LootBagTypes.java`).
+each of `TRACKED_BAG_TYPES`' (6/8 only) `findBagIconObjectType` result too
+(soak #144) — on real assets the `Class=Bag`+own-`BagType` scan alone finds
+nothing (soak #113), so without this fallback the drop tracker had no entity
+to watch for at all. `lootBagIcons` is a single representative bag entity per
+**tracked** (6/8 only — the Loot panel's own category-header colors,
+deliberately unaffected by the widening above) color — the sprite the Loot
+panel renders as a category header, resolved through the same
+`objectType → atlas rect` path as any other sprite (`sprites/Sprite.tsx`, no
+special-casing). `itemNames` is `IdToAsset.objectName` for every item in
+`bagTypeTable` (the always-visible inline label). `shinyItemTypes` (issue
+#215) is a **separate** list of shiny item objectTypes from
+`IdToAsset.isShiny` — deliberately not derived from `itemNames`, since a real
+shiny item's `objectName` result is usually its shared, suffix-stripped
+display name (see `asset-pipeline.md`'s `LootBagTypes` bullet). `slotTypes`
+(issue #217) is `IdToAsset.getSlotType` (the item's equipment-category enum,
+e.g. objectType 283 "The Hive Key" → `10`) for every item in `bagTypeTable` —
+feeds the notification system's per-category enchant-threshold overrides
+(`docs/prd-notifications.md` §3). Built by `LootBagTypes.envelopeJson()`
+(`bridge/LootBagTypes.java`).
 
 **Unlike the sprite pack (one-shot broadcast), this is re-sent on every 2 s
 readiness poll** once `IdToAsset.loadedObjectCount() > 1`

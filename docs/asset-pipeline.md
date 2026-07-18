@@ -80,7 +80,7 @@ assets/sprites/*.png               ← the 4 atlas PNGs (characters, characters_
 assets/xml/*.xml                   ← every object/tile TextAsset, as .xml
       │  AssetExtractor.extractAssetsFromXML() (2nd pass)
       ▼
-assets/ObjectID.list               ← objectType;display;class;group;proj;texture;labels;name;bagType;tier;description
+assets/ObjectID.list               ← objectType;display;class;group;proj;texture;labels;name;bagType;tier;description;slotType
 assets/TileID.list                 ← tileType;texture;damage;name
 ```
 
@@ -279,9 +279,10 @@ min/max/AP, texture `file,index`, labels), sorts by id, and writes them via
 to use the literal filename with no timestamp (`util/Util.java:95-96`). Only a
 subset of child nodes is captured — notably `<Texture>`/`<AnimatedTexture>` for
 the sprite lookup (`:561-564`), `<BagType>` (raw string, appended as the 9th
-`ObjectID.list` column — see "BagType" below), and `<Tier>`/`<Description>`
-(appended as the 10th/11th columns — see "Item info" below); dye
-`<Tex1>`/`<Tex2>` are **not** extracted here (that parsing lives in
+`ObjectID.list` column — see "BagType" below), `<Tier>`/`<Description>`
+(appended as the 10th/11th columns — see "Item info" below), and `<SlotType>`
+(appended as the 12th column — see "SlotType — item equipment category"
+below); dye `<Tex1>`/`<Tex2>` are **not** extracted here (that parsing lives in
 `SpritePackService`, see [dyes-and-textiles.md](dyes-and-textiles.md)).
 
 ## The sprite-sheet model (`flattbuffer/`)
@@ -360,8 +361,14 @@ depending on the object, means one of two things:
 - **On an item** (e.g. a weapon, a piece of equipment): which color loot bag
   it drops in when an enemy holding it dies. `6` = white bag, `8` = orange
   (ST/self-found) bag - the two colors players actually screenshot, and the
-  only two the overlay's Loot panel tracks (issue #105); other values (and no
-  `<BagType>` at all) are common and simply untracked.
+  only two the overlay's Loot panel tracks (issue #105) via `LootTracker`'s
+  default constructor argument. The bridge's `lootBagTypes` envelope itself
+  covers every BagType present in the loaded assets, not just 6/8 (issue #217
+  - see the `LootBagTypes` bullet below); a caller other than the Loot panel
+  (e.g. the notification system, `docs/prd-notifications.md` §2) can construct
+  its own `LootTracker` with a wider tracked set to see the rest. No
+  `<BagType>` at all (parsed as `-1`) means "not a loot item" and is the only
+  value excluded from the envelope.
 - **On a ground-bag entity, in theory** (the bag object itself - a separate
   object with its own `objectType`/sprite, not the item inside it): which
   color bag *this entity is*. **Real assets never do this** (confirmed against
@@ -401,17 +408,25 @@ exposed via:
   cost doesn't matter.
 
 **`bridge/LootBagTypes.java`** is the only consumer: it builds `bagTypeTable`
-(item id → BagType, filtered to 6/8 and excluding `Class=Bag` entries so a bag
-entity can't be mistaken for a pickupable item), `lootBagObjectTypes` (the
-complement — every `Class=Bag` **entity** id for the tracked colors, incl.
-boosted variants, that the overlay's drop tracker watches for), `lootBagIcons`
-(BagType → one representative bag entity id, via `findBagIconObjectType`),
-`itemNames` (item id → `IdToAsset.objectName`) for the tracked items, and
-`shinyItemTypes` (item ids → `IdToAsset.isShiny`, issue #215), and ships
-them as the synthetic `lootBagTypes` envelope - see
+(item id → BagType, covering every BagType present — issue #217 removed the
+original 6/8-only filter — and excluding `Class=Bag` entries so a bag entity
+can't be mistaken for a pickupable item), `lootBagObjectTypes` (the
+complement — every `Class=Bag` **entity** id for every color, incl. boosted
+variants, that a drop tracker watches for), `lootBagIcons` (BagType → one
+representative bag entity id via `findBagIconObjectType`, deliberately still
+scoped to `TRACKED_BAG_TYPES` = `{6, 8}` — the Loot panel's own
+category-header colors, unaffected by the widening), `itemNames` (item id →
+`IdToAsset.objectName`) and `slotTypes` (item id → `IdToAsset.getSlotType` —
+see "SlotType" below) for every item in `bagTypeTable`, and `shinyItemTypes`
+(item ids → `IdToAsset.isShiny`, issue #215), and ships them as the synthetic
+`lootBagTypes` envelope - see
 [bridge-server.md](bridge-server.md#6-lootbagtypes--synthetic-loot-categorization)
 for the bridge-side broadcast mechanics and
-[architecture.md](architecture.md) for the exact wire shape.
+[architecture.md](architecture.md) for the exact wire shape. On the overlay
+side, `LootTracker`'s tracked-bag-type set is a constructor parameter
+(default `[6, 8]`) so a caller other than the Loot panel can track every
+color the envelope now carries — see
+[overlay-renderer.md](overlay-renderer.md)'s Loot panel section.
 
 `itemNames`' value is `objectName`'s "best descriptive name" — it **prefers
 the item's `displayId`** (the real asset load's `display` column, populated
@@ -464,7 +479,45 @@ prior behavior regressed.
 > `fakeEntries` map and re-applied after every `reloadAssets()` call (real or
 > fake), so they survive regardless of call-order races with
 > `ObjectNames.init`'s own background reload; tests start hermetic via
-> `IdToAsset.clearFakeEntries()`.
+> `IdToAsset.clearFakeEntries()`. `FakePacketSource` also seeds one
+> non-white/orange item (`WIDE_ITEM_TYPE`, BagType 7, the real facts item at
+> objectType 283 "The Hive Key") and periodically drops it fully-enchanted, so
+> the widened (issue #217) all-color coverage is exercisable headlessly too -
+> see `lootBagDrop()`'s variant 4.
+
+### SlotType — item equipment category (issue #217)
+
+`<SlotType>` is an integer child element on an `<Object>` entry that
+classifies an item's equipment category (e.g. objectType 283 "The Hive Key"
+→ `10`; see `AssetFacts.Item#slotType` in `asset-facts.json` for the ground
+truth). The XML tag is shared with an unrelated older use: on a **weapon**,
+the same value is also prepended to `AssetExtractor`'s projectile-string
+column (`AssetObject.toString()`), which `IdToAsset.getIdProjectileSlotType`
+reads as the projectile-group "weapon slot" - a `DamagePacket`
+invulnerability-bypass concept (`bridge.dps.Entity.trackSlotType18AbilityUse`),
+nothing to do with the item's own equipment category. Before issue #217, the
+per-item value was captured into `AssetObject.slotType` but only ever written
+to `ObjectID.list` when the object also had projectile data (i.e. only
+weapons) — every non-weapon item (armor, rings, bag entities, keys) silently
+lost it.
+
+Issue #217 appends the raw `<SlotType>` value as `ObjectID.list`'s **12th**
+column, unconditionally (`AssetExtractor.java`'s `AssetObject.toString()`).
+`IdToAsset` parses it the same length-guarded backward-compat way as
+`bagType`/`tier`/`description` (`l.length > 11 ? l[11] : ""`, decimal or
+`0x`-hex, defaulting to `0` when blank/unparseable — the same default
+`AssetFacts.Item#slotType` uses, so `0` is indistinguishable from "unset" in
+both), exposed via **`getSlotType(id)`** — distinct from
+`getIdProjectileSlotType(id)` above despite sharing an XML tag.
+`IdToAsset.registerFake`/`registerFakeNamed` gained a `slotType` parameter
+overload for `--fake` mode and tests; `bridge/FakePacketSource.java`'s
+`registerFactsItem` passes the facts item's real `slotType` through.
+
+**`bridge/LootBagTypes.java`** is the consumer: it builds a `slotTypes` map
+(item id → `getSlotType`) alongside `bagTypeTable`, for every item in the
+envelope (see "BagType" above) - the equipment-category enum the notification
+system's per-category enchant-threshold overrides key off
+(`docs/prd-notifications.md` §3's `slotTypeOverrides`).
 
 ### Asset facts — the committed real-asset ground truth (issue #189, PRD §7.4)
 
@@ -829,6 +882,11 @@ four existing atlases (see docs/dev-loop-mechanisms.md's soak loop).
   color, or (on a `Class=Bag` object) a bag entity's self-identified color —
   see "BagType — loot categorization" above. `IdToAsset.registerFake` is the
   seam that makes it demonstrable with no game installed.
+- **`<SlotType>` is one XML tag serving two UNRELATED roles** — a weapon's
+  projectile-group "weapon slot" (`getIdProjectileSlotType`, previously the
+  only reader) vs. an item's own equipment-category enum (`getSlotType`,
+  issue #217) — see "SlotType — item equipment category" above. Don't confuse
+  the two accessors.
 - **The base pipeline extracts 4 of the game's 231 textures.** Only 12 have
   embedded pixels; 197 stream to `resources.assets.resS` (the extractor doesn't
   currently read streamed pixels — a latent gap that never bites, since the 4

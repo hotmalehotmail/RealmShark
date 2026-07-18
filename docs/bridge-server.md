@@ -425,13 +425,16 @@ envelope with `type:"dps"`, `direction:"internal"`:
 
 ## 6. `LootBagTypes` — synthetic loot categorization
 
-`LootBagTypes` resolves which item ids are BagType 6 (white bag) / 8
-(orange/ST bag) — the two categories the overlay's Loot panel tracks (issue
-#105) — from the same `IdToAsset` data `ObjectNames` reads, so the panel needs
-no hand-maintained item list. Full field semantics (what `bagType` means, how
-`Class=Bag` entities self-identify a color's icon) are in
-[asset-pipeline.md](asset-pipeline.md); this section only covers the bridge
-plumbing.
+`LootBagTypes` resolves which item ids are loot items (every BagType present
+in the loaded assets, not just 6/white or 8/orange — issue #217 widened this)
+and which are ground-bag entities, from the same `IdToAsset` data
+`ObjectNames` reads, so the overlay side needs no hand-maintained item list —
+neither the Loot panel (issue #105, still 6/8-only via its own `LootTracker`
+construction) nor the notification system's all-color rules
+(`docs/prd-notifications.md` §2). Full field semantics (what `bagType` means,
+how `Class=Bag` entities self-identify a color's icon, what `SlotType` is) are
+in [asset-pipeline.md](asset-pipeline.md); this section only covers the
+bridge plumbing.
 
 - **`ready()`** — `IdToAsset.loadedObjectCount() > 1`. Deliberately **not**
   gated on the sprite pack's atlas-readiness (`SpritePackService.ready()`,
@@ -444,26 +447,36 @@ plumbing.
   satisfy `ready()` and demonstrate the Loot panel with no game or atlas at
   all - see §7 below.
 - **`envelopeJson()`** — walks `IdToAsset.objectIds()` once, keeping ids whose
-  `getBagType(id)` is 6 or 8. A `Class=Bag` **entity** among them goes into
-  `lootBagObjectTypes` (bag entity id → BagType — the set the overlay's drop
-  tracker watches for); that set is then extended with every entity matching
-  the real assets' id-name rule (`IdToAsset.lootBagEntityTypes()`,
-  `"Loot Bag <N>[ Boost]"` — the only mechanism real assets satisfy, and what
-  covers the boosted variants; see
-  [asset-pipeline.md](asset-pipeline.md)'s BagType section, issue #189);
-  every other such id is an item, added to `bagTypeTable` (item id → BagType) +
-  `itemNames` (item id → `IdToAsset.objectName`) + `shinyItemTypes` (item ids
-  flagged by `IdToAsset.isShiny`, issue #215 - a dedicated signal, since
-  `objectName` usually resolves a real shiny item's shared, suffix-stripped
-  display name instead of its raw `" Shiny"`-suffixed id). Separately,
-  `IdToAsset.findBagIconObjectType(bagType)` resolves each tracked BagType's one
-  representative `Class=Bag` entity id into `lootBagIcons` (the panel's category
-  header sprite) — **and** (soak #144) is also folded into `lootBagObjectTypes`
-  for that color, since the XML scan above finds no `Class=Bag`+own-`BagType`
+  `getBagType(id)` is `>= 0` (every BagType present, not just 6/8 — issue
+  #217; `-1` means no `<BagType>` at all, the only value excluded). A
+  `Class=Bag` **entity** among them goes into `lootBagObjectTypes` (bag entity
+  id → BagType — the set a drop tracker watches for); that set is then
+  extended with every entity matching the real assets' id-name rule
+  (`IdToAsset.lootBagEntityTypes()`, `"Loot Bag <N>[ Boost]"` — the only
+  mechanism real assets satisfy, and what covers the boosted variants; see
+  [asset-pipeline.md](asset-pipeline.md)'s BagType section, issue #189), now
+  for every color rather than just 6/8; every other such id is an item, added
+  to `bagTypeTable` (item id → BagType) + `itemNames` (item id →
+  `IdToAsset.objectName`) + `slotTypes` (item id → `IdToAsset.getSlotType`,
+  issue #217 — see [asset-pipeline.md](asset-pipeline.md)'s SlotType section)
+  + `shinyItemTypes` (item ids flagged by `IdToAsset.isShiny`, issue #215 - a
+  dedicated signal, since `objectName` usually resolves a real shiny item's
+  shared, suffix-stripped display name instead of its raw `" Shiny"`-suffixed
+  id). Separately, `IdToAsset.findBagIconObjectType(bagType)` resolves each of
+  `LootBagTypes.TRACKED_BAG_TYPES`' (6/8 only, the Loot panel's own
+  category-header colors — deliberately **not** widened) one representative
+  `Class=Bag` entity id into `lootBagIcons` (the panel's category header
+  sprite) — **and** (soak #144) is also folded into `lootBagObjectTypes` for
+  that color, since the XML scan above finds no `Class=Bag`+own-`BagType`
   match at all on real assets (soak #113) and `lootBagObjectTypes` would
   otherwise stay permanently empty on a real client, with no drop ever
   recognized. Cached and only rebuilt when `IdToAsset.loadedObjectCount()`
-  changes (a reload), so repeated polling is cheap.
+  changes (a reload), so repeated polling is cheap. Widening the item table
+  to every color grows it substantially (~1.8k → ~12k entries against the
+  committed facts file); measured serialized size in `--fake` mode with every
+  facts item/entity registered is ~630 KB, comfortably under the ~1 MB size
+  budget (`docs/prd-notifications.md` §10) — no `itemNames`/`itemInfo.names`
+  dedupe needed yet.
 - **Envelope shape** mirrors `ObjectNames`'s (`type:"lootBagTypes"`,
   `direction:"internal"`) - see the full JSON shape in
   [architecture.md](architecture.md#4f-lootbagtypes-envelope-inside-a-batch--synthetic-re-sent-periodically).

@@ -25,9 +25,20 @@ const UNIQUE_DATA_STRING_STAT = 80
  */
 const MAX_PENDING_NEW_OBJECTS = 64
 
-/** BagType values the Loot panel tracks - see docs/asset-pipeline.md (6 = white bag, 8 = orange/ST bag). */
+/**
+ * Default BagType values a `LootTracker` tracks when none is passed to its
+ * constructor - see docs/asset-pipeline.md (6 = white bag, 8 = orange/ST
+ * bag). The Loot panel's `useLootTracker()` relies on this default; a wide
+ * (all-color) instance - e.g. the notification system's alert engine, issue
+ * #218 - passes its own set instead (issue #217).
+ */
 export const TRACKED_BAG_TYPES = [6, 8] as const
-export type TrackedBagType = (typeof TRACKED_BAG_TYPES)[number]
+/**
+ * A `LootTracker` instance's tracked-bag-type set is caller-chosen (issue
+ * #217), so this is no longer the `TRACKED_BAG_TYPES` literal union - just a
+ * plain BagType id.
+ */
+export type TrackedBagType = number
 
 /**
  * Every envelope type `ingest()`'s switch handles. Read by the
@@ -44,10 +55,6 @@ export const CONSUMED_ENVELOPE_TYPES = [
   'MapInfoPacket'
 ] as const
 
-function isTrackedBagType(n: number): n is TrackedBagType {
-  return (TRACKED_BAG_TYPES as readonly number[]).includes(n)
-}
-
 export interface LootEntry {
   id: string
   objectType: number
@@ -58,6 +65,8 @@ export interface LootEntry {
   enchantCode: string
   /** Rarity-border tier (0-4) = filled enchant count, capped - see sprites/enchantRarity.ts. */
   rarity: number
+  /** The item's SlotType (issue #217), from `LootBagTypesData.slotTypes` - 0 when unresolved/unset. */
+  slotType: number
 }
 
 /** Live per-instance state for a loot-bag entity currently in view. */
@@ -68,11 +77,12 @@ interface BagInView {
 }
 
 /**
- * Framework-agnostic (no React) tracker for white/orange bag drops (BagType
- * 6/8), ingesting the same packet stream every panel reads. It watches the
- * loot-**bag entities** that appear in the world - NOT the local player's
- * inventory - so an item counts as soon as it *drops*, whether or not the
- * player picks it up. This mirrors the upstream tomato overlay's
+ * Framework-agnostic (no React) tracker for bag drops of a caller-chosen set
+ * of BagTypes (default [6, 8], white/orange - see the constructor), ingesting
+ * the same packet stream every panel reads. It watches the loot-**bag
+ * entities** that appear in the world - NOT the local player's inventory - so
+ * an item counts as soon as it *drops*, whether or not the player picks it
+ * up. This mirrors the upstream tomato overlay's
  * `DungeonStatData.updateItems`, which reads a bag container's INVENTORY_0..7
  * the same way. (Watching the player's inventory was the old behavior; it also
  * needed to special-case equip/unequip self-swaps to avoid false pickups -
@@ -100,15 +110,37 @@ interface BagInView {
  * `reset()` on overlay detach / game close), while the in-view bag bookkeeping
  * is per-instance. Categorization/naming/icons come entirely from the bridge's
  * `lootBagTypes` envelope (asset-derived), kept across `reset()`.
+ * <p>
+ * The tracked-bag-type set is a constructor parameter (issue #217), defaulting
+ * to `TRACKED_BAG_TYPES` ([6, 8], the Loot panel's own set) - a caller can pass
+ * a wider (or narrower) set, e.g. the notification system's alert engine
+ * (issue #218) tracking every color the bridge's widened `lootBagTypes`
+ * envelope now carries. `onEntry` subscribes to each newly-logged entry
+ * (including ones replayed from `pendingNewObjects`), so a caller doesn't have
+ * to diff `entries` itself to see new drops as events.
  */
 export class LootTracker {
+  /** The BagType values this instance tracks - everything else is ignored. */
+  private readonly trackedBagTypes: ReadonlySet<number>
   private bagTypeTable = new Map<number, TrackedBagType>()
   private lootBagIcons = new Map<TrackedBagType, number>()
   private itemNames = new Map<number, string>()
   /** objectTypes of shiny item variants (issue #215) - see `LootBagTypesData.shinyItemTypes`. */
   private shinyItemTypes = new Set<number>()
+  /** item objectType -> SlotType (issue #217) - see `LootBagTypesData.slotTypes`. */
+  private slotTypes = new Map<number, number>()
   /** Loot-bag ENTITY objectType -> BagType (from `lootBagObjectTypes`); the world objectTypes we watch for. */
   private bagEntityTypes = new Map<number, TrackedBagType>()
+  /** `onEntry` subscribers - see the class doc comment. */
+  private entryListeners = new Set<(entry: LootEntry) => void>()
+
+  constructor(trackedBagTypes: readonly number[] = TRACKED_BAG_TYPES) {
+    this.trackedBagTypes = new Set(trackedBagTypes)
+  }
+
+  private isTrackedBagType(n: number): boolean {
+    return this.trackedBagTypes.has(n)
+  }
 
   /** Bag objectId -> its in-view state (per-instance). */
   private bagsInView = new Map<number, BagInView>()
@@ -175,16 +207,16 @@ export class LootTracker {
     if (!data) return false
     this.bagTypeTable.clear()
     for (const [k, v] of Object.entries(data.bagTypeTable ?? {})) {
-      if (isTrackedBagType(v)) this.bagTypeTable.set(Number(k), v)
+      if (this.isTrackedBagType(v)) this.bagTypeTable.set(Number(k), v)
     }
     this.lootBagIcons.clear()
     for (const [k, v] of Object.entries(data.lootBagIcons ?? {})) {
       const bagType = Number(k)
-      if (isTrackedBagType(bagType)) this.lootBagIcons.set(bagType, v)
+      if (this.isTrackedBagType(bagType)) this.lootBagIcons.set(bagType, v)
     }
     this.bagEntityTypes.clear()
     for (const [k, v] of Object.entries(data.lootBagObjectTypes ?? {})) {
-      if (isTrackedBagType(v)) this.bagEntityTypes.set(Number(k), v)
+      if (this.isTrackedBagType(v)) this.bagEntityTypes.set(Number(k), v)
     }
     this.itemNames.clear()
     for (const [k, v] of Object.entries(data.itemNames ?? {})) {
@@ -193,6 +225,10 @@ export class LootTracker {
     this.shinyItemTypes.clear()
     for (const objectType of data.shinyItemTypes ?? []) {
       this.shinyItemTypes.add(objectType)
+    }
+    this.slotTypes.clear()
+    for (const [k, v] of Object.entries(data.slotTypes ?? {})) {
+      this.slotTypes.set(Number(k), v)
     }
 
     if (!this.bagTypesReady) {
@@ -272,17 +308,31 @@ export class LootTracker {
       }
       loggedSlots.add(slot)
       const code = bag.enchantSlots[slot] ?? ''
-      this.entries.push({
+      const entry: LootEntry = {
         id: String(this.nextEntryId++),
         objectType: itemType,
         bagType: itemBagType,
         droppedAt: Date.now(),
         enchantCode: code,
-        rarity: slotRarityTier(code)
-      })
+        rarity: slotRarityTier(code),
+        slotType: this.slotTypes.get(itemType) ?? 0
+      }
+      this.entries.push(entry)
+      for (const listener of this.entryListeners) listener(entry)
       logged = true
     }
     return logged
+  }
+
+  /**
+   * Subscribes to each newly-logged entry (issue #217) - including ones
+   * replayed from `pendingNewObjects` once `lootBagTypes` first arrives, since
+   * those route through the same `processBagSlots` push. Returns an
+   * unsubscribe function.
+   */
+  onEntry(listener: (entry: LootEntry) => void): () => void {
+    this.entryListeners.add(listener)
+    return () => this.entryListeners.delete(listener)
   }
 
   /** A representative ground-bag entity objectType for a bag color (the panel's category-header sprite), or null. */

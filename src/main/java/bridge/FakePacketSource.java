@@ -82,7 +82,12 @@ import java.util.Random;
  * categorization, and per-item enchant/rarity display are demonstrable and
  * regression-testable with no game installed (issue #105). One drop variant
  * is a real "Shiny"-suffixed facts item ({@link #SHINY_ITEM_TYPE}), so the
- * Loot panel's shiny-item badge (issue #193) is exercised the same way.
+ * Loot panel's shiny-item badge (issue #193) is exercised the same way. One
+ * more drop variant is a fully-enchanted item of a color OTHER than 6/8
+ * ({@link #WIDE_ITEM_TYPE}, BagType {@link #WIDE_BAG_TYPE}) - the Loot panel
+ * itself never shows it, but it proves the bridge's widened `lootBagTypes`
+ * envelope (issue #217: every BagType, plus a per-item `slotTypes` map) is
+ * demonstrable with no game installed too.
  * <p>
  * Every roster member's UNIQUE_DATA_STRING stat also carries synthetic
  * per-slot enchant data ({@link #ROSTER_ENCHANTS}, encoded via
@@ -202,6 +207,17 @@ public class FakePacketSource {
     // here is whatever real shiny item happens to be lowest-numbered with
     // BagType 6 (no BagType-8 shiny items exist in the facts snapshot).
     private static final int SHINY_ITEM_TYPE = factsShinyItemType(6, 9400);
+    // A non-white/orange bag color (issue #217: bridge/LootBagTypes.java now
+    // covers every BagType, not just 6/8) - 7 chosen because its lowest-id
+    // facts item is objectType 283 "The Hive Key" (slotType 10), the exact
+    // example the widened-coverage feature was specced against. The Loot
+    // panel itself never shows this (LootTracker still tracks only [6, 8] by
+    // default), but the bridge envelope and a wide-set LootTracker instance
+    // (the future alert engine, issue #218) both need real non-6/8 traffic to
+    // exercise against headlessly - see lootBagDrop()'s variant 4.
+    private static final int WIDE_BAG_TYPE = 7;
+    private static final int WIDE_BAG_ICON_TYPE = factsEntityType(WIDE_BAG_TYPE, false, 9005);
+    private static final int WIDE_ITEM_TYPE = factsItemType(WIDE_BAG_TYPE, 9500);
 
     /** Lowest-id facts entity with this bagType/boosted flag, or {@code fallback} when no facts are bundled. */
     private static int factsEntityType(int bagType, boolean boosted, int fallback) {
@@ -229,7 +245,7 @@ public class FakePacketSource {
         assets.facts.AssetFacts.Item item = FACTS.items.get(String.valueOf(type));
         if (item == null) return;
         IdToAsset.registerFake(
-            type, "Equipment", item.bagType,
+            type, "Equipment", item.bagType, item.slotType,
             item.tier == null ? "" : item.tier,
             item.name,
             item.displayId != null ? item.displayId : item.name,
@@ -305,17 +321,19 @@ public class FakePacketSource {
             // exercises the same code path the real client does, boosted
             // variants included.
             FACTS.entities.forEach((key, entity) -> {
-                if (entity.bagType != 6 && entity.bagType != 8) return;
+                if (entity.bagType != 6 && entity.bagType != 8 && entity.bagType != WIDE_BAG_TYPE) return;
                 IdToAsset.registerFakeNamed(Integer.parseInt(key), entity.name, entity.clazz, -1);
             });
             registerFactsItem(ORANGE_ITEM_TYPE);
             registerFactsItem(FILLER_ITEM_TYPE);
             registerFactsItem(WHITE_ITEM_TYPE);
             registerFactsItem(SHINY_ITEM_TYPE);
+            registerFactsItem(WIDE_ITEM_TYPE);
         } else {
             IdToAsset.registerFake(WHITE_BAG_ICON_TYPE, "Bag", 6);
             IdToAsset.registerFake(ORANGE_BAG_ICON_TYPE, "Bag", 8);
             IdToAsset.registerFake(BOOSTED_WHITE_BAG_ICON_TYPE, "Bag", 6);
+            IdToAsset.registerFake(WIDE_BAG_ICON_TYPE, "Bag", WIDE_BAG_TYPE);
             IdToAsset.registerFake(ORANGE_ITEM_TYPE, "Equipment", 8);
             IdToAsset.registerFake(FILLER_ITEM_TYPE, "Equipment", 3);
             IdToAsset.registerFake(
@@ -329,6 +347,11 @@ public class FakePacketSource {
                 SHINY_ITEM_TYPE, "Equipment", 6, "13",
                 "Fake Blade of Testing Shiny", "Fake Blade of Testing",
                 "A synthetic shiny loot item seeded by --fake mode for the shiny-badge demo."
+            );
+            IdToAsset.registerFake(
+                WIDE_ITEM_TYPE, "Equipment", WIDE_BAG_TYPE, 10, "",
+                "", "Fake Hive Key",
+                "A synthetic non-white/orange loot item seeded by --fake mode for the all-color coverage demo."
             );
         }
         IdToAsset.registerFake(
@@ -630,18 +653,24 @@ public class FakePacketSource {
      * the white bag pairs an enchanted white item with an off-tier filler
      * that must NOT be listed (proving per-item filtering), the orange bag
      * carries a more-enchanted orange item, the boosted bag proves both the
-     * boosted entity's detection and a zero-enchant item, and the shiny-white
+     * boosted entity's detection and a zero-enchant item, the shiny-white
      * bag drops {@link #SHINY_ITEM_TYPE} - a real facts item whose raw id name
      * keeps its " Shiny" suffix (see {@link #registerFactsItem(int)}, checked
      * via {@link IdToAsset#isShiny}) - so the renderer's shiny-badge detection
-     * (issue #193/#215) is exercised with no game installed. The previous bag
-     * is despawned ({@link UpdatePacket}.drops) so bags don't pile up in view.
+     * (issue #193/#215) is exercised with no game installed, and (issue #217)
+     * a bag of {@link #WIDE_BAG_TYPE} (7, not 6/8) drops a fully-enchanted
+     * (4 filled slots) {@link #WIDE_ITEM_TYPE} - the Loot panel never shows
+     * this one ({@code LootTracker}'s default tracked set stays [6, 8]), but
+     * it proves the bridge's widened `lootBagTypes` envelope carries real
+     * non-6/8 traffic (bagTypeTable/itemNames/lootBagObjectTypes/slotTypes)
+     * end-to-end with no game installed. The previous bag is despawned
+     * ({@link UpdatePacket}.drops) so bags don't pile up in view.
      */
     private UpdatePacket lootBagDrop(int cycle) {
         int bagObjectType;
         int[] items;
         int[] enchantCounts;
-        int variant = cycle % 4;
+        int variant = cycle % 5;
         if (variant == 1) {
             bagObjectType = ORANGE_BAG_ICON_TYPE;
             items = new int[]{ORANGE_ITEM_TYPE};
@@ -654,6 +683,10 @@ public class FakePacketSource {
             bagObjectType = WHITE_BAG_ICON_TYPE;
             items = new int[]{SHINY_ITEM_TYPE};
             enchantCounts = new int[]{1};
+        } else if (variant == 4) {
+            bagObjectType = WIDE_BAG_ICON_TYPE;
+            items = new int[]{WIDE_ITEM_TYPE};
+            enchantCounts = new int[]{4};
         } else {
             bagObjectType = WHITE_BAG_ICON_TYPE;
             items = new int[]{WHITE_ITEM_TYPE, FILLER_ITEM_TYPE};
