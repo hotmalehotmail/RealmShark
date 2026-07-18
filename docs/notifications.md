@@ -34,7 +34,7 @@ user-facing (PRD §1).
 | `overlay/src/renderer/src/alerts/settingsRows.ts` | `buildRuleRows()` (issue #221) — React-free: one row per `CATALOG` entry with its resolved `RuleSettings`, so a new catalog entry needs no settings-UI edit (`test/alerts-settingsRows.test.ts` proves this with a synthetic entry). |
 | `overlay/src/renderer/src/alerts/paramsEditors.ts` | `PARAMS_EDITORS` (issue #221) — the UI-side `AlertKind.id → ComponentType<ParamsEditorProps>` registry (PRD §3). Only imports pre-built editor components itself — never defines one — so it can export a non-component value without tripping `react-refresh/only-export-components`. |
 | `overlay/src/renderer/src/alerts/paramsEditorTypes.ts` | `ParamsEditorProps` (issue #221) — split into its own type-only file so `paramsEditors.ts` and an editor component never need a value import from each other. |
-| `overlay/src/renderer/src/alerts/EnchantedDropParamsEditor.tsx` | `enchantedDrop`'s params editor (issue #221, PRD §3): tier dropdown + add/remove SlotType-category and item-name override rows. Registered under `paramsEditors.ts`. |
+| `overlay/src/renderer/src/alerts/EnchantedDropParamsEditor.tsx` | `enchantedDrop`'s params editor (issue #221, PRD §3): tier dropdown + add/remove SlotType-category and item-name override rows. Registered under `paramsEditors.ts`. Its item-name suggestion dropdown is debounced and portaled to `document.body` (soak #234 - see `itemNameSearch.ts` and below). |
 | `overlay/src/renderer/src/alerts/useItemNameCatalog.ts` | `useItemNameCatalog()` (issue #221) — every distinct name from the bridge's `lootBagTypes.itemNames` (issue #217's widened, all-color table), for the item-override autocomplete. A standalone `onPacketBatch` subscription, not routed through `AlertEngine`'s internal `LootTracker` — a UI-only concern outside the layering contract below. |
 
 ## Architecture
@@ -96,10 +96,15 @@ edits to `dispatcher.ts` or `store.ts`.
 ## The rule catalog (`catalog.ts`)
 
 Each `AlertKind` is `{ id, title, eventType, defaults, cooldownMs?, match }`.
-`match(event, params)` is a pure function returning an `AlertPayload` (`{
-title, body, icon? }`) or `null`. `AlertKind` is deliberately **not** generic
-over the event/params type — every kind's `match` accepts the full `GameEvent`
-union and `Record<string, unknown>` params, narrowing internally (the same
+`match(event, params, settings)` is a pure function returning an
+`AlertPayload` (`{ title, body, icon? }`) or `null`. `settings` is the full
+live `NotificationsSettings`, not just this kind's own resolved `params` —
+most rules never touch it (`enchantedDrop` doesn't), but `whiteBag`/
+`orangeBag` consult it to check whether `enchantedDrop` *also* matched this
+event via a specific override (see "Loot-bag spoiler avoidance" below).
+`AlertKind` is deliberately **not** generic over the event/params type —
+every kind's `match` accepts the full `GameEvent` union and
+`Record<string, unknown>` params, narrowing internally (the same
 cast-at-the-boundary pattern this codebase already uses for wire-data
 envelopes, e.g. `env.data as XxxData`). This keeps `CATALOG` a single
 homogeneous array with no variance workarounds.
@@ -113,6 +118,32 @@ homogeneous array with no variance workarounds.
    `itemOverrides[name.toLowerCase()] ?? slotTypeOverrides[slotType] ?? tier`
    (default `tier = 4`, divine). Item-name matching is case-insensitive exact
    (`"Doom Bow Shiny"` does **not** match an override keyed `"doom bow"`).
+
+### Loot-bag spoiler avoidance (`whiteBag`/`orangeBag`, soak #234)
+
+A white/orange bag can belong to another player, or sit on the ground before
+you've walked over to check it, so its payload does **not** reveal what's
+inside by default: `body` is the generic `"A new bag has dropped."` and
+`icon` is the bag's own ground-bag sprite (`LootDropEvent.bagIcon`,
+`LootTracker.bagIcon(bagType)` — `null` until the `lootBagTypes` envelope
+first resolves it, in which case no `icon` is set at all) rather than
+`itemType`.
+
+The one exception: if the same drop *also* fires `enchantedDrop` via an
+item-name or SlotType-category override (not just the global `tier`), the
+payload reveals the real item — name, enchant count, its own icon — via the
+shared `describeItem` formatter. The reasoning: the user explicitly
+configured that override for a particular item or class, so hiding it there
+would defeat the point, whereas the global tier says nothing item-specific
+and stays hidden. `catalog.ts`'s `matchesSpecificOverride` implements this
+check (reusing `enchantedDrop`'s own `resolveEnchantedDropThreshold`, so the
+two rules' resolution logic can't drift), and returns `false` outright if
+`enchantedDrop` itself is disabled — a user who turned that rule off entirely
+never gets a spoiler through this path either.
+
+`AlertEngine.onLootEntry` populates `bagIcon` on every `loot-drop` event from
+its own `LootTracker` instance (`this.lootTracker.bagIcon(entry.bagType)`),
+independent of `itemType` — see "Architecture" above.
 
 `resolveRuleSettings(kind, settings)` merges a user's
 `NotificationsSettings.rules[kind.id]` onto `kind.defaults`
@@ -335,6 +366,29 @@ The view renders, top to bottom:
   flipping the panel back to its normal content — the same effect as
   clicking the gear again.
 
+**Item-name suggestion dropdown (soak #234).** Two fixes over the original
+issue #221 shipped shape:
+
+- **Performance.** `itemNameSearch.ts`'s `fuzzySearchItemNames` scores every
+  name in the ~11.4k-entry catalog against the query on every call, so
+  `EnchantedDropParamsEditor` now (a) refuses to search below
+  `MIN_QUERY_LENGTH` (3) characters — a 1-2 character query matches
+  thousands of names anyway, a useless ranking for the worst-case scoring
+  cost — and (b) debounces the query by `SEARCH_DEBOUNCE_MS` (150ms) before
+  re-running the search, so a fast typist doesn't trigger a full rescan on
+  every keystroke.
+- **Clipping.** The suggestion list used to be `position: absolute` inside
+  the input's own wrapper, which `PanelFrame`'s ancestry clips: its content
+  wrapper is `overflow-auto` (the frame itself `overflow-hidden` —
+  `docs/overlay-renderer.md` §2), so a dropdown that extends past the panel's
+  own edge — nearly guaranteed for a `sm`/`md` Notifications settings panel —
+  was cut off. It's now portaled to `document.body` and positioned via
+  `getBoundingClientRect` against the real input, the same pattern
+  `ui/Tooltip.tsx` already uses to escape the identical clipping: opens
+  upward instead of downward when there isn't room below, and is
+  viewport-clamped either way, so it can never be cut off by an ancestor's
+  overflow again.
+
 The whole view is a single flat flow (no nested `overflow-y-auto`) so
 `PanelFrame`'s own content wrapper is the sole scroll container — matching
 every other panel body, and load-bearing for `e2e/shots.spec.ts`'s
@@ -409,7 +463,11 @@ export const myNewRule: AlertKind = {
   title: 'My New Rule',
   eventType: 'loot-drop',           // or a future event type
   defaults: { enabled: true, banner: true, sound: true, params: {} },
-  match: (event, params) => {
+  // `settings` (the full live NotificationsSettings) is only needed if your
+  // rule wants to consult another kind's resolved settings, the way
+  // whiteBag/orangeBag do (see "Loot-bag spoiler avoidance" above) - most
+  // rules ignore the third parameter entirely.
+  match: (event, params, settings) => {
     if (event.type !== 'loot-drop') return null
     // ... your predicate ...
     return { title: '...', body: '...', icon: event.itemType }

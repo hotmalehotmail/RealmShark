@@ -13,6 +13,7 @@ function whiteBagEvent(overrides: Partial<LootDropEvent> = {}): LootDropEvent {
     slotType: 3,
     enchantCount: 4,
     enchantCode: '',
+    bagIcon: null,
     ...overrides
   }
 }

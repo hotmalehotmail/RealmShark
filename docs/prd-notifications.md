@@ -212,8 +212,18 @@ Worked example: white bag with a 4-enchant item, `whiteBag` set to banner-only,
 Rejected alternatives: per-rule independent firing (2-3 near-identical banners per
 drop, instantly fills the 3-slot stack — reads as a bug) and payload merging (catalog
 entries stop being independent pure functions; information loss is near zero anyway
-since payload bodies derive from the shared event — `whiteBag`'s body already carries
-the enchant count).
+since payload bodies derive from the shared event).
+
+**Amendment (soak #234, post-launch):** `whiteBag`/`orangeBag` no longer put the
+item's name/enchant count in their payload by default — a bag glimpsed across the
+room (possibly another player's) shouldn't spoil its contents. `body` is a generic
+message and `icon` is the bag's own sprite; the real item is only revealed when the
+same drop also fires `enchantedDrop` via a specific item-name or SlotType-category
+override (the user explicitly asked to be told about that item/class). See
+`docs/notifications.md`'s "Loot-bag spoiler avoidance" for the shipped mechanism —
+this changes `AlertKind.match`'s signature to also receive the full
+`NotificationsSettings` (§3's `match(event, params)` above is the original,
+now-superseded shape).
 
 ## 4. Stage 3 — delivery
 

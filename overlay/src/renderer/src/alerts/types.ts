@@ -1,3 +1,5 @@
+import type { NotificationsSettings } from '../../../shared/settings'
+
 /**
  * v1 event vocabulary the rule catalog matches against (PRD §2,
  * docs/prd-notifications.md). Chat is deliberately out of scope for issue
@@ -12,6 +14,14 @@ export interface LootDropEvent {
   slotType: number
   enchantCount: number
   enchantCode: string
+  /**
+   * The dropped bag's own ground-bag entity objectType (`LootTracker.bagIcon`
+   * - null if unresolved, e.g. before the `lootBagTypes` envelope first
+   * arrives), independent of `itemType`. `whiteBag`/`orangeBag` (`catalog.ts`)
+   * show this instead of the item's own icon by default (soak #234 - "loot
+   * bag notifications should not spoil what the item is").
+   */
+  bagIcon: number | null
 }
 
 export type GameEvent = LootDropEvent
@@ -54,7 +64,19 @@ export interface AlertKind {
   defaults: RuleSettings
   /** Minimum ms between two dispatched fires of this kind (PRD §7 "Spam"); omit for no cooldown - none of the v1 loot rules have one. */
   cooldownMs?: number
-  match: (event: GameEvent, params: Record<string, unknown>) => AlertPayload | null
+  /**
+   * Pure. `settings` is the full live `NotificationsSettings` (not just this
+   * kind's own resolved `params`) - most rules never touch it, but a rule can
+   * consult another kind's resolved settings to change its own payload (soak
+   * #234: `whiteBag`/`orangeBag` check whether `enchantedDrop` also matched
+   * via a specific item/class override before deciding whether to reveal the
+   * item's identity).
+   */
+  match: (
+    event: GameEvent,
+    params: Record<string, unknown>,
+    settings: NotificationsSettings
+  ) => AlertPayload | null
 }
 
 /** One entry in the fired-alert session log (`store.ts`). */

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildDisplayNameIndex,
-  fuzzySearchItemNames
+  fuzzySearchItemNames,
+  MIN_QUERY_LENGTH
 } from '../src/renderer/src/alerts/itemNameSearch'
 
 const NAMES = [
@@ -16,6 +17,14 @@ describe('fuzzySearchItemNames (soak #232 - item-override editor lag)', () => {
   it('returns no suggestions for an empty or whitespace-only query', () => {
     expect(fuzzySearchItemNames('', NAMES)).toEqual([])
     expect(fuzzySearchItemNames('   ', NAMES)).toEqual([])
+  })
+
+  it('returns no suggestions below MIN_QUERY_LENGTH characters (soak #234 - perf)', () => {
+    expect(MIN_QUERY_LENGTH).toBe(3)
+    expect(fuzzySearchItemNames('b', NAMES)).toEqual([])
+    expect(fuzzySearchItemNames('bo', NAMES)).toEqual([])
+    // At MIN_QUERY_LENGTH, searching resumes.
+    expect(fuzzySearchItemNames('bow', NAMES).length).toBeGreaterThan(0)
   })
 
   it('matches case-insensitively as a subsequence, not just a substring', () => {

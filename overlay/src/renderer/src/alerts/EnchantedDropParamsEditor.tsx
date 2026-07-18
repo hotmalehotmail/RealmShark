@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Button } from '../ui/Button'
 import { Select } from '../ui/Select'
 import type { EnchantedDropParams } from './catalog'
@@ -7,6 +8,15 @@ import type { ParamsEditorProps } from './paramsEditorTypes'
 import { SLOT_TYPE_NAMES, slotTypeName } from './slotTypeNames'
 import type { Tier } from './types'
 import { useItemNameCatalog } from './useItemNameCatalog'
+
+/** Debounce before re-running the fuzzy search on a keystroke (soak #234 - "optimize the search bar performance further"), on top of `fuzzySearchItemNames`'s own `MIN_QUERY_LENGTH` floor. */
+const SEARCH_DEBOUNCE_MS = 150
+
+/** Gap between the item-name input and the portaled suggestion dropdown, and the viewport margin it's clamped to. */
+const SUGGESTIONS_GAP = 2
+const VIEWPORT_MARGIN = 8
+/** Matches the dropdown's own `max-h-32` (8rem) - the worst-case height used to decide whether it should open upward instead of measuring the actual (variable) rendered height. */
+const SUGGESTIONS_MAX_HEIGHT = 128
 
 /** Rarity tier display names (PRD §3: "the UI shows the names, not numbers") - matches `sprites/enchantRarity.ts`'s tier scale. */
 const TIER_NAMES: Record<Tier, string> = {
@@ -54,8 +64,15 @@ function TierSelect({
  * `<datalist>` of every catalog name (~11.4k) - rendering all of them into
  * the DOM on every keystroke regardless of what was typed was the reported
  * "laggy" item-override editor (soak #232). It's now a small fuzzy-filtered
- * suggestion list (`fuzzySearchItemNames`, capped at a handful of matches)
- * shown only while the field is focused and non-empty.
+ * suggestion list (`fuzzySearchItemNames`, capped at a handful of matches,
+ * debounced `SEARCH_DEBOUNCE_MS` and skipped below `MIN_QUERY_LENGTH`
+ * characters - soak #234) shown only while the field is focused and
+ * non-empty. The suggestion dropdown itself is portaled to `document.body`
+ * (same pattern as `ui/Tooltip.tsx`) rather than absolutely positioned
+ * in-flow: `PanelFrame`'s content wrapper is `overflow-auto` (its frame
+ * `overflow-hidden`), so an in-flow dropdown gets clipped the moment it
+ * would extend past the panel's own edge - reported as "the dropdown menu
+ * is cut off" against the Notifications settings panel (soak #234).
  */
 export function EnchantedDropParamsEditor({
   params,
@@ -68,14 +85,45 @@ export function EnchantedDropParamsEditor({
   const [newSlotType, setNewSlotType] = useState<number | undefined>(undefined)
   const [newSlotTier, setNewSlotTier] = useState<Tier>(p.tier)
   const [newItemName, setNewItemName] = useState('')
+  const [debouncedItemName, setDebouncedItemName] = useState('')
   const [newItemTier, setNewItemTier] = useState<Tier>(p.tier)
   const [itemInputFocused, setItemInputFocused] = useState(false)
+  const itemInputRef = useRef<HTMLInputElement>(null)
+  const [suggestionsPos, setSuggestionsPos] = useState<{
+    left: number
+    top: number
+    width: number
+  } | null>(null)
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedItemName(newItemName), SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [newItemName])
 
   const itemSuggestions = useMemo(
-    () => fuzzySearchItemNames(newItemName, itemNames),
-    [newItemName, itemNames]
+    () => fuzzySearchItemNames(debouncedItemName, itemNames),
+    [debouncedItemName, itemNames]
   )
   const showItemSuggestions = itemInputFocused && itemSuggestions.length > 0
+
+  // Positions the portaled dropdown against the input's current viewport
+  // rect (`getBoundingClientRect`, not CSS) each time it opens or its
+  // content changes size (the suggestion count affects height) - opens
+  // upward when there isn't room below, viewport-clamped either way, so it
+  // can never be clipped by an ancestor panel's overflow.
+  useLayoutEffect(() => {
+    if (!showItemSuggestions || !itemInputRef.current) {
+      setSuggestionsPos(null)
+      return
+    }
+    const inputRect = itemInputRef.current.getBoundingClientRect()
+    let top = inputRect.bottom + SUGGESTIONS_GAP
+    if (top + SUGGESTIONS_MAX_HEIGHT > window.innerHeight - VIEWPORT_MARGIN) {
+      top = inputRect.top - SUGGESTIONS_MAX_HEIGHT - SUGGESTIONS_GAP
+    }
+    top = Math.max(VIEWPORT_MARGIN, top)
+    setSuggestionsPos({ left: inputRect.left, top, width: inputRect.width })
+  }, [showItemSuggestions, itemSuggestions])
 
   const update = (next: Partial<EnchantedDropParams>): void => {
     onChange({ ...p, ...next } as unknown as Record<string, unknown>)
@@ -188,8 +236,9 @@ export function EnchantedDropParamsEditor({
           </div>
         ))}
         <div className="flex items-center gap-1.5">
-          <div className="relative min-w-0 flex-1">
+          <div className="min-w-0 flex-1">
             <input
+              ref={itemInputRef}
               className={TEXT_INPUT_CLASS}
               value={newItemName}
               onChange={(e) => setNewItemName(e.target.value)}
@@ -197,27 +246,38 @@ export function EnchantedDropParamsEditor({
               onBlur={() => setItemInputFocused(false)}
               placeholder="Item name"
             />
-            {showItemSuggestions && (
-              <div className="absolute inset-x-0 top-full z-10 mt-0.5 max-h-32 overflow-y-auto rounded border border-edge bg-surface-2 shadow-lg">
-                {itemSuggestions.map((name) => (
-                  <button
-                    key={name}
-                    type="button"
-                    className="block w-full truncate px-1.5 py-0.5 text-left text-fg hover:bg-surface-3"
-                    // onMouseDown (not onClick) fires before the input's
-                    // onBlur - preventDefault keeps focus in the input so
-                    // selecting a suggestion never races the blur that would
-                    // otherwise close this list first.
-                    onMouseDown={(e) => {
-                      e.preventDefault()
-                      setNewItemName(name)
-                    }}
-                  >
-                    {name}
-                  </button>
-                ))}
-              </div>
-            )}
+            {showItemSuggestions &&
+              suggestionsPos &&
+              createPortal(
+                <div
+                  className="fixed z-[9999] max-h-32 overflow-y-auto rounded border border-edge bg-surface-2 shadow-lg"
+                  style={{
+                    left: suggestionsPos.left,
+                    top: suggestionsPos.top,
+                    width: suggestionsPos.width
+                  }}
+                >
+                  {itemSuggestions.map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      className="block w-full truncate px-1.5 py-0.5 text-left text-fg hover:bg-surface-3"
+                      // onMouseDown (not onClick) fires before the input's
+                      // onBlur - preventDefault keeps focus in the input so
+                      // selecting a suggestion never races the blur that would
+                      // otherwise close this list first.
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                        setNewItemName(name)
+                        setDebouncedItemName(name)
+                      }}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>,
+                document.body
+              )}
           </div>
           <TierSelect value={newItemTier} onChange={setNewItemTier} />
           <Button variant="ghost" size="xs" onClick={commitAddItem} disabled={!newItemName.trim()}>
