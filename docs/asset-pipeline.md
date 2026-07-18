@@ -104,9 +104,20 @@ GUI-free twin of `checkForExtraction`:
 
 1. `lastEdited(version)` = `resources.assets` last-modified time + `"-" + version`
    (`:125-130`).
-2. `checkUpdateAssets` no-ops (returns 0) when both list files exist **and** the
-   stored `lastModifiedTime` property matches (`:362-372`); otherwise it runs
-   `extractAssets` → `new UnityExtractor().extract(...)` and re-parses the XML.
+2. `checkUpdateAssets` no-ops (returns 0) when **every declared extractor
+   output exists** (`EXTRACTOR_OUTPUT_MARKERS` — the two `.list` files, the
+   three asset folders, and `assets/sprites/ui`) **and** the stored
+   `lastModifiedTime` property matches; otherwise it runs `extractAssets` →
+   `new UnityExtractor().extract(...)` and re-parses the XML. The presence
+   check is issue #211's fix: the gate used to key only on the game's mtime,
+   so a bridge upgrade whose extractor gained a new output (#207's UI
+   sprites) skipped extraction forever on a warm cache. **Contract:** a new
+   extractor output must (a) add its marker path to
+   `EXTRACTOR_OUTPUT_MARKERS` and (b) create that marker *unconditionally*
+   during extraction, even when the game build yields nothing for it (see
+   `extractUiSprites`' mkdirs-before-guards comment) — a marker means
+   "attempted", never "found", or a best-effort miss would re-extract every
+   launch. Pinned by `AssetExtractorFreshnessTest`.
 3. On success it stores the new `lastModifiedTime`, so a subsequent start with an
    unchanged game skips the multi-second extraction entirely.
 
@@ -858,10 +869,14 @@ four existing atlases (see docs/dev-loop-mechanisms.md's soak loop).
 - **Best-effort everywhere.** Extraction runs on a daemon thread and swallows all
   failures; the bridge stays up with sprites/names unresolved
   (`bridge/ObjectNames.java:41-60`).
-- **Freshness by mtime.** Both `checkUpdateAssets` (`AssetExtractor.java:362-372`)
-  and `version()` key off `resources.assets` / `characters.png` last-modified
-  time. Touching those files (without a real update) forces a re-extract / a new
-  pack version.
+- **Freshness by mtime + output presence.** `checkUpdateAssets` keys off
+  `resources.assets` last-modified time **and** the presence of every
+  declared extractor output (`EXTRACTOR_OUTPUT_MARKERS` — issue #211: mtime
+  alone let a bridge upgrade with a new extractor output skip extraction
+  forever on a warm cache); `SpritePackService.version()` keys off
+  `characters.png` mtime. Touching those files (without a real update)
+  forces a re-extract / a new pack version, as does deleting any declared
+  output marker.
 - **Four Unity classes are consumed** (`TextAsset`, `Texture2D`, `SpriteAtlas`,
   and — since issue #205 — `Sprite`). For every RotMG object sprite,
   `SpriteAtlas`/`Sprite` are still unused — those rects come from RotMG's own
