@@ -213,27 +213,26 @@ public class FakePacketSource {
             .orElse(fallback);
     }
 
-    /** Registers a facts item under its real id with real name/tier/bagType, so the Loot panel and tooltips show real data. */
-    private static void registerFactsItem(int type) {
-        registerFactsItem(type, false);
-    }
-
     /**
-     * Like {@link #registerFactsItem(int)}, but {@code fullName} skips the
-     * {@code displayId} override and always registers the raw facts
-     * {@code name} - needed for {@link #SHINY_ITEM_TYPE} so its wire name
-     * keeps the trailing " Shiny" suffix (the client-side shininess signal,
-     * see {@code sprites/shiny.ts}); {@code displayId} would otherwise strip
-     * it, the same way it does for the real item's non-shiny "clean" name.
+     * Registers a facts item under its real id with real name/tier/bagType,
+     * so the Loot panel and tooltips show real data. Always registers the raw
+     * facts {@code name} as the id name (not just for {@link #SHINY_ITEM_TYPE})
+     * and the {@code displayId}-preferring resolved name as the display name
+     * - matching the real client's {@code display}/{@code idName} split
+     * (issue #215: shininess is keyed off the raw id via
+     * {@link IdToAsset#isShiny}, independent of whatever {@code display}
+     * resolves to, so a real shiny item's shared/stripped display name no
+     * longer needs a special case here).
      */
-    private static void registerFactsItem(int type, boolean fullName) {
+    private static void registerFactsItem(int type) {
         if (FACTS == null || FACTS.items == null) return;
         assets.facts.AssetFacts.Item item = FACTS.items.get(String.valueOf(type));
         if (item == null) return;
         IdToAsset.registerFake(
             type, "Equipment", item.bagType,
             item.tier == null ? "" : item.tier,
-            !fullName && item.displayId != null ? item.displayId : item.name,
+            item.name,
+            item.displayId != null ? item.displayId : item.name,
             "Facts-seeded real item (" + item.name + ", asset-facts.json)."
         );
     }
@@ -312,7 +311,7 @@ public class FakePacketSource {
             registerFactsItem(ORANGE_ITEM_TYPE);
             registerFactsItem(FILLER_ITEM_TYPE);
             registerFactsItem(WHITE_ITEM_TYPE);
-            registerFactsItem(SHINY_ITEM_TYPE, true);
+            registerFactsItem(SHINY_ITEM_TYPE);
         } else {
             IdToAsset.registerFake(WHITE_BAG_ICON_TYPE, "Bag", 6);
             IdToAsset.registerFake(ORANGE_BAG_ICON_TYPE, "Bag", 8);
@@ -323,9 +322,13 @@ public class FakePacketSource {
                 WHITE_ITEM_TYPE, "Equipment", 6, "8",
                 "Fake Potion of Testing", "A synthetic loot item seeded by --fake mode for the item tooltip demo."
             );
+            // Raw id name keeps the " Shiny" suffix (what IdToAsset.isShiny
+            // checks); the display name drops it, mirroring how a real shiny
+            // item's DisplayId is the shared, suffix-stripped base name.
             IdToAsset.registerFake(
                 SHINY_ITEM_TYPE, "Equipment", 6, "13",
-                "Fake Blade of Testing Shiny", "A synthetic shiny loot item seeded by --fake mode for the shiny-badge demo."
+                "Fake Blade of Testing Shiny", "Fake Blade of Testing",
+                "A synthetic shiny loot item seeded by --fake mode for the shiny-badge demo."
             );
         }
         IdToAsset.registerFake(
@@ -628,11 +631,11 @@ public class FakePacketSource {
      * that must NOT be listed (proving per-item filtering), the orange bag
      * carries a more-enchanted orange item, the boosted bag proves both the
      * boosted entity's detection and a zero-enchant item, and the shiny-white
-     * bag drops {@link #SHINY_ITEM_TYPE} - a real facts item whose name keeps
-     * its " Shiny" suffix (see {@link #registerFactsItem(int, boolean)}) - so
-     * the renderer's shiny-badge detection (issue #193, `sprites/shiny.ts`)
-     * is exercised with no game installed. The previous bag is despawned
-     * ({@link UpdatePacket}.drops) so bags don't pile up in view.
+     * bag drops {@link #SHINY_ITEM_TYPE} - a real facts item whose raw id name
+     * keeps its " Shiny" suffix (see {@link #registerFactsItem(int)}, checked
+     * via {@link IdToAsset#isShiny}) - so the renderer's shiny-badge detection
+     * (issue #193/#215) is exercised with no game installed. The previous bag
+     * is despawned ({@link UpdatePacket}.drops) so bags don't pile up in view.
      */
     private UpdatePacket lootBagDrop(int cycle) {
         int bagObjectType;

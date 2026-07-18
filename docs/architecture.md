@@ -318,7 +318,8 @@ Loot panel's session log (issue #105) — from the same extracted asset data
     "bagTypeTable": { "<itemObjectType>": 6 },
     "lootBagIcons": { "6": <bagObjectType>, "8": <bagObjectType> },
     "lootBagObjectTypes": { "<bagObjectType>": 6, "<bagObjectType>": 8 },
-    "itemNames": { "<itemObjectType>": "<display name>" }
+    "itemNames": { "<itemObjectType>": "<display name>" },
+    "shinyItemTypes": [ <itemObjectType>, ... ]
   }
 }
 ```
@@ -339,7 +340,11 @@ single representative bag entity per color — the sprite the Loot panel renders
 as a category header, resolved through the same `objectType → atlas rect` path
 as any other sprite (`sprites/Sprite.tsx`, no special-casing). `itemNames` is
 `IdToAsset.objectName` for the tracked items (the always-visible inline label).
-Built by `LootBagTypes.envelopeJson()` (`bridge/LootBagTypes.java`).
+`shinyItemTypes` (issue #215) is a **separate** list of shiny item objectTypes
+from `IdToAsset.isShiny` — deliberately not derived from `itemNames`, since a
+real shiny item's `objectName` result is usually its shared, suffix-stripped
+display name (see `asset-pipeline.md`'s `LootBagTypes` bullet). Built by
+`LootBagTypes.envelopeJson()` (`bridge/LootBagTypes.java`).
 
 **Unlike the sprite pack (one-shot broadcast), this is re-sent on every 2 s
 readiness poll** once `IdToAsset.loadedObjectCount() > 1`

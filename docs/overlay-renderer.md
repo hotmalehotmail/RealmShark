@@ -38,7 +38,7 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/sprites/EntityRegistry.tsx` | objectId → name/skin/equipment/equipmentRarity/enchantSlots/dyes, built from the packet stream. |
 | `overlay/src/renderer/src/sprites/context.ts` | The two React contexts + `useSprites` / `useEntityRegistry` hooks. |
 | `overlay/src/renderer/src/sprites/enchantRarity.ts` | Decodes `UNIQUE_DATA_STRING` into a per-slot rarity-border tier (issue #107) — see §4.1. |
-| `overlay/src/renderer/src/sprites/shiny.ts` | `isShinyItemName` - derives shininess from an item's resolved display name (issue #193) — see §4.3. |
+| `overlay/src/renderer/src/sprites/shiny.ts` | `SHINY_ICON_SPRITE_NAME` - shininess itself comes from `LootTracker.isShiny` (the bridge's dedicated `shinyItemTypes` signal, issue #193/#215) — see §4.3. |
 | `overlay/src/renderer/src/sprites/ItemSprite.tsx` | `<ItemSprite objectType>` - the shared item-rendering path (§4.2): wraps `Sprite` with the hover item/enchant tooltip. |
 | `overlay/src/renderer/src/items/ItemInfoProvider.tsx` | Ingests the `itemInfo`/`enchantNames` envelopes; provides item metadata + enchant-name lookups (§4.2). |
 | `overlay/src/renderer/src/items/context.ts` | `ItemInfoContext` + `useItemInfo()` hook. |
@@ -768,39 +768,52 @@ instead of `Sprite`.
     attaching a hover target at all, not by hiding one — there is nothing for
     the browser to dispatch a hover event *to*.
 
-### 4.3 Shiny item badge (`sprites/shiny.ts`, issue #193)
+### 4.3 Shiny item badge (`sprites/shiny.ts`, issue #193/#215)
 
-A "shiny" item has no dedicated wire signal — per the game-data ground-truth
-rule (root `CLAUDE.md`), `assets/facts/asset-facts.json` marks one purely by a
-trailing `" Shiny"` suffix on `items[id].name` (`displayId` carries the base
-name instead, e.g. id `1210`: `name: "Dirk of Cronus Shiny"`,
-`displayId: "Dirk of Cronus"`). `itemNames` (the Loot panel's `lootBagTypes`
-envelope, §7) already forwards that same `name` string unfiltered
-(`IdToAsset.objectName`), so `shiny.ts`'s `isShinyItemName` just re-derives
-shininess client-side from the string every consumer already has via
-`itemName(objectType)` — no bridge envelope change was needed. `displayId`
-being set is **not** a valid proxy (most items with a `displayId` aren't
-shiny — it also covers unrelated "nicer name" overrides), so the suffix check
-is the only correct rule.
+A "shiny" item has no dedicated **wire signal for its name** — per the
+game-data ground-truth rule (root `CLAUDE.md`), `assets/facts/asset-facts.json`
+marks one purely by a trailing `" Shiny"` suffix on `items[id].name`
+(`displayId` carries the base name instead, e.g. id `1210`:
+`name: "Dirk of Cronus Shiny"`, `displayId: "Dirk of Cronus"`). An early
+version derived shininess client-side by re-checking that suffix on the Loot
+panel's resolved display name (`itemNames`, §7) — but that name comes from
+`IdToAsset.objectName`, which **prefers `displayId` over the raw id whenever
+one is set**, and on real assets nearly every shiny item has one (it shares
+its base item's display name). A live alpha soak (#215) caught this: the
+suffix was silently stripped before it ever reached the client, so the badge
+never rendered on a real shiny drop despite working in dev (`--fake` mode's
+synthetic item happened to keep the suffix in its display name too, masking
+the bug — see below).
 
-`LootPanel` computes `isShinyItemName(itemName(entry.objectType))` per entry
-and passes it as `ItemSprite`'s (→ `Sprite`'s) `shiny` prop. When the
-bridge's `uiSprites` pack section is available (issue #205/#206), `Sprite`
-resolves `shiny.ts`'s `SHINY_ICON_SPRITE_NAME` (`shiny_item_icon`) via
-`useSprites().getUiSprite` and renders that real sprite absolutely positioned
-over the sprite's top-left corner — the same "overlay without changing
-layout size" technique `rarity` uses (§4.1). Otherwise it falls back to a
-small SVG rainbow-gradient star (`ShinyBadge` in `Sprite.tsx`) in the same
-position. Either overlay needs an actual `position: relative` wrapper span
-since neither can be a class on the sprite element itself (see §4's `Sprite`
+The fix adds a **dedicated boolean-ish wire signal**, independent of any
+display name: `LootBagTypes.envelopeJson()` includes `shinyItemTypes` (a
+`List<Integer>` of shiny item objectTypes, from `IdToAsset.isShiny` — checked
+against the item's raw id, never `objectName`'s resolved value). `LootTracker`
+stores it as a `Set<number>` and exposes `isShiny(objectType)`; `LootPanel`
+calls that directly instead of re-deriving anything from a name string.
+`sprites/shiny.ts` now holds only the sprite-name constant, not any detection
+logic.
+
+`LootPanel` computes `isShiny(entry.objectType)` per entry and passes it as
+`ItemSprite`'s (→ `Sprite`'s) `shiny` prop. When the bridge's `uiSprites` pack
+section is available (issue #205/#206), `Sprite` resolves `shiny.ts`'s
+`SHINY_ICON_SPRITE_NAME` (`shiny_item_icon`) via `useSprites().getUiSprite`
+and renders that real sprite absolutely positioned over the sprite's
+top-left corner — the same "overlay without changing layout size" technique
+`rarity` uses (§4.1). Otherwise it falls back to a small SVG
+rainbow-gradient star (`ShinyBadge` in `Sprite.tsx`) in the same position.
+Either overlay needs an actual `position: relative` wrapper span since
+neither can be a class on the sprite element itself (see §4's `Sprite`
 writeup). The fallback gradient's `<svg id>` is generated via `useId()` so
 multiple shiny badges on screen at once don't collide on a duplicate DOM id.
 
-`FakePacketSource` seeds one real facts item whose name keeps its `" Shiny"`
-suffix (`SHINY_ITEM_TYPE`, registered via `registerFactsItem(id, true)` to
-skip the usual `displayId` override) and drops it in a dedicated loot-bag
-cycle variant, so the badge is exercised in dev and in the committed
-`gallery.json` capture with no game installed.
+`FakePacketSource` seeds one real facts item whose **raw id** keeps its
+`" Shiny"` suffix (`SHINY_ITEM_TYPE`, via `registerFactsItem`, which now always
+registers the raw facts `name` as the id name and the `displayId`-preferring
+name as the display name — matching the real client's split, so `--fake`
+mode exercises the exact mechanism the real bridge does) and drops it in a
+dedicated loot-bag cycle variant, so the badge is exercised in dev and in the
+committed `gallery.json` capture with no game installed.
 
 ---
 
@@ -1265,8 +1278,9 @@ de-duplicated set, so two identical drops in one session both appear. A
 `reset()` (overlay detach / game close). `MapInfoPacket` calls
 `resetPerInstance()` (forgets the in-view bags + their logged slots — bags are
 per-instance), never touching `entries`. `bagTypeTable`/`lootBagIcons`/
-`bagEntityTypes`/`itemNames` (asset-derived categorization) are never cleared
-by either reset — like the sprite pack, they're app-lifetime data.
+`bagEntityTypes`/`itemNames`/`shinyItemTypes` (asset-derived categorization)
+are never cleared by either reset — like the sprite pack, they're
+app-lifetime data.
 
 ### `useLootTracker` (`loot/useLootTracker.ts`)
 
@@ -1284,7 +1298,7 @@ Each category's header is just its bag-color sprite (`bagIcon(bagType)`, the
 ordinary `<Sprite objectType>` path) plus the count — no "White Bag"/"Orange
 Bag" text, the sprite is recognizable on its own. Every dropped item renders
 through **`ItemSprite`** (§4.2) — the rarity border from `entry.rarity`, the
-shiny badge from `isShinyItemName(itemName(entry.objectType))` (§4.3), and the
+shiny badge from `isShiny(entry.objectType)` (§4.3), and the
 hover tooltip (item name/tier/class/description from `itemInfo`, plus the
 enchant list decoded from `entry.enchantCode` via `ItemSprite`'s
 `enchantCode` prop, the same path `DpsDetailPanel` uses for frozen history)

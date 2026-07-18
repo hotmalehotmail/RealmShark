@@ -1,8 +1,11 @@
 package bridge;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import assets.IdToAsset;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.junit.Test;
@@ -110,5 +113,44 @@ public class LootBagTypesTest {
         JsonObject objectTypes = data.getAsJsonObject("lootBagObjectTypes");
 
         assertEquals(6, objectTypes.get("71001").getAsInt());
+    }
+
+    /**
+     * Soak #215: an alpha shipped shininess detection derived client-side from
+     * an item's resolved display name (`itemNames`). That silently never fires
+     * on real assets, because {@link IdToAsset#objectName} prefers a shiny
+     * item's {@code displayId} (the shared, suffix-stripped base name) over
+     * its raw {@code " Shiny"}-suffixed id whenever a {@code displayId} is
+     * set - true for nearly every real shiny item. This registers a fake
+     * entry the same way (raw id name keeps the suffix, display name doesn't
+     * - real assets' `AssetExtractor.parseChildObjects` populates `display`
+     * from `<DisplayId>` the same way regardless of shininess) and requires
+     * the envelope to flag it via the dedicated {@code shinyItemTypes} list,
+     * NOT via its (suffix-stripped) {@code itemNames} entry.
+     */
+    @Test
+    public void shinyItemTypesFlagsAShinyItemEvenWhenItsDisplayNameStripsTheSuffix() {
+        IdToAsset.registerFake(
+            81001, "Equipment", 6, "",
+            "Dirk of Cronus Shiny", "Dirk of Cronus", ""
+        );
+        IdToAsset.registerFake(81002, "Equipment", 6, "", "Potion of Life", "Potion of Life", "");
+
+        JsonObject data = JsonParser.parseString(new LootBagTypes().envelopeJson())
+            .getAsJsonObject()
+            .getAsJsonObject("data");
+        JsonObject itemNames = data.getAsJsonObject("itemNames");
+        JsonArray shinyItemTypes = data.getAsJsonArray("shinyItemTypes");
+
+        assertEquals("Dirk of Cronus", itemNames.get("81001").getAsString());
+        assertTrue(shinyItemTypes.toString(), containsInt(shinyItemTypes, 81001));
+        assertFalse(shinyItemTypes.toString(), containsInt(shinyItemTypes, 81002));
+    }
+
+    private static boolean containsInt(JsonArray array, int value) {
+        for (int i = 0; i < array.size(); i++) {
+            if (array.get(i).getAsInt() == value) return true;
+        }
+        return false;
     }
 }
