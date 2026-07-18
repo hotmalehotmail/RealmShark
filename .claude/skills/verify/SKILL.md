@@ -43,4 +43,3 @@ simulated attach). Screenshot recipe + renderer-console relay: see CLAUDE.md
 
 - `gradle extractFacts -PxmlDir=<dir>` — facts distiller (issue #189); missing
   dir → clear status + exit 2 (gradle fails loudly).
-- `gradle probeAssets` — asset probe report (issue #107).

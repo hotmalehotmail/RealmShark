@@ -32,7 +32,6 @@ side of both.
 | `src/main/java/assets/resextractor/GuiAtlasPixels.java` | Raw RGBA32 pixel read of the GUI Atlas's `.resS` stream + the bottom-up-to-top-left row flip (issue #205). |
 | `src/main/java/assets/UiSpriteNames.java` | The allowlist of named UI sprites (rarity pips, shiny icon) the pack exports - the one-line extension point for a future UI sprite (issue #205). |
 | `src/main/java/assets/resextractor/UnityExtractor.java` | Top-level extract step: writes atlas PNGs, `spritesheetf`, and XML files. |
-| `src/main/java/assets/resextractor/AssetProbe.java` | Diagnostic-only feasibility probe for enchant pip/icon sprite extraction (issue #107) — see "The asset probe" below. |
 | `src/main/java/assets/flattbuffer/*` | Generated FlatBuffers schema for RotMG's own sprite-sheet (`SpriteSheetRoot → SpriteSheet → Sprite`/`AnimatedSprite`, `Position`, `Color`). |
 | `src/main/java/assets/SpriteFlatBuffer.java` | Loads `spritesheetf`; resolves `(sheetName,index) → atlas rect` / mask rect; representative-frame facing selection. |
 | `src/main/java/assets/SpriteJson.java` | Legacy JSON sprite loader; **not used** by the current pipeline (see note). |
@@ -481,8 +480,8 @@ same assumptions under test*, and four live-game round-trips paid for it. The
   damage/rate mutators `ParseEnchants` multiplies), `classes` (the 8 stat
   maxima from `max` attributes + the `Equipment` list `CharacterClass` reads).
   Provenance fields (`gameBuild`, `extractedAt`, `sourceHash`) make staleness
-  detectable. Graceful degradation per `AssetProbe`'s contract: no dump → a
-  clear "nothing extracted" status (exit 2 from `main`), never a crash.
+  detectable. Graceful degradation, as everywhere in this pipeline: no dump →
+  a clear "nothing extracted" status (exit 2 from `main`), never a crash.
 - **The dump stays private.** The XML itself is DECA's content and is never
   committed or attached anywhere public (PRD non-goal); the maintainer keeps a
   local copy and reruns the extractor per game update, committing only the
@@ -504,52 +503,71 @@ same assumptions under test*, and four live-game round-trips paid for it. The
   recognized — a boosted white/orange drop was invisible to the Loot panel's
   drop tracker.
 
-### The asset probe — enchant pip/icon extraction feasibility (issue #107)
+### UI art (enchant pips, icons) — where it lives and why the base pipeline skips it
 
-The overlay's enchant rarity-border feature (issue #107 part 1 — see
-`docs/overlay-renderer.md` §4.1) only needs an item's enchant *count*, which
-`bridge.dps.ParseEnchants.extractEnchantIds` already decodes headlessly with
-no game assets. Rendering the game's own enchant "pip" (slot-count) icons and
-per-enchantment icons — a follow-up feature — needs actual UI art the
-extraction pipeline has never pulled: `UnityExtractor.extractSprites` only
-writes the four `Texture2D.SPRITESHEET_NAMES` atlases (`characters`,
-`characters_masks`, `groundTiles`, `mapObjects`); `enchantments.xml` is parsed
-by `ParseEnchants.loadEnchants` for only `<id>`/`<type>`/`<Mutators>`, so any
-icon/texture reference on an `<Enchantment>` node is silently ignored today.
+The overlay's enchant-rarity feature (issue #107 part 1 — see
+`docs/overlay-renderer.md` §4.1) needs only an item's enchant *count*, which
+`bridge.dps.ParseEnchants.extractEnchantIds` decodes headlessly with no game
+assets. The game's own rarity **pip** art is a separate matter: it lives in the
+game's single Unity `SpriteAtlas`, **"GUI Atlas"**, which the four-atlas
+pipeline never touches. Measured against a real `resources.assets`
+(Unity `6000.0.58f2`), here is where UI art sits and why the base pipeline
+skips it:
 
-`AssetProbe` (`assets/resextractor/AssetProbe.java`) answers "is that art
-reachable, and where" with a **read-only** three-part report over what the
-extraction pipeline already walks — it writes nothing to disk itself:
+**The game ships 231 `Texture2D` assets; the base pipeline extracts 4.**
+`UnityExtractor.extractSprites` writes only the four
+`Texture2D.SPRITESHEET_NAMES` atlases (`characters`, `characters_masks`,
+`groundTiles`, `mapObjects`) — they happen to have **embedded** pixels. The
+rest (12 + 197 + 22 = 231):
 
-1. **Every `Texture2D` name in `resources.assets`**, not just the four
-   extracted today, flagging (`*`) any whose name contains `enchant`, `pip`,
-   `rarity`, or `engrave` (case-insensitive).
-2. **Every sheet name in the extracted `spritesheetf` manifest** (both static
-   `SpriteSheet`s and `AnimatedSprite` entries), via the same
-   `SpriteSheetRoot` FlatBuffer reader `SpriteFlatBuffer` uses, flagged the
-   same way.
-3. **Every distinct XML tag seen under `assets/xml/enchantments.xml`**, via a
-   plain regex scan (not a DOM parse — a diagnostic report doesn't need one),
-   flagging tags `ParseEnchants.loadEnchants` doesn't read (candidates for
-   icon/pip fields) and any tag whose name looks icon/texture-related
-   (`tex`/`icon`/`image` substrings) regardless.
+| pixel storage | count | notes |
+| --- | --- | --- |
+| embedded (`image_data_size != 0`) | 12 | readable today — the 4 extracted atlases are here |
+| streamed to `resources.assets.resS` | 197 | valid `m_StreamData` pointer, but `Texture2D` does **not** currently read streamed pixels (`streamingInfo()` is parsed then unused — a latent gap that never bites, because the 4 atlases the pipeline needs are all embedded) |
+| orphan — empty `StreamingInfo` | 22 | no self-pointer to pixels; **GUI Atlas** + the TextMeshPro font SDF atlases. Pixels located out-of-band |
 
-**Run it:** `./gradlew probeAssets > probe-report.txt`, or
-`java -jar bridge.jar --probe-assets` (the flag `bridge.PacketBridge.main`
-checks before starting the bridge server — it prints the report and exits,
-never starting the WebSocket server). Output is plain text to stdout, one
-line per finding (`TAG\t<name>\t<count>` etc.), so it's directly greppable
-and pasteable as evidence into a follow-up issue.
+**GUI Atlas.** One `SpriteAtlas` object, backing `Texture2D`
+`sactx-0-4096x2048-Uncompressed-GUI Atlas-…` (4096×2048 RGBA32, **668**
+`m_RenderDataMap` entries). It is outside the RotMG sprite system — not indexed
+by `spritesheetf`, so `SpriteFlatBuffer`/`SpritePackService` cannot resolve it.
+Its texture record has **empty `StreamingInfo`** (`image_data_size=1`,
+`offset=0`, `size=0`, `path=""`). This is **not a parse bug** — two independent
+decoders agree on the bytes, and the existing `SpriteAtlas`/`Texture2D` parse
+is byte-correct for this Unity version; the record simply carries no pointer to
+its own pixels (one of the 22 orphans). The pixels physically sit at **offset 0
+of `resources.assets.resS`** (`4096×2048×4` bytes = the first mip), found by
+elimination as the single large unclaimed `.resS` region — a **fragile**
+locator, with no metadata-driven alternative (all 668 `RenderDataMap` texture
+PPtrs resolve back to the same orphan texture; a game repack could move it).
 
-**Degrades gracefully with no game installed** (the normal case on CI and
-most dev machines, same as the rest of this pipeline — see "Best-effort
-everywhere" below): sections 1-2 need `resources.assets`
-(`AssetExtractor.assetFile()`); when it's null/missing or fails to parse,
-`AssetProbe.run` prints a clear status line and moves on to section 3, which
-only needs `assets/xml/enchantments.xml` (itself only present after a real
-extraction) and reports "NOT FOUND" the same way when absent. Never throws.
-`AssetProbeTest` covers both the no-assets path and the XML tag scan without
-needing a real game install.
+**Names + rects are recoverable.** Unity `Sprite` objects (ClassID 213, ~1083
+of them) are skipped by `Resources.parseAllResources` today, but each carries a
+`name` + `m_RenderDataKey` (GUID + fileID) that joins to the atlas's
+`RenderDataMap`, yielding `name → textureRect` for all **668/668** sprites (no
+PPtr resolution needed). The rarity pips are named **`RarityIcon_1..4`**
+(green / blue / purple / gold = tiers 1–4) and the shiny indicator
+**`shiny_item_icon`** — so the game's own asset names both confirm the pips and
+validate the tier→colour mapping in
+`overlay/src/renderer/src/sprites/enchantRarity.ts`.
+
+**Wiring this into the overlay** — a `Sprite` (213) parser + the GUID join, the
+GUI Atlas offset-0 pixel read, an extensible `uiSprites` sprite-pack section,
+and the renderer change — is tracked in **#205** (bridge/backend) and **#206**
+(overlay/frontend); the implementing PR will document the mechanism here.
+
+> **Note on sprite identity.** A sprite has no name — only a
+> `(sheetName, index)` address, where the sheet is the *source art file* in
+> DECA's pipeline (`lofi_obj5_a.png` → `lofiObj5`) and `index` is its tile
+> position in that file's grid. Sheet names say nothing about content, and a
+> sheet is not a region of an atlas: the packer scatters one sheet's sprites
+> across the whole texture, and even across different atlases
+> (`nightmatterRiftObjects8x8` spans atlas 1 and 4). **Searching sheet names
+> for what a sprite depicts cannot work.** A removed diagnostic (`AssetProbe`,
+> issue #107 part 2) encoded exactly that mistake: it flagged texture/sheet
+> names matching `enchant|pip|rarity|engrave`, and on the first real
+> `resources.assets` it printed `GUI Atlas` as an unflagged line among 231 and
+> concluded `Flagged: none`. It was removed rather than fixed — its question
+> is answered above, and its heuristic could not have answered it.
 
 ### Item info — tooltip data (issue #109)
 
@@ -804,6 +822,11 @@ four existing atlases (see docs/dev-loop-mechanisms.md's soak loop).
   color, or (on a `Class=Bag` object) a bag entity's self-identified color —
   see "BagType — loot categorization" above. `IdToAsset.registerFake` is the
   seam that makes it demonstrable with no game installed.
-- **`AssetProbe` writes nothing** — it's a read-only diagnostic pass over what
-  `UnityExtractor`/`ParseEnchants` already parse, reported to stdout only. See
-  "The asset probe" above.
+- **The base pipeline extracts 4 of the game's 231 textures.** Only 12 have
+  embedded pixels; 197 stream to `resources.assets.resS` (the extractor doesn't
+  currently read streamed pixels — a latent gap that never bites, since the 4
+  needed atlases are embedded); the remaining 22 are orphans with empty
+  `StreamingInfo`, `GUI Atlas` among them (its pixels sit at `.resS` offset 0).
+  UI art lives in `GUI Atlas`; wiring it in is tracked in #205/#206 — see "UI
+  art (enchant pips, icons)" above before promising any feature that needs a
+  game icon.
