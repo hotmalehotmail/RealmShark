@@ -144,7 +144,14 @@ export class LootTracker {
 
   /** Bag objectId -> its in-view state (per-instance). */
   private bagsInView = new Map<number, BagInView>()
-  /** Bag objectId -> slot indices already logged, so a re-seen bag doesn't double-log (per-instance). */
+  /**
+   * Bag objectId -> slot indices already logged, so a re-seen bag doesn't
+   * double-log (per-instance, cleared on `resetPerInstance()`/map change -
+   * NOT on `drops`, soak #237: a ground bag leaving and re-entering the
+   * client's view range as the player walks away and back sends the same
+   * objectId through `drops` then `newObjects` again with no new item in it,
+   * and used to re-log - and re-notify for - the same slots each time).
+   */
   private loggedBagSlots = new Map<number, Set<number>>()
 
   /** True once the first `lootBagTypes` envelope has populated `bagEntityTypes`. */
@@ -189,7 +196,6 @@ export class LootTracker {
         }
         for (const droppedId of data?.drops ?? []) {
           this.bagsInView.delete(droppedId)
-          this.loggedBagSlots.delete(droppedId)
         }
       } else if (env.type === 'NewTickPacket') {
         const nt = env.data as NewTickPacketData | null

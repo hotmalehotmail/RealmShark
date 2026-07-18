@@ -70,4 +70,33 @@ describe('AlertEngine capture replay (issue #218)', () => {
     expect(alerts).toHaveLength(1)
     expect(alerts[0].matchedKindIds).toEqual(['whiteBag', 'enchantedDrop'])
   })
+
+  it('soak #237: walking away from a ground bag and back does not re-fire its notification', () => {
+    // Real trace (trimmed - see fixtures README): the same loot-bag entity
+    // (objectId 609, a BagType-2 bag holding one Greater Magic Potion)
+    // repeatedly leaves and re-enters the client's view range - each
+    // `UpdatePacket.drops` (walk out of range) followed by a fresh
+    // `newObjects` entry (walk back) for the identical objectId/slot. The
+    // item drops only once; the bag is just re-observed. An itemOverride
+    // (tier 0) forces `enchantedDrop` to match on every sighting, the same
+    // way the reporter's own configured rule matched this item live.
+    const envelopes = loadCapture(join(FIXTURES_DIR, 'soak-237-loot-reenter.json.gz'))
+    const engine = new AlertEngine()
+    engine.setSettings({
+      enabled: true,
+      volume: 1,
+      rules: {
+        enchantedDrop: {
+          enabled: true,
+          banner: true,
+          sound: true,
+          params: { tier: 4, slotTypeOverrides: {}, itemOverrides: { 'greater magic potion': 0 } }
+        }
+      }
+    })
+
+    replay(engine, envelopes)
+
+    expect(engine.store.getAll()).toHaveLength(1)
+  })
 })
