@@ -65,4 +65,13 @@ export interface FiredAlert {
   payload: AlertPayload
   /** Every catalog kind id that matched this event, not just the one whose payload is shown (PRD §3 point 4). */
   matchedKindIds: string[]
+  /**
+   * Whether a surviving match wanted the banner channel for this alert
+   * (`DispatchResult.banner !== null` - `dispatcher.ts`). `AlertToastHost`
+   * (issue #219) reads this to decide which history entries also pop a
+   * banner, rather than banner-ing every fired alert.
+   */
+  banner: boolean
+  /** Whether a surviving match wanted the sound channel (`DispatchResult.sound`) - `AlertToastHost` reads this to decide whether to play the ping. */
+  sound: boolean
 }

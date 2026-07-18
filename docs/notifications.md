@@ -1,12 +1,13 @@
-# Notification system ("alerts") — engine core
+# Notification system ("alerts")
 
 Design doc: [prd-notifications.md](prd-notifications.md). This doc covers the
-**shipped implementation** of issue #218 — the framework-agnostic core (event
-detection, rule catalog, dispatcher, fired-alert store, settings schema). It
-ships **no visible UI** (no banner, no sound, no panel, no settings form) —
-those are issues #219-#221 in the PRD's §11 implementation plan, all building
-on the contract this doc describes. Naming: the subsystem is `alerts`
-internally, "Notifications" user-facing (PRD §1).
+**shipped implementation** of issue #218 (the framework-agnostic core — event
+detection, rule catalog, dispatcher, fired-alert store, settings schema) and
+issue #219 (the two delivery surfaces — a banner toast host and a ping
+sound). The history panel and settings gear (issues #220-#221 in the PRD's
+§11 implementation plan) still build on the same contract this doc
+describes. Naming: the subsystem is `alerts` internally, "Notifications"
+user-facing (PRD §1).
 
 ## Files
 
@@ -20,6 +21,10 @@ internally, "Notifications" user-facing (PRD §1).
 | `overlay/src/renderer/src/alerts/useAlertEngine.ts` | React hook mounting one `AlertEngine` at App level, wiring packet/settings/detach IPC. |
 | `overlay/src/renderer/src/alerts/slotTypeNames.ts` | SlotType id → display name, empirically derived (see its own doc comment). |
 | `overlay/src/shared/settings.ts` | `NotificationsSettings`/`NotificationRuleSettings` — the persisted schema slice. |
+| `overlay/src/renderer/src/alerts/toastQueue.ts` | `ToastQueue` (issue #219) — framework-agnostic cap-3/overflow/auto-dismiss queue backing the banner host. |
+| `overlay/src/renderer/src/alerts/sound.ts` | `PingPlayer`/`pingPlayer` (issue #219) — plays the bundled ping, coalesced to ≤1 per ~700ms. |
+| `overlay/src/renderer/src/alerts/AlertToastHost.tsx` | The banner UI (issue #219) — the one file a future redesign touches (PRD §1). |
+| `overlay/src/renderer/src/assets/sfx/ping.wav` | The bundled ping asset — a short synthesized tone (self-authored, CC0), imported through Vite. |
 
 ## Architecture
 
@@ -32,8 +37,14 @@ packet batch ──► AlertEngine.ingest ──► LootTracker.onEntry ──�
                                           ┌─────────────────────────┼─────────────────────┐
                                           ▼                         ▼                     ▼
                                    banner payload              sound flag          FiredAlertStore.append
-                                  (issue #219, unused           (issue #219,        (this issue's entire
-                                     by this issue)                unused)          externally-visible output)
+                                          │                         │             (banner/sound flags
+                                          ▼                         ▼              included, issue #219)
+                                                AlertToastHost (issue #219, App.tsx)
+                                          │                         │
+                                          ▼                         ▼
+                                    ToastQueue                 pingPlayer.play
+                              (cap 3 + overflow,           (coalesced ≤1/~700ms,
+                               auto-dismiss ~5s)             sound.ts)
 ```
 
 `AlertEngine` is deliberately in the exact mold of `DpsTracker`/`LootTracker`
@@ -51,15 +62,17 @@ enchant-counting logic is needed here.
 
 ## The layering contract (PRD §1 — binding)
 
-`types.ts`, `catalog.ts`, `dispatcher.ts`, `store.ts`, and `AlertEngine.ts`
-import **nothing** from React or any component/UI module — every test for
-them (`overlay/test/alerts-*.test.ts`) runs in vitest's plain `node`
-environment, no DOM. `useAlertEngine.ts` is the one `.ts` file that touches
-React (`useState`/`useEffect`), and it is intentionally thin: construct the
-engine once, wire IPC, return the instance. A future banner UI (issue #219)
-touches `AlertToastHost.tsx` alone; a future history panel (issue #220) reads
-only `engine.store`'s subscribe API — neither ever reaches into `AlertEngine`
-internals or the dispatcher.
+`types.ts`, `catalog.ts`, `dispatcher.ts`, `store.ts`, `AlertEngine.ts`, and
+`toastQueue.ts` import **nothing** from React or any component/UI module —
+every test for them (`overlay/test/alerts-*.test.ts`) runs in vitest's plain
+`node` environment, no DOM. `sound.ts` is also React-free but does touch the
+DOM (`HTMLAudioElement`) — deliberately narrowed behind its own `PingAudio`
+interface so tests inject a mock and never construct a real `Audio`.
+`useAlertEngine.ts` and `AlertToastHost.tsx` are the only files that touch
+React; `AlertToastHost.tsx` is exactly the file issue #219 predicted a banner
+UI would live in, and it's the only one a future redesign needs to touch — a
+future history panel (issue #220) reads only `engine.store`'s subscribe API,
+neither ever reaching into `AlertEngine` internals or the dispatcher.
 
 **Extensibility.** Adding a new notification is exactly one more entry in
 `CATALOG` (`catalog.ts`) — the dispatcher and store need zero changes. Proved
@@ -138,12 +151,78 @@ never touched by it. `AlertEngine.reset()` (overlay detach / game close)
 clears `store` (and the internal `LootTracker` + cooldown map) — the same
 detach-only-reset contract `LootTracker`/`DpsTracker` already follow.
 
+Each `FiredAlert` (`types.ts`) also carries `banner`/`sound` booleans (issue
+#219 addition) — `AlertEngine.onLootEntry` passes
+`result.banner !== null`/`result.sound` from the `DispatchResult` straight
+through to `store.append`, so a UI surface can tell "this alert wants a
+banner" apart from "this alert only wants a sound" without recomputing
+`dispatchEvent`. `FiredAlertStore.append`'s `banner`/`sound` parameters
+default to `true` so issue #218's original call sites (and every test
+predating #219) don't need updating.
+
+## Delivery (`AlertToastHost.tsx`, `sound.ts`, `toastQueue.ts` — issue #219)
+
+`AlertToastHost` is rendered once in `App.tsx`'s `AppShell`, above
+`PanelCanvas`, fed `engine.store` and the live `notifications.volume`
+(`useAlertEngine.ts` now returns `{ engine, volume }` — it already tracked
+`onSettingsChanged` for the engine, so exposing the same value avoids a
+second subscription). It watches `store.subscribe` for alerts it hasn't seen
+yet (a `seenIds` ref, seeded from `store.getAll()` at mount so a remount with
+a non-empty session log doesn't replay history as fresh toasts): each new
+alert with `banner: true` is pushed into a `ToastQueue`; each with
+`sound: true` plays through `pingPlayer`. This is the one place both
+channels are triggered from a fired alert — `store`/`types` stay React-free
+(the layering contract above), only this consuming component touches the
+DOM/audio.
+
+**`ToastQueue`** (`toastQueue.ts`) is a plain, framework-agnostic class
+(same testability rationale as `FiredAlertStore`): capped at 3 simultaneous
+visible toasts (PRD §4); a `push` beyond the cap waits in a FIFO `pending`
+queue instead of being dropped, and is promoted into a freed slot the moment
+an older toast auto-dismisses (`setTimeout`, ~5s, real wall-clock time — not
+tied to packet/game time, since these are purely transient session UI) or is
+clicked away (`dismiss`, interactive mode only). `dispose()` clears both the
+timers AND the visible/pending arrays — not just the timers — so a torn-down
+instance is genuinely empty rather than leaving stale entries a remount
+would inherit with no timers left to ever clear them (found via React
+StrictMode's dev-only double-invoke of effects during
+`AlertToastGalleryMount`'s harness testing — a real unmount/remount would hit
+the identical bug otherwise).
+
+**`sound.ts`** wraps a real `HTMLAudioElement` playing the bundled
+`assets/sfx/ping.wav` (a short synthesized tone, self-authored so it's
+unambiguously CC0 — see the PRD's asset note) behind a narrow `PingAudio`
+interface (`{ volume, play() }`) so tests inject a mock and never touch the
+DOM. `PingPlayer.play(volume, now?)` mutes entirely at `volume <= 0` (no
+audio element even constructed) and coalesces to at most one play per
+~700ms, mirroring `dispatcher.ts`'s pattern of an injectable `now` for
+testability (production call sites never pass it). The app-wide singleton
+`pingPlayer` is what `AlertToastHost` calls through, so coalescing is global
+across every matched event, not per-component.
+
+**Autoplay.** A fired alert is a game event, not a user click, so Chromium's
+default autoplay policy would block the ping with no prior gesture.
+`main/index.ts` adds `app.commandLine.appendSwitch('autoplay-policy',
+'no-user-gesture-required')` before `app.whenReady()` — the standard fix.
+`sound.ts`'s own `.catch(() => {})` on the underlying `play()` promise is
+defensive belt-and-suspenders, not the actual fix.
+
+**Toast gallery shot.** `AlertToastHost` isn't a `PANEL_REGISTRY` entry (an
+App-level singleton, not a draggable/resizable panel), so it doesn't fall out
+of `npm run shots`' per-panel loop automatically. `harness/
+AlertToastGalleryMount.tsx` (mounted via `?toastGallery=1`) seeds a
+`FiredAlertStore` directly with four representative banner-worthy alerts —
+no packet fixture needed, since the store's public API is all
+`AlertToastHost` ever reads — producing the cap-3 + "+1 more" overflow shot
+at `docs/screenshots/panels/alertToastHost-gallery.png`. See
+`docs/overlay-harness.md` for the harness mount-mode convention this follows.
+
 ## Settings (`shared/settings.ts`)
 
 ```ts
 interface NotificationsSettings {
   enabled: boolean                              // master switch
-  volume: number                                 // 0..1; unused until issue #219 (sound)
+  volume: number                                 // 0..1; 0 mutes (issue #219's pingPlayer)
   rules: Record<string, NotificationRuleSettings> // keyed by AlertKind.id
 }
 interface NotificationRuleSettings {

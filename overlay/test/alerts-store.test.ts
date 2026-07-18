@@ -45,4 +45,18 @@ describe('FiredAlertStore (issue #218)', () => {
     store.reset()
     expect(store.getAll()).toEqual([])
   })
+
+  it('defaults banner/sound to true when omitted (issue #218 call sites)', () => {
+    const store = new FiredAlertStore()
+    const alert = store.append(PAYLOAD, ['whiteBag'], 1000)
+    expect(alert.banner).toBe(true)
+    expect(alert.sound).toBe(true)
+  })
+
+  it('records explicit banner/sound flags (issue #219 - AlertToastHost reads these)', () => {
+    const store = new FiredAlertStore()
+    const alert = store.append(PAYLOAD, ['enchantedDrop'], 1000, false, true)
+    expect(alert.banner).toBe(false)
+    expect(alert.sound).toBe(true)
+  })
 })

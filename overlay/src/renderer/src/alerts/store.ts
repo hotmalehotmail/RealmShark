@@ -17,9 +17,28 @@ export class FiredAlertStore {
   private nextId = 1
   private listeners = new Set<(alerts: readonly FiredAlert[]) => void>()
 
-  /** Appends one fired alert, evicting the oldest entry past `MAX_HISTORY`, and notifies subscribers. */
-  append(payload: AlertPayload, matchedKindIds: string[], time: number): FiredAlert {
-    const alert: FiredAlert = { id: String(this.nextId++), time, payload, matchedKindIds }
+  /**
+   * Appends one fired alert, evicting the oldest entry past `MAX_HISTORY`,
+   * and notifies subscribers. `banner`/`sound` default to `true` (issue
+   * #218's original call sites, and every existing test, predate the
+   * per-channel flags added in issue #219 and don't care about them) -
+   * `AlertEngine` always passes the real `DispatchResult` flags explicitly.
+   */
+  append(
+    payload: AlertPayload,
+    matchedKindIds: string[],
+    time: number,
+    banner = true,
+    sound = true
+  ): FiredAlert {
+    const alert: FiredAlert = {
+      id: String(this.nextId++),
+      time,
+      payload,
+      matchedKindIds,
+      banner,
+      sound
+    }
     this.alerts.push(alert)
     if (this.alerts.length > MAX_HISTORY) this.alerts.shift()
     this.notify()

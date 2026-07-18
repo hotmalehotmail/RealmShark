@@ -145,6 +145,17 @@ just asserted.
   and the same chrome (title bar) `PanelFrame` renders, minus drag/pin/resize
   affordances - irrelevant to a single frozen shot. This is the unit
   `npm run shots` screenshots.
+- **Alert toast gallery** — `?toastGallery=1` (issue #219): renders
+  `harness/AlertToastGalleryMount.tsx` instead, for the one UI surface that
+  isn't a `PANEL_REGISTRY` entry (`AlertToastHost` is an App-level singleton,
+  not a draggable/resizable panel). It seeds a `FiredAlertStore` directly
+  with four representative fired alerts rather than replaying a packet
+  fixture - see `docs/notifications.md`'s "Delivery" section for why the
+  seeding happens in a `useEffect` timed after `AlertToastHost`'s own mount
+  (and why it's undone on cleanup). Screenshotted to the same
+  `docs/screenshots/panels/` gallery as
+  `alertToastHost-gallery.png` by a dedicated `e2e/shots.spec.ts` test
+  outside the per-panel loop below.
 
 ## The synthetic `spritePack.json` fixture
 
