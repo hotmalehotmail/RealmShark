@@ -39,9 +39,9 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/sprites/EntityRegistry.tsx` | objectId → name/skin/equipment/equipmentRarity/enchantSlots/dyes, built from the packet stream. |
 | `overlay/src/renderer/src/sprites/context.ts` | The two React contexts + `useSprites` / `useEntityRegistry` hooks. |
 | `overlay/src/renderer/src/sprites/enchantRarity.ts` | Decodes `UNIQUE_DATA_STRING` into a per-slot rarity-border tier (issue #107) — see §4.1. |
-| `overlay/src/renderer/src/sprites/shiny.ts` | `SHINY_ICON_SPRITE_NAME` - shininess itself comes from `LootTracker.isShiny` (the bridge's dedicated `shinyItemTypes` signal, issue #193/#215) — see §4.3. |
-| `overlay/src/renderer/src/sprites/ItemSprite.tsx` | `<ItemSprite objectType>` - the shared item-rendering path (§4.2): wraps `Sprite` with the hover item/enchant tooltip. |
-| `overlay/src/renderer/src/items/ItemInfoProvider.tsx` | Ingests the `itemInfo`/`enchantNames` envelopes; provides item metadata + enchant-name lookups (§4.2). |
+| `overlay/src/renderer/src/sprites/shiny.ts` | `SHINY_ICON_SPRITE_NAME` - shininess itself comes from the bridge's dedicated `shinyItemTypes` signal (issue #193/#215), read by `LootTracker.isShiny` and, globally, `ItemInfoProvider`'s `isShiny` (issue #250) — see §4.3. |
+| `overlay/src/renderer/src/sprites/ItemSprite.tsx` | `<ItemSprite objectType>` - the shared item-rendering path (§4.2): wraps `Sprite` with the hover item/enchant tooltip and resolves the shiny badge itself (§4.3). |
+| `overlay/src/renderer/src/items/ItemInfoProvider.tsx` | Ingests the `itemInfo`/`enchantNames` envelopes plus `lootBagTypes`'s `shinyItemTypes` field; provides item metadata, enchant-name lookups, and a global `isShiny` (§4.2/§4.3). |
 | `overlay/src/renderer/src/items/context.ts` | `ItemInfoContext` + `useItemInfo()` hook. |
 | `overlay/src/renderer/src/items/enchantDecode.ts` | Client-side six-bit/base64url decode of an equipped slot's raw `UNIQUE_DATA_STRING` into enchant ids. |
 | `overlay/src/renderer/src/items/types.ts` | Wire shapes of the `itemInfo`/`enchantNames` envelopes. |
@@ -783,7 +783,9 @@ instead of `Sprite`.
   as `EntityRegistry`) into refs and re-renders consumers once per received
   table — unlike `EntityRegistry`'s per-change `subscribe`, these tables are
   asset-derived and essentially static for a session, so there's no granular
-  change API, just "read the latest snapshot."
+  change API, just "read the latest snapshot." It also reads `lootBagTypes`'s
+  `shinyItemTypes` field (just that one field, not the rest of that envelope)
+  into `isShiny` — see §4.3.
 - **Enchantments** for an equipped slot: `ItemSprite` takes optional
   `ownerObjectId`/`slotIndex` props (threaded through by `GearRow` — see §3's
   `GearRow` entry), reads that entity's raw `enchantSlots` from
@@ -856,14 +858,32 @@ The fix adds a **dedicated boolean-ish wire signal**, independent of any
 display name: `LootBagTypes.envelopeJson()` includes `shinyItemTypes` (a
 `List<Integer>` of shiny item objectTypes, from `IdToAsset.isShiny` — checked
 against the item's raw id, never `objectName`'s resolved value). `LootTracker`
-stores it as a `Set<number>` and exposes `isShiny(objectType)`; `LootPanel`
-calls that directly instead of re-deriving anything from a name string.
+stores it as a `Set<number>` and exposes `isShiny(objectType)` (still used
+directly by the notification system's alert engine, `AlertEngine.ts`).
 `sprites/shiny.ts` now holds only the sprite-name constant, not any detection
 logic.
 
-`LootPanel` computes `isShiny(entry.objectType)` per entry and passes it as
-`ItemSprite`'s (→ `Sprite`'s) `shiny` prop. When the bridge's `uiSprites` pack
-section is available (issue #205/#206), `Sprite` resolves `shiny.ts`'s
+**Rendering is centralized in `ItemSprite`, not per-caller (issue #250).**
+Originally only `LootPanel` computed `isShiny(entry.objectType)` (from its own
+`useLootTracker()` instance) and passed it as `ItemSprite`'s `shiny` prop —
+`GearRow`, the shared equipped-item renderer every gear-showing panel
+(Character/DPS list/DPS summary/DPS Detail/Instance) routes through, never
+accepted or forwarded one, so the badge only ever appeared on Loot panel
+entries, never on equipped gear anywhere else. Since shininess is a global
+per-objectType fact (not tied to *how* an item is being displayed),
+`ItemSprite` now resolves it itself from `useItemInfo().isShiny` — a second,
+lightweight reader of the same `shinyItemTypes` field, added to
+**`ItemInfoProvider`** (§4.2) precisely because it's already the app-level,
+mounted-once home for small asset-derived per-objectType facts, so no caller
+needs to instantiate a full `LootTracker` (with its per-session bag-tracking
+machinery) just to answer "is this objectType shiny." `ItemSprite`'s `shiny`
+prop is now optional and only needed to *override* that lookup; every current
+call site (`GearRow`, `LootPanel`, the notification icons in
+`NotificationsPanel`/`AlertToastHost`) omits it and gets the correct badge for
+free, including any future item-rendering surface.
+
+`Sprite` itself is unchanged: when the bridge's `uiSprites` pack section is
+available (issue #205/#206), it resolves `shiny.ts`'s
 `SHINY_ICON_SPRITE_NAME` (`shiny_item_icon`) via `useSprites().getUiSprite`
 and renders that real sprite absolutely positioned over the sprite's
 top-left corner — the same "overlay without changing layout size" technique
@@ -879,8 +899,20 @@ multiple shiny badges on screen at once don't collide on a duplicate DOM id.
 registers the raw facts `name` as the id name and the `displayId`-preferring
 name as the display name — matching the real client's split, so `--fake`
 mode exercises the exact mechanism the real bridge does) and drops it in a
-dedicated loot-bag cycle variant, so the badge is exercised in dev and in the
-committed `gallery.json` capture with no game installed.
+dedicated loot-bag cycle variant, so the badge is exercised in dev with no
+game installed. It also equips it into one roster member's ring slot (issue
+#250 — `ROSTER_EQUIPMENT[2][3]`, Carol), so the equipped-item path
+(`GearRow`/`ItemSprite`, not just the Loot panel) is exercised too; the
+mutation happens in `start()`, after `SHINY_ITEM_TYPE` resolves from the
+bundled facts, since `ROSTER_EQUIPMENT`'s own static initializer runs too
+early to reference it directly (a Java illegal-forward-reference issue, not a
+runtime one). The committed `docs/screenshots/panels/` gallery and
+`test/fixtures/gallery.json.gz` predate the `shinyItemTypes` wire field
+(issue #215 postdates the gallery capture, PR #199) and so don't yet exercise
+either the ground-loot or equipped-item badge — a pre-existing gap, not
+something this issue's fix changes; regenerating that capture is a separate,
+maintainer-side follow-up (see `docs/overlay-harness.md`'s "The `gallery.json`
+fixture").
 
 ---
 
@@ -1402,7 +1434,8 @@ Each category's header is just its bag-color sprite (`bagIcon(bagType)`, the
 ordinary `<Sprite objectType>` path) plus the count — no "White Bag"/"Orange
 Bag" text, the sprite is recognizable on its own. Every dropped item renders
 through **`ItemSprite`** (§4.2) — the rarity border from `entry.rarity`, the
-shiny badge from `isShiny(entry.objectType)` (§4.3), and the
+shiny badge (`ItemSprite`'s own `useItemInfo().isShiny` lookup, issue #250 —
+§4.3), and the
 hover tooltip (item name/tier/class/description from `itemInfo`, plus the
 enchant list decoded from `entry.enchantCode` via `ItemSprite`'s
 `enchantCode` prop, the same path `DpsDetailPanel` uses for frozen history)

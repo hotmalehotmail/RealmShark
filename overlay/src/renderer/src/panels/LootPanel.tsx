@@ -35,7 +35,7 @@ const ITEM_SIZE: Record<PanelSize, number> = { sm: 18, md: 24, lg: 30 }
  * equipped, unlike the old inventory-pickup tracker.
  */
 function LootPanel({ size }: PanelContentProps): React.JSX.Element {
-  const { entriesByBagType, bagIcon, itemName, isShiny } = useLootTracker()
+  const { entriesByBagType, bagIcon, itemName } = useLootTracker()
 
   return (
     <div className="flex h-full w-full flex-col gap-2 overflow-y-auto p-1.5">
@@ -65,7 +65,6 @@ function LootPanel({ size }: PanelContentProps): React.JSX.Element {
                       size={ITEM_SIZE[size]}
                       rarity={entry.rarity}
                       enchantCode={entry.enchantCode}
-                      shiny={isShiny(entry.objectType)}
                     />
                     {size === 'lg' && <span className="max-w-[90px] truncate text-xs">{name}</span>}
                   </div>

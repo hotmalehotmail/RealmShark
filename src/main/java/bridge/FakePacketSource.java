@@ -83,7 +83,10 @@ import java.util.Random;
  * categorization, and per-item enchant/rarity display are demonstrable and
  * regression-testable with no game installed (issue #105). One drop variant
  * is a real "Shiny"-suffixed facts item ({@link #SHINY_ITEM_TYPE}), so the
- * Loot panel's shiny-item badge (issue #193) is exercised the same way. One
+ * Loot panel's shiny-item badge (issue #193) is exercised the same way; the
+ * same item is also equipped into a roster member's ring slot (issue #250),
+ * so the badge is exercised on the equipped-item render path too
+ * (Character/DPS/Instance panels), not just ground loot. One
  * more drop variant is a fully-enchanted item of a color OTHER than 6/8
  * ({@link #WIDE_ITEM_TYPE}, BagType {@link #WIDE_BAG_TYPE}) - the Loot panel
  * itself never shows it, but it proves the bridge's widened `lootBagTypes`
@@ -152,7 +155,10 @@ public class FakePacketSource {
     // loadout, not just the local one. The local player's slot 0 must be WEAPON_ID -
     // the self-damage path fires it. Values are arbitrary plausible objectTypes; the
     // overlay resolves them through the shared Sprite path (real atlas sprite if
-    // assets loaded, else a stable per-type placeholder colour).
+    // assets loaded, else a stable per-type placeholder colour). Carol's ring
+    // (index [2][3]) is overwritten with SHINY_ITEM_TYPE in start() below
+    // (issue #250) once that field resolves, so the equipped-item shiny-badge
+    // path is exercised too - see the class doc comment.
     private static final int[][] ROSTER_EQUIPMENT = {
         {WEAPON_ID, 4100, 4200, 4300}, // Alice (local)
         {4001, 4101, 4201, 4301},      // Bob
@@ -391,6 +397,16 @@ public class FakePacketSource {
             WEAPON_ID, "Equipment", -1, "UT",
             "Fake Sword of Testing", "A synthetic weapon seeded by --fake mode for the item tooltip demo."
         );
+        // Issue #250: equip the shiny item into Carol's ring slot too, so the
+        // shiny badge is exercised on the equipped-item render path
+        // (GearRow/ItemSprite - Character/DPS/Instance panels), not just the
+        // Loot panel's ground-drop path above. Mutating the array here (rather
+        // than at its own declaration) is required: ROSTER_EQUIPMENT's static
+        // initializer runs textually before SHINY_ITEM_TYPE is declared, and a
+        // simple-name forward reference to a not-yet-declared field is illegal
+        // in the same class (JLS 8.3.3) - referencing it from a method body
+        // here, after both fields exist, sidesteps that.
+        ROSTER_EQUIPMENT[2][3] = SHINY_ITEM_TYPE;
 
         Thread t = new Thread(this::loop, "fake-packet-source");
         t.setDaemon(true);
