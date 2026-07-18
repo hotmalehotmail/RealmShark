@@ -50,7 +50,7 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/dps/dpsDetailContext.ts` | `DpsDetailSelectionContext` / `useDpsDetailSelection()` - the selected `DpsHistoryEntry` the `dpsDetail` panel renders (§2's "Programmatic panel spawn/close"). |
 | `overlay/src/renderer/src/dps/DpsDetailSelectionProvider.tsx` | Owns the selection state for the context above; mounted once in `App`. |
 | `overlay/src/renderer/src/dps/types.ts` | Packet-field shapes the tracker reads. |
-| `overlay/src/renderer/src/loot/LootTracker.ts` | Framework-agnostic class ingesting packets → a session-scoped log of white/orange bags that dropped near the player, incl. per-item enchants (§7). |
+| `overlay/src/renderer/src/loot/LootTracker.ts` | Framework-agnostic class ingesting packets → a session-scoped log of bags that dropped near the player (tracked-bag-type set is a constructor parameter, default `[6, 8]`), incl. per-item enchants + `onEntry` subscription (§7). |
 | `overlay/src/renderer/src/loot/useLootTracker.ts` | React hook wrapping `LootTracker` (event-driven on `onPacketBatch`, re-renders only when `ingest` reports a change). |
 | `overlay/src/renderer/src/loot/types.ts` | Packet-field shapes the loot tracker reads, incl. the synthetic `lootBagTypes` envelope. |
 | `overlay/src/renderer/src/harness/*` | The browser renderer harness (no Electron) - dev-flag-gated, out of the production bundle. See `docs/overlay-harness.md`. |
@@ -1221,7 +1221,13 @@ is the bag itself.) Categorization is entirely asset-derived (no
 hand-maintained item list): see [asset-pipeline.md](asset-pipeline.md)'s
 "BagType — loot categorization" section for how `<BagType>` is extracted and
 shipped as the bridge's synthetic `lootBagTypes` envelope, and
-[bridge-server.md](bridge-server.md) §6 for the broadcast mechanics.
+[bridge-server.md](bridge-server.md) §6 for the broadcast mechanics. The
+underlying `LootTracker` class is more general than the panel: the envelope
+itself carries every BagType present in the loaded assets (issue #217), and
+`LootTracker`'s tracked-bag-type set is a constructor parameter — the Loot
+panel just happens to construct one with the narrow `[6, 8]` default. The
+notification system (`docs/prd-notifications.md` §2) is the other consumer,
+constructing its own wide (all-color) instance.
 
 ### `LootTracker` (`loot/LootTracker.ts`)
 
@@ -1229,6 +1235,18 @@ A framework-agnostic class (no React, same shape as `DpsTracker`) ingesting
 `PacketEnvelope[]` independently of every other tracker. It mirrors the
 upstream `tomato` overlay's `DungeonStatData.updateItems`, which reads a loot
 bag container's 8 item slots the same way.
+
+**Tracked-bag-type set (issue #217).** The constructor takes an optional
+`trackedBagTypes: readonly number[]`, defaulting to `TRACKED_BAG_TYPES`
+(`[6, 8]`) — only entries whose BagType is in that set are kept from
+`bagTypeTable`/`lootBagIcons`/`lootBagObjectTypes` when a `lootBagTypes`
+envelope is ingested; everything else is silently dropped, same as before
+this widening for the default two-color instance. `useLootTracker()` (the
+Loot panel's hook) still constructs a default instance, so the panel's
+tracked set and displayed behavior are unchanged. `LootEntry` gained a
+`slotType` field (from the envelope's `slotTypes` map, `0` when
+unresolved) — the notification system's per-category enchant-threshold rules
+key off it.
 
 **Detecting a bag.** The `lootBagTypes` envelope carries `lootBagObjectTypes` —
 every loot-bag *entity* objectType for the tracked colors (regular *and*
@@ -1273,14 +1291,25 @@ delta carries no objectType, so a bag is only recognized there once
 de-duplicated set, so two identical drops in one session both appear. A
 `UpdatePacket.drops` id removes that bag's in-view bookkeeping.
 
+**`onEntry` subscription (issue #217).** `onEntry(listener)` registers a
+callback invoked exactly once per newly-logged entry (returns an unsubscribe
+function). It fires from the same push inside `processBagSlots` that both the
+live `newObjects`/`NewTickPacket` path and the `pendingNewObjects` startup-race
+replay above go through, so a listener sees every entry exactly once
+regardless of which path logged it — no separate wiring needed for the replay
+case. This is what lets a caller (the notification system's alert engine,
+issue #218) see each drop as a discrete event instead of diffing `entries`
+itself; the Loot panel doesn't use it (`useLootTracker` still re-renders off
+`ingest()`'s return value).
+
 **Session-scoped, mirroring `DpsTracker`'s retained history (§5.1).** `entries`
 (the log itself) persists across `MapInfoPacket` and is cleared only by
 `reset()` (overlay detach / game close). `MapInfoPacket` calls
 `resetPerInstance()` (forgets the in-view bags + their logged slots — bags are
 per-instance), never touching `entries`. `bagTypeTable`/`lootBagIcons`/
-`bagEntityTypes`/`itemNames`/`shinyItemTypes` (asset-derived categorization)
-are never cleared by either reset — like the sprite pack, they're
-app-lifetime data.
+`bagEntityTypes`/`itemNames`/`shinyItemTypes`/`slotTypes` (asset-derived
+categorization) are never cleared by either reset — like the sprite pack,
+they're app-lifetime data.
 
 ### `useLootTracker` (`loot/useLootTracker.ts`)
 

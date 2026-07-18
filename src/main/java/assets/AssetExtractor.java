@@ -705,6 +705,16 @@ public class AssetExtractor {
         String group = "";
         String labels = "";
         String tier = "";
+        /**
+         * Raw {@code <SlotType>} value, or "" when the object has none. Two
+         * independent uses share this one XML tag: on a weapon it's also
+         * prepended to {@code projectileString} below (the projectile-group
+         * "weapon slot", {@code IdToAsset.getIdProjectileSlotType}); on ANY
+         * item (weapon or not - e.g. a key) it's also the equipment-category
+         * enum {@code IdToAsset.getSlotType} reads (issue #217) - which is why
+         * it's ALSO appended as its own {@code ObjectID.list} column below,
+         * unconditionally, not just when {@code projectiles != null}.
+         */
         String slotType = "";
         /**
          * Raw {@code <BagType>} value (a 0-9 enum; 6 = white bag, 8 = orange/ST
@@ -754,7 +764,7 @@ public class AssetExtractor {
             }
 
             return String.format(
-                "%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s",
+                "%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s",
                 id,
                 display,
                 clazz,
@@ -765,7 +775,8 @@ public class AssetExtractor {
                 idName,
                 bagType,
                 tier,
-                description
+                description,
+                slotType
             );
         }
     }
