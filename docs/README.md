@@ -61,6 +61,11 @@ moving parts, each with its own doc below.
   shared `ui/` primitives (`Button`, `MeterRow`, `GearRow`, …), the type
   scale, and the conventions the PR review agent enforces. **Read before
   writing any panel UI.**
+- **[notifications.md](notifications.md)** — the overlay notification
+  ("alerts") system's framework-agnostic core: the `AlertEngine`, the rule
+  catalog, the multi-match dispatcher, the fired-alert store, the settings
+  schema, and the `SlotType` id → name table. Ships no UI yet — see
+  `prd-notifications.md` for the full six-issue plan.
 - **[overlay-testing.md](overlay-testing.md)** — the vitest suite
   (`overlay/test/`): the capture-replay harness (`loadCapture`/`replay`, fake-
   timer anchoring), the fixtures convention, the capture-allowlist tripwire,

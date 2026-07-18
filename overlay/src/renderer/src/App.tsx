@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { BridgeStatus } from '../../shared/ipc'
+import { useAlertEngine } from './alerts/useAlertEngine'
 import { ingestMainEntry } from './consoleLog'
 import { DpsDetailSelectionProvider } from './dps/DpsDetailSelectionProvider'
 import { ItemInfoProvider } from './items/ItemInfoProvider'
@@ -26,6 +27,11 @@ function App(): React.JSX.Element {
   const [interactive, setInteractive] = useState(false)
   const [showAttachToast, setShowAttachToast] = useState(false)
   const attachToastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+  // Mounted once at App level, not inside a panel (PRD §2 of
+  // docs/prd-notifications.md) - side-effecting only for now, issue #218
+  // ships no UI. Future issues consume its `engine.store` directly.
+  useAlertEngine()
 
   useEffect(() => {
     window.overlay.getBridgeStatus().then(setStatus)
