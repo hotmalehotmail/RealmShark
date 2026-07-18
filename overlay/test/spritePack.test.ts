@@ -28,6 +28,7 @@ const UI_SPRITES = {
   RarityIcon_1: 'data:image/png;base64,AAAA',
   shiny_item_icon: 'data:image/png;base64,BBBB'
 }
+const DUNGEON_ICONS = { 'The Shatters': 1234, 'Lost Halls': 5678 }
 
 function fullPack(): SpritePack & { upToDate?: boolean } {
   return {
@@ -39,6 +40,7 @@ function fullPack(): SpritePack & { upToDate?: boolean } {
     dyeTable: {},
     animTable: {},
     animDyeTable: {},
+    dungeonIcons: DUNGEON_ICONS,
     uiSprites: UI_SPRITES
   }
 }
@@ -64,6 +66,10 @@ describe('main-process sprite-pack forwarding (issue #206 regression)', () => {
     // always saw undefined and drew the CSS ring / SVG-star fallback.
     expect(getSpritePack().uiSprites).toEqual(UI_SPRITES)
     expect(seen.at(-1)?.uiSprites).toEqual(UI_SPRITES)
+    // dungeonIcons was dropped by the same field list — guard it too so the
+    // list can't silently regress another already-shipped section.
+    expect(getSpritePack().dungeonIcons).toEqual(DUNGEON_ICONS)
+    expect(seen.at(-1)?.dungeonIcons).toEqual(DUNGEON_ICONS)
   })
 
   it('claims its version once a full pack (with uiSprites) is cached', () => {

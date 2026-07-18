@@ -92,11 +92,13 @@ export function onSpritePackMessage(msg: SpritePack & { upToDate?: boolean }): v
     dyeTable: msg.dyeTable,
     animTable: msg.animTable,
     animDyeTable: msg.animDyeTable,
-    // Forward the named UI sprites (rarity pips / shiny icon - issue #206) the
-    // same as every other section. Omitting it here (this reconstruction is a
-    // hand-maintained field list, not a spread) silently strips a section the
-    // bridge sent and the renderer's getUiSprite() expects, so it draws the CSS
-    // ring / SVG-star fallback even when real sprites are available.
+    dungeonIcons: msg.dungeonIcons,
+    // NOTE: this reconstruction is a hand-maintained field list, not a spread,
+    // so EVERY SpritePack section the bridge sends must be copied here
+    // explicitly or it's silently stripped before the renderer sees it (the
+    // consumer then always falls back: getUiSprite -> CSS ring / SVG star,
+    // dungeonIcon -> no icon). Keep in lockstep with SpritePack in
+    // ../shared/ipc.ts and SpritePackService.java's root.add(...) sections.
     uiSprites: msg.uiSprites
   }
   saveToDisk(current)
