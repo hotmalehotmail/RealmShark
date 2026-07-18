@@ -1,18 +1,27 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PacketEnvelope } from '../../../shared/ipc'
+import type { LootBagTypesData } from '../loot/types'
 import { ItemInfoContext } from './context'
 import type { EnchantNamesData, ItemInfoData } from './types'
 
 /**
  * App-level registry of item metadata (display name, tier, class,
- * description, weapon damage range) and enchantment id -> name resolutions,
- * fed by the bridge's `itemInfo`/`enchantNames` envelopes (`assets.IdToAsset`
- * / `bridge.dps.ParseEnchants.ENCHANTS` - see docs/bridge-server.md). Both are
- * small, asset-derived tables that rarely change after the first broadcast
- * (only a re-extraction/reload changes them), so - unlike `EntityRegistry`,
- * which notifies on every display-relevant packet - consumers just read the
- * latest snapshot each render; the one state bump per received table is only
- * to trigger that re-render, not a general change-notification API.
+ * description, weapon damage range), enchantment id -> name resolutions, and
+ * shininess (issue #250), fed by the bridge's `itemInfo`/`enchantNames`
+ * envelopes (`assets.IdToAsset` / `bridge.dps.ParseEnchants.ENCHANTS` - see
+ * docs/bridge-server.md) plus `lootBagTypes`'s `shinyItemTypes` field (the
+ * same signal `LootTracker.isShiny` reads - see loot/LootTracker.ts §4.3).
+ * All are small, asset-derived tables that rarely change after the first
+ * broadcast (only a re-extraction/reload changes them), so - unlike
+ * `EntityRegistry`, which notifies on every display-relevant packet -
+ * consumers just read the latest snapshot each render; the one state bump per
+ * received table is only to trigger that re-render, not a general
+ * change-notification API. `shinyItemTypes` is read here (in addition to
+ * `LootTracker`'s own per-panel copy) so any item-rendering surface -
+ * `GearRow`'s equipped slots (Character/DPS/Instance panels), not just the
+ * Loot panel - gets a global `isShiny` lookup via `ItemSprite` without
+ * instantiating a full `LootTracker` (with its per-session bag-tracking
+ * machinery) per rendered slot.
  */
 
 /**
@@ -22,13 +31,17 @@ import type { EnchantNamesData, ItemInfoData } from './types'
  * display metadata, not part of `CAPTURE_ALLOWED_TYPES`
  * (`src/shared/capture.ts`) - and this issue's allowlist is explicitly frozen
  * (its contents don't change here), so extending it to cover these is a
- * separate follow-up, not a silent gap.
+ * separate follow-up, not a silent gap. `lootBagTypes` is already covered via
+ * `LootTracker`'s own `CONSUMED_ENVELOPE_TYPES` declaration, so this second
+ * (partial - only `shinyItemTypes`) consumer of it needs no allowlist change
+ * either.
  */
-export const CONSUMED_ENVELOPE_TYPES = ['itemInfo', 'enchantNames'] as const
+export const CONSUMED_ENVELOPE_TYPES = ['itemInfo', 'enchantNames', 'lootBagTypes'] as const
 
 export function ItemInfoProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
   const itemRef = useRef<ItemInfoData>({})
   const enchantRef = useRef<EnchantNamesData>({})
+  const shinyRef = useRef<{ metaVersion?: string; types: Set<number> }>({ types: new Set() })
   const [, setGen] = useState(0)
 
   useEffect(() => {
@@ -54,6 +67,16 @@ export function ItemInfoProvider({ children }: { children: React.ReactNode }): R
           }
           enchantRef.current = data
           changed = true
+        } else if (env.type === 'lootBagTypes') {
+          const data = (env.data as LootBagTypesData | null) ?? {}
+          if (data.metaVersion != null && data.metaVersion === shinyRef.current.metaVersion) {
+            continue
+          }
+          shinyRef.current = {
+            metaVersion: data.metaVersion,
+            types: new Set(data.shinyItemTypes ?? [])
+          }
+          changed = true
         }
       }
       if (changed) setGen((g) => g + 1)
@@ -75,7 +98,8 @@ export function ItemInfoProvider({ children }: { children: React.ReactNode }): R
           const max = itemRef.current.maxDamage?.[String(objectType)]
           return min != null && max != null ? [min, max] : null
         },
-        enchantName: (enchantId) => enchantRef.current.names?.[String(enchantId)] ?? null
+        enchantName: (enchantId) => enchantRef.current.names?.[String(enchantId)] ?? null,
+        isShiny: (objectType) => shinyRef.current.types.has(objectType)
       }}
     >
       {children}

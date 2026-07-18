@@ -10,7 +10,12 @@ interface ItemSpriteProps {
   className?: string
   /** Enchant rarity-border tier (0-4), forwarded to `<Sprite>` — see sprites/enchantRarity.ts. */
   rarity?: number | null
-  /** Shiny-item badge, forwarded to `<Sprite>` — see sprites/shiny.ts. */
+  /**
+   * Shiny-item badge override, forwarded to `<Sprite>` — see sprites/shiny.ts.
+   * Optional: `ItemSprite` already resolves this itself from `useItemInfo().isShiny`
+   * (issue #250, a global per-objectType fact valid for any item sprite), so most
+   * callers omit it entirely. Pass an explicit value only to override that lookup.
+   */
   shiny?: boolean
   /**
    * The equipping entity's objectId, paired with `slotIndex` to resolve that
@@ -38,9 +43,13 @@ interface ItemSpriteProps {
  * tooltip showing the item's info (name/tier/class/damage/description, from
  * the bridge's `itemInfo` envelope) and, for an equipped slot whose owner is
  * known, its enchantments (decoded client-side from `EntityRegistry`'s raw
- * `enchantSlots`, named via the `enchantNames` envelope where available).
- * `GearRow` and the Loot panel both render items through this component, so
- * every current and future item-rendering panel gets tooltips for free - see
+ * `enchantSlots`, named via the `enchantNames` envelope where available). It
+ * also resolves the shiny-item badge itself (issue #250) from
+ * `useItemInfo().isShiny` - a global per-objectType fact, not tied to how the
+ * item is being displayed - so every caller gets it for free instead of each
+ * one having to compute and forward it. `GearRow` and the Loot panel both
+ * render items through this component, so every current and future
+ * item-rendering panel gets tooltips (and the shiny badge) for free - see
  * `docs/overlay-renderer.md` §4.
  */
 export function ItemSprite({
@@ -53,8 +62,10 @@ export function ItemSprite({
   slotIndex,
   enchantCode
 }: ItemSpriteProps): React.JSX.Element {
-  const { itemName, itemTier, itemClass, itemDescription, itemDamage, enchantName } = useItemInfo()
+  const { itemName, itemTier, itemClass, itemDescription, itemDamage, enchantName, isShiny } =
+    useItemInfo()
   const entities = useEntityRegistry()
+  const shinyResolved = shiny ?? isShiny(objectType)
 
   const name = itemName(objectType) ?? `#${objectType}`
   const tier = itemTier(objectType)
@@ -99,7 +110,7 @@ export function ItemSprite({
 
   return (
     <Tooltip content={content} className={className}>
-      <Sprite objectType={objectType} size={size} rarity={rarity} shiny={shiny} />
+      <Sprite objectType={objectType} size={size} rarity={rarity} shiny={shinyResolved} />
     </Tooltip>
   )
 }

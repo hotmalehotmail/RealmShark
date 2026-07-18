@@ -5,7 +5,6 @@ export interface LootSnapshot {
   entriesByBagType: Record<TrackedBagType, LootEntry[]>
   bagIcon: (bagType: TrackedBagType) => number | null
   itemName: (objectType: number) => string | null
-  isShiny: (objectType: number) => boolean
 }
 
 const EMPTY_ENTRIES: LootEntry[] = []
@@ -44,7 +43,6 @@ export function useLootTracker(): LootSnapshot {
   return {
     entriesByBagType,
     bagIcon: (bagType) => tracker.bagIcon(bagType),
-    itemName: (objectType) => tracker.itemName(objectType),
-    isShiny: (objectType) => tracker.isShiny(objectType)
+    itemName: (objectType) => tracker.itemName(objectType)
   }
 }
