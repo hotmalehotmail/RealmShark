@@ -38,6 +38,44 @@ function whiteBagDropEnvelopes(objectId: number): PacketEnvelope[] {
 
 const DEFAULT_SETTINGS: NotificationsSettings = { enabled: true, volume: 1, rules: {} }
 
+/** `CreateSuccessPacket` + `UpdatePacket`/`NAME_STAT` resolving the local player's identity to (id, name) - same two-source pattern `DpsTracker.ts` uses. */
+function localIdentityEnvelopes(id: number, name: string): PacketEnvelope[] {
+  return [
+    { type: 'CreateSuccessPacket', direction: 'SERVER', time: 500, data: { objectId: id } },
+    {
+      type: 'UpdatePacket',
+      direction: 'SERVER',
+      time: 600,
+      data: {
+        newObjects: [
+          { status: { objectId: id, stats: [{ statTypeNum: 31, stringStatValue: name }] } }
+        ]
+      }
+    }
+  ]
+}
+
+/** A `TextPacket` envelope with the given fields, other fields defaulted to plausible values. */
+function textPacket(overrides: Record<string, unknown> = {}): PacketEnvelope {
+  return {
+    type: 'TextPacket',
+    direction: 'SERVER',
+    time: 1000,
+    data: {
+      name: 'Bob',
+      objectId: -1,
+      numStars: 5,
+      bubbleTime: 10,
+      recipient: '*Party*',
+      text: 'need help with boss',
+      cleanText: 'need help with boss',
+      isSupporter: false,
+      starBackground: 0,
+      ...overrides
+    }
+  }
+}
+
 describe('AlertEngine (issue #218)', () => {
   it('fires whiteBag for a white-bag drop under default (catalog-default) settings', () => {
     const engine = new AlertEngine()
@@ -126,5 +164,70 @@ describe('AlertEngine (issue #218)', () => {
     // whiteBag also matches (bagType 6), so both kinds are tagged on the same fired alert.
     expect(alerts[0].matchedKindIds).toContain('syntheticTestKind')
     expect(alerts[0].matchedKindIds).toContain('whiteBag')
+  })
+})
+
+describe('AlertEngine chat detector (issue #222)', () => {
+  const PARTY_CHAT_ENABLED: NotificationsSettings = {
+    enabled: true,
+    volume: 1,
+    rules: { partyChat: { enabled: true, banner: true, sound: true, params: { keywords: [] } } }
+  }
+
+  it('fires partyChat for a party-channel message from another player', () => {
+    const engine = new AlertEngine()
+    engine.setSettings(PARTY_CHAT_ENABLED)
+    engine.ingest(localIdentityEnvelopes(6000, 'Alice'))
+
+    engine.ingest([textPacket({ name: 'Bob', objectId: -1, recipient: '*Party*' })])
+
+    const alerts = engine.store.getAll()
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0].matchedKindIds).toEqual(['partyChat'])
+  })
+
+  it('ignores a message from the local player, matched by name - not objectId (party senders arrive with objectId -1)', () => {
+    const engine = new AlertEngine()
+    engine.setSettings(PARTY_CHAT_ENABLED)
+    engine.ingest(localIdentityEnvelopes(6000, 'Alice'))
+
+    // A self-sent party message would also arrive with objectId -1 (if it echoes
+    // back at all) - only the name distinguishes it from another player's.
+    engine.ingest([textPacket({ name: 'Alice', objectId: -1, recipient: '*Party*' })])
+
+    expect(engine.store.getAll()).toHaveLength(0)
+  })
+
+  it('does not fire partyChat for a local/world-channel message even when enabled', () => {
+    const engine = new AlertEngine()
+    engine.setSettings(PARTY_CHAT_ENABLED)
+    engine.ingest(localIdentityEnvelopes(6000, 'Alice'))
+
+    engine.ingest([textPacket({ name: 'Carol', objectId: 3, recipient: '', text: 'hey all' })])
+
+    expect(engine.store.getAll()).toHaveLength(0)
+  })
+
+  it('partyChat stays silent under its catalog-default (disabled) settings', () => {
+    const engine = new AlertEngine()
+    engine.setSettings(DEFAULT_SETTINGS)
+    engine.ingest(localIdentityEnvelopes(6000, 'Alice'))
+
+    engine.ingest([textPacket({ name: 'Bob', objectId: -1, recipient: '*Party*' })])
+
+    expect(engine.store.getAll()).toHaveLength(0)
+  })
+
+  it('reset() (overlay detach) clears the resolved local-player identity', () => {
+    const engine = new AlertEngine()
+    engine.setSettings(PARTY_CHAT_ENABLED)
+    engine.ingest(localIdentityEnvelopes(6000, 'Alice'))
+    engine.reset()
+
+    // With identity cleared, "Alice" is no longer recognized as the local
+    // player, so her party message now fires instead of being self-ignored.
+    engine.ingest([textPacket({ name: 'Alice', objectId: -1, recipient: '*Party*' })])
+
+    expect(engine.store.getAll()).toHaveLength(1)
   })
 })

@@ -1,5 +1,6 @@
 import type { ComponentType } from 'react'
 import { EnchantedDropParamsEditor } from './EnchantedDropParamsEditor'
+import { PartyChatParamsEditor } from './PartyChatParamsEditor'
 import type { ParamsEditorProps } from './paramsEditorTypes'
 
 export type { ParamsEditorProps } from './paramsEditorTypes'
@@ -20,5 +21,6 @@ export type { ParamsEditorProps } from './paramsEditorTypes'
  * as `panels/registry.ts`.
  */
 export const PARAMS_EDITORS: Record<string, ComponentType<ParamsEditorProps>> = {
-  enchantedDrop: EnchantedDropParamsEditor
+  enchantedDrop: EnchantedDropParamsEditor,
+  partyChat: PartyChatParamsEditor
 }

@@ -1,5 +1,13 @@
 import type { NotificationsSettings } from '../../../shared/settings'
-import type { AlertKind, AlertPayload, GameEvent, LootDropEvent, RuleSettings, Tier } from './types'
+import type {
+  AlertKind,
+  AlertPayload,
+  ChatEvent,
+  GameEvent,
+  LootDropEvent,
+  RuleSettings,
+  Tier
+} from './types'
 
 /** The two soulbound "special" bag colors (docs/asset-pipeline.md "BagType") - same pair as `LootTracker.TRACKED_BAG_TYPES`'s default. */
 const WHITE_BAG_TYPE = 6
@@ -7,6 +15,10 @@ const ORANGE_BAG_TYPE = 8
 
 function isLootDrop(event: GameEvent): event is LootDropEvent {
   return event.type === 'loot-drop'
+}
+
+function isChatEvent(event: GameEvent): event is ChatEvent {
+  return event.type === 'chat'
 }
 
 /** "Bow of Covert Havens (4 enchants)" - the shared body format for a payload that reveals item identity. */
@@ -127,6 +139,53 @@ export const orangeBag: AlertKind = {
   }
 }
 
+/** `partyChat`'s params shape (PRD §3, issue #222): empty `keywords` matches every party message. */
+export interface PartyChatParams {
+  /** Case-insensitive substring match against `ChatEvent.text` (never `cleanText` - see its doc comment). Empty array = every party message matches. */
+  keywords: string[]
+}
+
+const DEFAULT_PARTY_CHAT_PARAMS: PartyChatParams = { keywords: [] }
+
+/** Cooldown between two `partyChat` fires (PRD §7 "Spam") - chat can burst in a way a single loot drop never does. */
+const PARTY_CHAT_COOLDOWN_MS = 3000
+
+/**
+ * Fires on a party chat message (issue #222, phase 2 - the first consumer of
+ * the `chat` event kind, proving "new event kind = one detector, nothing
+ * else changes" per the PRD §1 extensibility story). Default **off** - unlike
+ * the loot rules, chat notifications are opt-in (a user has to actively want
+ * to be pinged on party messages). `AlertEngine.onChatMessage` already
+ * excludes the local player's own messages (matched by name, not objectId -
+ * see `ChatEvent`'s doc comment), so `match` itself only needs the channel
+ * and keyword predicates.
+ */
+export const partyChat: AlertKind = {
+  id: 'partyChat',
+  title: 'Party Chat',
+  eventType: 'chat',
+  defaults: {
+    enabled: false,
+    banner: true,
+    sound: true,
+    params: DEFAULT_PARTY_CHAT_PARAMS as unknown as Record<string, unknown>
+  },
+  cooldownMs: PARTY_CHAT_COOLDOWN_MS,
+  match: (event, rawParams) => {
+    if (!isChatEvent(event) || event.channel !== 'party') return null
+    const params = rawParams as unknown as PartyChatParams
+    const keywords = params.keywords ?? []
+    if (keywords.length > 0) {
+      const lowerText = event.text.toLowerCase()
+      const matched = keywords.some(
+        (keyword) => keyword.length > 0 && lowerText.includes(keyword.toLowerCase())
+      )
+      if (!matched) return null
+    }
+    return { title: `Party: ${event.sender}`, body: event.text }
+  }
+}
+
 /**
  * Catalog order is the documented banner-priority order (PRD §3 "Multi-match
  * semantics"): when one event matches several enabled rules and more than
@@ -134,13 +193,16 @@ export const orangeBag: AlertKind = {
  * from the FIRST banner-wanting entry in this array's order. whiteBag/
  * orangeBag precede enchantedDrop so a divine white/orange bag reads as its
  * bag-color banner first - the enchant fact still reaches the user via the
- * fired alert's full `matchedKindIds` (history, issue #220).
+ * fired alert's full `matchedKindIds` (history, issue #220). `partyChat` is
+ * last - it matches a disjoint event type (`chat`, never `loot-drop`), so its
+ * relative order can't actually collide with the loot rules; it's placed
+ * after them purely to keep the loot trio's documented priority order intact.
  *
  * Adding a new notification (PRD §1) is exactly one more entry here - the
  * dispatcher and store need zero changes (proved by
  * `test/alerts-engine.test.ts`'s extensibility test).
  */
-export const CATALOG: readonly AlertKind[] = [whiteBag, orangeBag, enchantedDrop]
+export const CATALOG: readonly AlertKind[] = [whiteBag, orangeBag, enchantedDrop, partyChat]
 
 /**
  * Resolves one catalog kind's effective settings for the current event,

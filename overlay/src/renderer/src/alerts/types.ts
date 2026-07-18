@@ -2,9 +2,7 @@ import type { NotificationsSettings } from '../../../shared/settings'
 
 /**
  * v1 event vocabulary the rule catalog matches against (PRD §2,
- * docs/prd-notifications.md). Chat is deliberately out of scope for issue
- * #218 (phase 2, issue #222 per the PRD's §9 phasing) - this union stays
- * loot-only until the party-channel wire shape is verified (§6).
+ * docs/prd-notifications.md).
  */
 export interface LootDropEvent {
   type: 'loot-drop'
@@ -24,7 +22,32 @@ export interface LootDropEvent {
   bagIcon: number | null
 }
 
-export type GameEvent = LootDropEvent
+/**
+ * A chat message (issue #222, phase 2 - PRD §2/§6). Only `TextPacket`
+ * traffic reaches this detector (see `AlertEngine.ts`'s `onChatMessage`) -
+ * `channel` classifies the wire-verified shapes pinned via the Status
+ * panel's chat-probe diagnostic (`docs/overlay-main-process.md` "Chat
+ * probe", 2026-07-18): `'party'` for `recipient === '*Party*'` (the exact
+ * literal sentinel, asterisks included - party senders arrive with
+ * `objectId: -1`, so `AlertEngine` resolves the local-player self-ignore
+ * check by name, never by objectId), `'local'` for `recipient === ''`
+ * (local/world chat, sender's live entity id). Guild/`/tell` sentinels were
+ * not sampled (out of scope, PRD §6) - anything else classifies as
+ * `'unknown'` rather than guessing, so a future guild/PM rule doesn't
+ * silently misfire against an unverified shape.
+ */
+export interface ChatEvent {
+  type: 'chat'
+  sender: string
+  /** The uncensored message - keyword matching (`partyChat`) runs on this, never `cleanText` (PRD §2). */
+  text: string
+  /** Profanity-filtered variant of `text` (`TextPacket.cleanText`) - display-only, never matched against. */
+  cleanText: string
+  numStars: number
+  channel: 'party' | 'local' | 'unknown'
+}
+
+export type GameEvent = LootDropEvent | ChatEvent
 
 /** A fired alert's user-visible content (PRD §3). */
 export interface AlertPayload {

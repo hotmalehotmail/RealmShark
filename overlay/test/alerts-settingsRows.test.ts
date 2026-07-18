@@ -9,7 +9,12 @@ const EMPTY_SETTINGS: NotificationsSettings = { enabled: true, volume: 1, rules:
 describe('buildRuleRows (issue #221)', () => {
   it('produces one row per built-in catalog entry, in catalog order', () => {
     const rows = buildRuleRows(CATALOG, EMPTY_SETTINGS)
-    expect(rows.map((r) => r.kindId)).toEqual(['whiteBag', 'orangeBag', 'enchantedDrop'])
+    expect(rows.map((r) => r.kindId)).toEqual([
+      'whiteBag',
+      'orangeBag',
+      'enchantedDrop',
+      'partyChat'
+    ])
   })
 
   it("each row's settings are the catalog default when no user override exists", () => {

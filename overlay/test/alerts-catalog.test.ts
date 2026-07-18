@@ -3,12 +3,14 @@ import {
   CATALOG,
   enchantedDrop,
   orangeBag,
+  partyChat,
   resolveRuleSettings,
   whiteBag,
-  type EnchantedDropParams
+  type EnchantedDropParams,
+  type PartyChatParams
 } from '../src/renderer/src/alerts/catalog'
 import type { NotificationsSettings } from '../src/shared/settings'
-import type { LootDropEvent } from '../src/renderer/src/alerts/types'
+import type { ChatEvent, LootDropEvent } from '../src/renderer/src/alerts/types'
 
 function lootDrop(overrides: Partial<LootDropEvent> = {}): LootDropEvent {
   return {
@@ -24,11 +26,28 @@ function lootDrop(overrides: Partial<LootDropEvent> = {}): LootDropEvent {
   }
 }
 
+function chatEvent(overrides: Partial<ChatEvent> = {}): ChatEvent {
+  return {
+    type: 'chat',
+    sender: 'Bob',
+    text: 'need help with boss',
+    cleanText: 'need help with boss',
+    numStars: 5,
+    channel: 'party',
+    ...overrides
+  }
+}
+
 const EMPTY_SETTINGS: NotificationsSettings = { enabled: true, volume: 1, rules: {} }
 
 describe('catalog (issue #218)', () => {
-  it('catalog order is whiteBag, orangeBag, enchantedDrop - the documented banner priority order', () => {
-    expect(CATALOG.map((k) => k.id)).toEqual(['whiteBag', 'orangeBag', 'enchantedDrop'])
+  it('catalog order is whiteBag, orangeBag, enchantedDrop, partyChat - the documented banner priority order', () => {
+    expect(CATALOG.map((k) => k.id)).toEqual([
+      'whiteBag',
+      'orangeBag',
+      'enchantedDrop',
+      'partyChat'
+    ])
   })
 
   it('whiteBag matches only bagType 6', () => {
@@ -208,6 +227,45 @@ describe('catalog (issue #218)', () => {
     })
   })
 
+  describe('partyChat (issue #222)', () => {
+    it('defaults to disabled - chat notifications are opt-in', () => {
+      expect(partyChat.defaults.enabled).toBe(false)
+    })
+
+    it('matches only the party channel', () => {
+      expect(partyChat.match(chatEvent({ channel: 'party' }), { keywords: [] })).not.toBeNull()
+      expect(partyChat.match(chatEvent({ channel: 'local' }), { keywords: [] })).toBeNull()
+      expect(partyChat.match(chatEvent({ channel: 'unknown' }), { keywords: [] })).toBeNull()
+    })
+
+    it('empty keywords matches every party message', () => {
+      const params: PartyChatParams = { keywords: [] }
+      expect(partyChat.match(chatEvent({ text: 'anything at all' }), params)).not.toBeNull()
+    })
+
+    it('non-empty keywords require a case-insensitive substring match against text', () => {
+      const params: PartyChatParams = { keywords: ['boss'] }
+      expect(partyChat.match(chatEvent({ text: 'need help with BOSS' }), params)).not.toBeNull()
+      expect(partyChat.match(chatEvent({ text: 'anyone up for pst?' }), params)).toBeNull()
+    })
+
+    it('keyword matching runs on text, never cleanText (PRD §2)', () => {
+      const params: PartyChatParams = { keywords: ['boss'] }
+      // A real client's cleanText censors "boss" here, but text (uncensored) still carries it.
+      expect(
+        partyChat.match(
+          chatEvent({ text: 'need help with boss', cleanText: 'need help with ****' }),
+          params
+        )
+      ).not.toBeNull()
+    })
+
+    it("payload uses the sender's name and the raw (uncensored) text", () => {
+      const payload = partyChat.match(chatEvent({ sender: 'Bob', text: 'inc!' }), { keywords: [] })
+      expect(payload).toEqual({ title: 'Party: Bob', body: 'inc!' })
+    })
+  })
+
   describe('resolveRuleSettings', () => {
     it('falls back to the catalog default when no rules entry exists', () => {
       const resolved = resolveRuleSettings(whiteBag, EMPTY_SETTINGS)
@@ -236,6 +294,15 @@ describe('catalog (issue #218)', () => {
       }
       const resolved = resolveRuleSettings(enchantedDrop, settings)
       expect(resolved.params).toEqual({ tier: 2, slotTypeOverrides: {}, itemOverrides: {} })
+    })
+
+    it('falls back to disabled + empty keywords for partyChat when no rules entry exists', () => {
+      expect(resolveRuleSettings(partyChat, EMPTY_SETTINGS)).toEqual({
+        enabled: false,
+        banner: true,
+        sound: true,
+        params: { keywords: [] }
+      })
     })
   })
 })
