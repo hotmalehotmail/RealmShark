@@ -41,6 +41,12 @@ installMainConsoleCapture()
 // acceleration can break overlay transparency. https://github.com/electron/electron/issues/25153
 app.disableHardwareAcceleration()
 
+// The notification ping (renderer/src/alerts/sound.ts, issue #219) must play
+// with no prior user gesture - a fired alert is a game event, not a click.
+// Chromium's default autoplay policy blocks that; this is the standard fix
+// (must be set before app.whenReady()).
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
+
 // Neither the overlay HUD nor the settings window needs the default
 // File/Edit/View/Window/Help menu bar - drop it app-wide.
 Menu.setApplicationMenu(null)

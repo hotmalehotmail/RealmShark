@@ -1347,17 +1347,18 @@ no inset, `overflow-y-auto` clips exactly at the content edge). Sized/registered
 
 ---
 
-## 8. Notification system core (issue #218, no UI yet)
+## 8. Notification system (issues #218-#219)
 
 `useAlertEngine()` mounts one `AlertEngine` instance in `App.tsx` (called
 unconditionally near the top of the component, alongside the other
 App-level effects) — unlike every per-panel tracker (`useLootTracker`,
-`useDpsHistory`), this one is a **singleton at App level**, because its
-eventual side effects (a banner, a ping sound — issue #219) must fire even
-when no panel is open. Its `ingest`/`reset` are wired to the same
-`onPacketBatch`/`onOverlayDetach` events every tracker uses, plus
-`getSettings`/`onSettingsChanged` so a live settings change applies without
-an engine restart.
+`useDpsHistory`), this one is a **singleton at App level**, because its side
+effects (a banner, a ping sound) must fire even when no panel is open. Its
+`ingest`/`reset` are wired to the same `onPacketBatch`/`onOverlayDetach`
+events every tracker uses, plus `getSettings`/`onSettingsChanged` so a live
+settings change applies without an engine restart; the hook returns both the
+engine and the live `notifications.volume` (issue #219), which `App.tsx`
+forwards to `AlertToastHost`.
 
 `AlertEngine` owns a **second, private** `LootTracker` instance — not the one
 `useLootTracker()` creates for the Loot panel — constructed with a wide
@@ -1366,13 +1367,22 @@ white/orange (§7's "the notification system is the other consumer" note).
 Each new entry (`onEntry`, issue #217) becomes a `loot-drop` `GameEvent`,
 matched against a small rule catalog (`whiteBag`/`orangeBag`/
 `enchantedDrop`), and any match is appended to a bounded, subscribable
-`FiredAlertStore`. This issue ships **no UI** — the store's subscribe API is
-the entire externally-visible contract, deliberately, so the future banner
-host/history panel/settings gear (issues #219-#221) only ever need to read
-from it.
+`FiredAlertStore` — the store's subscribe API is the contract every UI
+surface reads from, so a future history panel/settings gear (issues
+#220-#221) never needs to reach into `AlertEngine` internals.
 
-Full architecture, the multi-match dispatch semantics, the settings schema,
-and the SlotType name derivation: see **[notifications.md](notifications.md)**.
+`AlertToastHost` (issue #219, rendered in `AppShell` above `PanelCanvas` —
+§2's panel system doesn't apply to it, it's not a `PANEL_REGISTRY` entry)
+consumes that store directly: a new alert with its `banner` flag set becomes
+a capped/auto-dismissing toast (`toastQueue.ts`'s `ToastQueue`), one with
+`sound` set plays the bundled ping (`sound.ts`'s `pingPlayer`, coalesced to
+≤1 per ~700ms). `main/index.ts` sets Chromium's `autoplay-policy` switch so
+the ping plays with no prior user gesture — a fired alert is a game event,
+not a click.
+
+Full architecture, the multi-match dispatch semantics, the delivery layer,
+the settings schema, and the SlotType name derivation: see
+**[notifications.md](notifications.md)**.
 
 ---
 

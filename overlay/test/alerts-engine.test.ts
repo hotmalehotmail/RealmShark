@@ -89,6 +89,22 @@ describe('AlertEngine (issue #218)', () => {
     expect(engine.store.getAll()).toEqual([])
   })
 
+  it('records the resolved banner/sound channel flags on the stored alert (issue #219)', () => {
+    const engine = new AlertEngine()
+    engine.setSettings({
+      enabled: true,
+      volume: 1,
+      rules: { whiteBag: { enabled: true, banner: false, sound: true } }
+    })
+
+    engine.ingest(whiteBagDropEnvelopes(6000))
+
+    const alerts = engine.store.getAll()
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0].banner).toBe(false)
+    expect(alerts[0].sound).toBe(true)
+  })
+
   it('a synthetic catalog entry fires end-to-end (event -> store) with zero dispatcher/store changes', () => {
     const syntheticKind: AlertKind = {
       id: 'syntheticTestKind',

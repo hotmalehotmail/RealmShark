@@ -101,6 +101,14 @@ export class AlertEngine {
     }
     const now = Date.now()
     const result = dispatchEvent(event, this.catalog, this.settings, now, this.lastFiredAt)
-    if (result) this.store.append(result.payload, result.matchedKindIds, now)
+    if (result) {
+      this.store.append(
+        result.payload,
+        result.matchedKindIds,
+        now,
+        result.banner !== null,
+        result.sound
+      )
+    }
   }
 }

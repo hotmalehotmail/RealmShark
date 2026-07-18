@@ -132,3 +132,32 @@ for (const [type, spec] of Object.entries(PANEL_REGISTRY)) {
     })
   }
 }
+
+/**
+ * `AlertToastHost` (issue #219, PRD §4) isn't a `PANEL_REGISTRY` entry - it's
+ * an App-level singleton banner stack, not a draggable/resizable panel - so
+ * it doesn't fall out of the loop above and gets one dedicated shot instead,
+ * via the `?toastGallery=1` harness mount (`AlertToastGalleryMount.tsx`),
+ * which seeds a representative 4-alert stack (cap-3 visible + "+1 more"
+ * overflow line) directly into a `FiredAlertStore` - no packet fixture
+ * needed for the alerts themselves; `&fixture=gallery` is only there so the
+ * `ItemSprite` icons render from the synthetic `spritePack.json` fixture
+ * instead of the no-pack fallback, same as every other panel shot.
+ */
+test('alertToastHost gallery', async ({ page }) => {
+  await freezeNondeterminism(page)
+  await page.goto('/?toastGallery=1&fixture=gallery')
+  await page.addStyleTag({
+    content:
+      '*, *::before, *::after { animation-duration: 0s !important; animation-delay: 0s !important; transition-duration: 0s !important; transition-delay: 0s !important; }'
+  })
+  await page.waitForFunction(() => window.__harnessFixtureReady === true, undefined, {
+    timeout: FIXTURE_READY_TIMEOUT_MS
+  })
+
+  const gallery = page.locator('[data-toast-gallery]')
+  await expect(gallery).toBeVisible()
+  await expect(gallery.getByText('+1 more')).toBeVisible()
+
+  await gallery.screenshot({ path: resolve(SCREENSHOT_DIR, 'alertToastHost-gallery.png') })
+})

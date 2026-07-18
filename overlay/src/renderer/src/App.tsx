@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { BridgeStatus } from '../../shared/ipc'
+import { AlertToastHost } from './alerts/AlertToastHost'
+import type { FiredAlertStore } from './alerts/store'
 import { useAlertEngine } from './alerts/useAlertEngine'
 import { ingestMainEntry } from './consoleLog'
 import { DpsDetailSelectionProvider } from './dps/DpsDetailSelectionProvider'
@@ -29,9 +31,10 @@ function App(): React.JSX.Element {
   const attachToastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   // Mounted once at App level, not inside a panel (PRD §2 of
-  // docs/prd-notifications.md) - side-effecting only for now, issue #218
-  // ships no UI. Future issues consume its `engine.store` directly.
-  useAlertEngine()
+  // docs/prd-notifications.md) - `engine.store` feeds `AlertToastHost` below
+  // (issue #219); future issues (#220 history panel, #221 settings gear)
+  // read the same store/settings without touching the engine itself.
+  const { engine: alertEngine, volume: alertVolume } = useAlertEngine()
 
   useEffect(() => {
     window.overlay.getBridgeStatus().then(setStatus)
@@ -86,6 +89,8 @@ function App(): React.JSX.Element {
                 status={status}
                 interactive={interactive}
                 showAttachToast={showAttachToast}
+                alertStore={alertEngine.store}
+                alertVolume={alertVolume}
               />
             </InteractiveContext.Provider>
           </DpsDetailSelectionProvider>
@@ -99,11 +104,24 @@ interface AppShellProps {
   status: BridgeStatus
   interactive: boolean
   showAttachToast: boolean
+  alertStore: FiredAlertStore
+  alertVolume: number
 }
 
-function AppShell({ status, interactive, showAttachToast }: AppShellProps): React.JSX.Element {
+function AppShell({
+  status,
+  interactive,
+  showAttachToast,
+  alertStore,
+  alertVolume
+}: AppShellProps): React.JSX.Element {
   return (
     <div className="relative h-screen w-screen">
+      {/* Above PanelCanvas (PRD §4) - visible in both interactive and hidden
+          mode, same rationale as pinned panels: banners/pings must fire
+          mid-gameplay whether or not the overlay is currently shown. */}
+      <AlertToastHost store={alertStore} interactive={interactive} volume={alertVolume} />
+
       {showAttachToast && !interactive && (
         <div className="absolute inset-0 flex items-center justify-center">
           <div className="flex items-center gap-2 rounded-lg border border-edge bg-panel px-4 py-2 text-sm text-fg shadow-lg backdrop-blur-sm">
