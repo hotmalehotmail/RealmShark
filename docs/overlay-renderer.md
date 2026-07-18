@@ -858,8 +858,10 @@ The fix adds a **dedicated boolean-ish wire signal**, independent of any
 display name: `LootBagTypes.envelopeJson()` includes `shinyItemTypes` (a
 `List<Integer>` of shiny item objectTypes, from `IdToAsset.isShiny` — checked
 against the item's raw id, never `objectName`'s resolved value). `LootTracker`
-stores it as a `Set<number>` and exposes `isShiny(objectType)` (still used
-directly by the notification system's alert engine, `AlertEngine.ts`).
+stores it as a `Set<number>` and exposes `isShiny(objectType)` — now only a
+class-level API exercised directly by `test/loot-replay.test.ts`, since
+`useLootTracker()`'s own `isShiny` field was dropped as dead once `LootPanel`
+(its sole consumer) moved to `ItemSprite`'s global lookup below.
 `sprites/shiny.ts` now holds only the sprite-name constant, not any detection
 logic.
 
