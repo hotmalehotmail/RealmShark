@@ -458,8 +458,11 @@ shiny icon — issue #205), keyed by name rather than `objectType` since these
 aren't game objects — see `docs/asset-pipeline.md`'s "UI sprites" section.
 The `table`/`maskTable`/`dyeTable`/`animTable` semantics are documented in
 [dyes-and-textiles.md](dyes-and-textiles.md); the TS mirror is `SpritePack` in
-`overlay/src/shared/ipc.ts:74` (`uiSprites` is backend-only as of issue #205 —
-the frontend consumer is a separate issue, so it's not yet in that type).
+`overlay/src/shared/ipc.ts` (which now includes `uiSprites`, consumed by the
+renderer's rarity-pip / shiny indicator — issue #206). `spritePack.ts`'s
+`onSpritePackMessage` reconstructs the cached pack from a hand-maintained field
+list, so every `SpritePack` section — `uiSprites` included — must be copied
+there or it never reaches the renderer.
 
 **One-shot broadcast.** Assets load on a background thread, so early requests
 often get `ready:false`. A 2 s watchdog (`PacketBridge.maybeBroadcastSpritePack`,
@@ -472,8 +475,10 @@ re-asking. The client handles a top-level `spritePack` message
 > **Non-obvious fact — `version` is the atlas file mtime.** `version()` returns
 > `"v" + characters.png.lastModified()` (`SpritePackService.java:58`). A game
 > update re-extracts the atlas, changing the mtime, which invalidates the cache.
-> Separately, `spritePack.ts:59` forces a full refetch if a cached pack predates
-> `maskTable`/`dyeTable`/`animTable` even when the version matches.
+> Separately, `spritePack.ts`'s `requestSpritePack` forces a full refetch if a
+> cached pack predates a later-added section
+> (`maskTable`/`dyeTable`/`animTable`/`animDyeTable`/`uiSprites`) even when the
+> version matches.
 
 ### Message summary
 
