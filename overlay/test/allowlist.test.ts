@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CAPTURE_ALLOWED_TYPES } from '../src/shared/capture'
+import { CONSUMED_ENVELOPE_TYPES as ALERT_CONSUMED } from '../src/renderer/src/alerts/AlertEngine'
 import { CONSUMED_ENVELOPE_TYPES as DPS_CONSUMED } from '../src/renderer/src/dps/DpsTracker'
 import { CONSUMED_ENVELOPE_TYPES as LOOT_CONSUMED } from '../src/renderer/src/loot/LootTracker'
 import { CONSUMED_ENVELOPE_TYPES as ENTITY_CONSUMED } from '../src/renderer/src/sprites/EntityRegistry'
@@ -16,8 +17,16 @@ import { CONSUMED_ENVELOPE_TYPES as ENTITY_CONSUMED } from '../src/renderer/src/
  * see its own `CONSUMED_ENVELOPE_TYPES` doc comment.
  */
 describe('capture allowlist tripwire', () => {
-  it('retains every envelope type DpsTracker/LootTracker/EntityRegistry consume', () => {
-    const consumed = new Set<string>([...DPS_CONSUMED, ...LOOT_CONSUMED, ...ENTITY_CONSUMED])
+  it('retains every envelope type DpsTracker/LootTracker/EntityRegistry/AlertEngine consume', () => {
+    // AlertEngine's set is identical to LootTracker's (it delegates all
+    // detection there - issue #218) - included anyway so this test is the
+    // one place that would catch either drifting from the other.
+    const consumed = new Set<string>([
+      ...DPS_CONSUMED,
+      ...LOOT_CONSUMED,
+      ...ENTITY_CONSUMED,
+      ...ALERT_CONSUMED
+    ])
     const missing = Array.from(consumed).filter((type) => !CAPTURE_ALLOWED_TYPES.has(type))
     expect(missing).toEqual([])
   })

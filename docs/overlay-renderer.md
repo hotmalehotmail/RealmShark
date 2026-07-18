@@ -54,6 +54,10 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/loot/useLootTracker.ts` | React hook wrapping `LootTracker` (event-driven on `onPacketBatch`, re-renders only when `ingest` reports a change). |
 | `overlay/src/renderer/src/loot/types.ts` | Packet-field shapes the loot tracker reads, incl. the synthetic `lootBagTypes` envelope. |
 | `overlay/src/renderer/src/harness/*` | The browser renderer harness (no Electron) - dev-flag-gated, out of the production bundle. See `docs/overlay-harness.md`. |
+| `overlay/src/renderer/src/alerts/AlertEngine.ts` | Framework-agnostic notification engine (issue #218) - owns a wide (all-color) `LootTracker`, dispatches matched events into `store`. See `docs/notifications.md`. |
+| `overlay/src/renderer/src/alerts/{types,catalog,dispatcher,store}.ts` | The engine's React-free core: event/rule types, the `whiteBag`/`orangeBag`/`enchantedDrop` catalog, multi-match dispatch, the bounded fired-alert log. |
+| `overlay/src/renderer/src/alerts/useAlertEngine.ts` | React hook mounting one `AlertEngine` at App level (§8), wiring packet/settings/detach IPC. |
+| `overlay/src/renderer/src/alerts/slotTypeNames.ts` | SlotType id → display name, empirically derived from the facts file. |
 
 ---
 
@@ -1340,6 +1344,35 @@ the sprite's own box — aren't clipped by the container edge (issue #193; with
 no inset, `overflow-y-auto` clips exactly at the content edge). Sized/registered via the standard checklist
 (§2): `registry.ts`'s `loot` entry, a default-layout instance in
 `PanelCanvas.tsx`.
+
+---
+
+## 8. Notification system core (issue #218, no UI yet)
+
+`useAlertEngine()` mounts one `AlertEngine` instance in `App.tsx` (called
+unconditionally near the top of the component, alongside the other
+App-level effects) — unlike every per-panel tracker (`useLootTracker`,
+`useDpsHistory`), this one is a **singleton at App level**, because its
+eventual side effects (a banner, a ping sound — issue #219) must fire even
+when no panel is open. Its `ingest`/`reset` are wired to the same
+`onPacketBatch`/`onOverlayDetach` events every tracker uses, plus
+`getSettings`/`onSettingsChanged` so a live settings change applies without
+an engine restart.
+
+`AlertEngine` owns a **second, private** `LootTracker` instance — not the one
+`useLootTracker()` creates for the Loot panel — constructed with a wide
+static superset of BagType ids so it sees a drop in any bag color, not just
+white/orange (§7's "the notification system is the other consumer" note).
+Each new entry (`onEntry`, issue #217) becomes a `loot-drop` `GameEvent`,
+matched against a small rule catalog (`whiteBag`/`orangeBag`/
+`enchantedDrop`), and any match is appended to a bounded, subscribable
+`FiredAlertStore`. This issue ships **no UI** — the store's subscribe API is
+the entire externally-visible contract, deliberately, so the future banner
+host/history panel/settings gear (issues #219-#221) only ever need to read
+from it.
+
+Full architecture, the multi-match dispatch semantics, the settings schema,
+and the SlotType name derivation: see **[notifications.md](notifications.md)**.
 
 ---
 

@@ -1,3 +1,33 @@
+/** One catalog rule's user-configured settings (`OverlaySettings.notifications.rules`, keyed by `AlertKind.id` - see `renderer/src/alerts/catalog.ts`). */
+export interface NotificationRuleSettings {
+  enabled: boolean
+  banner: boolean
+  sound: boolean
+  /**
+   * Catalog-entry-specific params (e.g. `enchantedDrop`'s tier/overrides).
+   * Loosely typed here since this schema is shared across every catalog
+   * entry - the alerts subsystem casts to its own typed shape at the point
+   * of use (`renderer/src/alerts/catalog.ts`'s `resolveRuleSettings`).
+   */
+  params?: Record<string, unknown>
+}
+
+/**
+ * The notification system's settings slice (issue #218, PRD §5). A missing
+ * `rules` entry for a given catalog kind id falls back to that kind's own
+ * `defaults` at match time (`renderer/src/alerts/catalog.ts`'s
+ * `resolveRuleSettings`) rather than being backfilled here - keeping this
+ * default free of any dependency on the (renderer-only) catalog module.
+ */
+export interface NotificationsSettings {
+  /** Master switch. */
+  enabled: boolean
+  /** 0..1; 0 = mute. */
+  volume: number
+  /** Keyed by `AlertKind.id`. Unknown keys (a removed catalog entry) are simply never read. */
+  rules: Record<string, NotificationRuleSettings>
+}
+
 export interface OverlaySettings {
   gameWindowTitle: string
   toggleHotkey: string
@@ -26,6 +56,8 @@ export interface OverlaySettings {
    * Save, same as the other settings here.
    */
   recordSessionToDisk: boolean
+  /** Notification system settings (issue #218, PRD §5) - see `NotificationsSettings`. */
+  notifications: NotificationsSettings
 }
 
 export const DEFAULT_SETTINGS: OverlaySettings = {
@@ -34,5 +66,6 @@ export const DEFAULT_SETTINGS: OverlaySettings = {
   textileAnimMs: 200,
   textileScrollSpeed: 1.5,
   textileRotateSpeed: 0.15,
-  recordSessionToDisk: false
+  recordSessionToDisk: false,
+  notifications: { enabled: true, volume: 1, rules: {} }
 }
