@@ -365,6 +365,24 @@ only ever written on an explicit user action.
   the buffer — deliberate: nothing chat-related is ever persisted without
   the explicit stop action).
 
+### Metadata replay (`IPC.replayMetadata`, issue #245)
+
+The bridge delivers its metadata tables (`lootBagTypes`/`itemInfo`/
+`enchantNames`) edge-triggered — on connect / readiness / content change,
+never periodically (issue #239, `docs/bridge-server.md`). That leaves a gap
+one hop up: a *renderer* consumer that subscribes after the one-shot delivery
+never sees it. Two real cases: the settings view's item-name catalog mounts
+only when the gear opens (issue #245's "dropdown never appears"), and App's
+subscribers can attach after the WS already connected when the supervisor
+found an already-running bridge. So `onBatch` also feeds a
+`LatestMetadataCache` (`shared/metadataCache.ts`, latest envelope per type,
+unit-tested in `overlay/test/metadataCache.test.ts`), and the
+`IPC.replayMetadata` handler re-sends that snapshot through the normal
+`packet-batch` channel on request — requested by `App` once on mount and by
+`useItemNameCatalog` on mount. Replays are idempotent by design: every
+consumer skips a same-`metaVersion` envelope with a string compare, so
+requesting one is always safe.
+
 ### Quit / teardown
 
 `will-quit` (`index.ts:383`): `globalShortcut.unregisterAll()`, then

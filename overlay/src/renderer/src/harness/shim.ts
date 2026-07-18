@@ -8,6 +8,7 @@ import type {
   UpdateInfo,
   UpdateProgress
 } from '../../../shared/ipc'
+import { LatestMetadataCache } from '../../../shared/metadataCache'
 import type { OverlayApi } from '../../../shared/overlayApi'
 import type { PanelInstance } from '../../../shared/panels'
 import { DEFAULT_SETTINGS, type OverlaySettings } from '../../../shared/settings'
@@ -100,6 +101,7 @@ export function installHarness(): void {
   let settings = readJson<OverlaySettings>(SETTINGS_KEY) ?? { ...DEFAULT_SETTINGS }
   let packetBatchSuspended = false
   let suspendedBatches: PacketEnvelope[][] = []
+  const metadataCache = new LatestMetadataCache()
 
   const api: OverlayApi = {
     onBridgeStatus: bridgeStatus.on,
@@ -147,6 +149,15 @@ export function installHarness(): void {
     startChatProbe: () => Promise.resolve({ active: false, captured: 0 }),
     stopChatProbe: () => Promise.resolve({ file: null, captured: 0 }),
     getChatProbeStatus: () => Promise.resolve({ active: false, captured: 0 }),
+    // Mirrors the real main process's metadata replay (issue #245): the
+    // live-fake WS source gets the bridge's one-shot tables on connect, and
+    // a late-mounted consumer (the settings view's item-name catalog) would
+    // miss them in the harness exactly like in production without this.
+    replayMetadata: () => {
+      const cached = metadataCache.snapshot()
+      if (cached.length > 0) sink.onBatch(cached)
+      return Promise.resolve()
+    },
     // No main process to gate here - the harness has no global Esc dismiss.
     setEditableFocused: (): void => {}
   }
@@ -163,6 +174,7 @@ export function installHarness(): void {
 
   const sink = {
     onBatch: (packets: PacketEnvelope[]): void => {
+      for (const env of packets) metadataCache.push(env)
       if (packetBatchSuspended) {
         suspendedBatches.push(packets)
         return

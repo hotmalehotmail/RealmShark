@@ -65,7 +65,7 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/alerts/paramsEditors.ts` | `PARAMS_EDITORS` - UI-side `kindId → ComponentType` registry (only imports pre-built editor components itself, same `react-refresh/only-export-components` rationale as `registry.ts`). |
 | `overlay/src/renderer/src/alerts/paramsEditorTypes.ts` | `ParamsEditorProps` - shared type only, so `paramsEditors.ts` and an editor component need no value import from each other. |
 | `overlay/src/renderer/src/alerts/EnchantedDropParamsEditor.tsx` | `enchantedDrop`'s params editor (tier + SlotType-category + item-name override rows) - registered in `paramsEditors.ts`. |
-| `overlay/src/renderer/src/alerts/useItemNameCatalog.ts` | Every distinct name from the bridge's `lootBagTypes` envelope, for the item-name-override autocomplete - a standalone subscription, not routed through `AlertEngine`. |
+| `overlay/src/renderer/src/alerts/useItemNameCatalog.ts` | Every distinct name from the bridge's `lootBagTypes` envelope, for the item-name-override autocomplete - a standalone subscription, not routed through `AlertEngine`. Mounts late (with the settings view), so it requests `replayMetadata()` on mount (issue #245). |
 
 ---
 
