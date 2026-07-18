@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { PanelInstance, PanelSize } from '../../../shared/panels'
 import { Button } from '../ui/Button'
 import { anchorFromPointer, panelStyle, type SizePx } from './anchor'
@@ -36,6 +36,15 @@ function PanelFrame({
   onClose
 }: PanelFrameProps): React.JSX.Element {
   const Content = spec.component
+  const Settings = spec.settings
+  // Frame-local (issue #221, PRD §5 "the per-panel gear"): flips this
+  // panel's body in place to its settings view, independent of every other
+  // panel's state. Persists across an interactive-mode toggle exactly like
+  // pin/size do (§2 of docs/overlay-renderer.md: panels keep their live
+  // state across toggles) - the gear itself is only reachable while
+  // interactive, so this can only be true when the panel was last flipped
+  // open by the user.
+  const [showSettings, setShowSettings] = useState(false)
   const draggingRef = useRef(false)
   const frameRef = useRef<HTMLDivElement>(null)
   // Set to the in-flight drag's handleUp while dragging, so an external abort
@@ -225,6 +234,18 @@ function PanelFrame({
             >
               {panel.size}
             </Button>
+            {Settings && (
+              <Button
+                variant="ghost"
+                size="xs"
+                active={showSettings}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={() => setShowSettings((v) => !v)}
+                title={showSettings ? 'Close settings' : 'Panel settings'}
+              >
+                ⚙
+              </Button>
+            )}
             {spec.closable && (
               <Button
                 variant="ghost"
@@ -248,7 +269,11 @@ function PanelFrame({
       {/* Base typography for every panel body lives here (with ConfigWindow's
           root, the only two places it's set) — panels must not re-declare it. */}
       <div className="min-h-0 flex-1 overflow-auto p-2 text-sm text-fg">
-        <Content size={panel.size} />
+        {showSettings && Settings ? (
+          <Settings onDone={() => setShowSettings(false)} />
+        ) : (
+          <Content size={panel.size} />
+        )}
       </div>
     </div>
   )

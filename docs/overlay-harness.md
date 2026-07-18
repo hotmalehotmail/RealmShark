@@ -149,7 +149,11 @@ just asserted.
   with `harness/alertGallerySeed.ts`'s `seedGallery` - the same four
   representative alerts the toast gallery below uses - so the shot shows
   real content instead of the empty state; every other panel type gets an
-  unseeded, harmless store.
+  unseeded, harmless store. An additional `&settings=1` flag (issue #221)
+  renders that panel type's `PANEL_REGISTRY[type].settings` component
+  instead of its normal content, when one is registered - a static render of
+  the same view `PanelFrame`'s gear button flips to live, with a no-op
+  `onDone` since there's nothing to click in a frozen shot.
 - **Alert toast gallery** — `?toastGallery=1` (issue #219): renders
   `harness/AlertToastGalleryMount.tsx` instead, for the one UI surface that
   isn't a `PANEL_REGISTRY` entry (`AlertToastHost` is an App-level singleton,
@@ -232,6 +236,17 @@ completely untouched - the harness's plain-vite config is a separate file
 that happens to reuse the same `root`/`index.html`/`main.tsx`/`@renderer`
 alias/Tailwind plugin.
 
+A second loop (issue #221) runs the same three steps again for every
+`(panel type, size)` whose `PANEL_REGISTRY[type].settings` is defined
+(only `notifications` today), navigating to `&settings=1` instead and
+producing `docs/screenshots/panels/<type>-<size>-settings.png` - see
+`docs/notifications.md`'s "Settings gear" section for what that view looks
+like. Unlike the `-full` variant below, `-settings.png`'s existence tracks a
+static registry property, not runtime-detected clipping - there's no
+orphan file to auto-prune; removing a panel's `settings` component is a
+deliberate edit that should delete its old `-settings*.png` files in the
+same change.
+
 ### The `-full` variant: below-the-fold blind spot
 
 A panel's content wrapper (`data-panel-content` on the scrollable div in
@@ -256,6 +271,12 @@ like a long console log can't blow the shot up arbitrarily - and saves a
   is present.
 - **Emitted only when clipping is real.** A combo whose content fits at its
   preset size never gets a `-full` file.
+- **Shared with the settings-view loop.** The clip-detect-and-re-render
+  logic lives in one `captureFullVariantIfClipped` helper (`shots.spec.ts`,
+  issue #221) both loops call, so `<type>-<size>-settings-full.png` gets
+  identical treatment - load-bearing in practice, since the Notifications
+  settings view reliably clips at every preset once `enchantedDrop`'s
+  editor is showing (`docs/notifications.md`'s "Settings gear").
 - **Orphan pruning.** Every `(panel type, size)` combo is re-checked on every
   `npm run shots` run; if a combo that previously clipped no longer does
   (e.g. a layout fix), its stale `-full` file is deleted in the same run - a

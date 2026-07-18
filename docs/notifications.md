@@ -4,10 +4,11 @@ Design doc: [prd-notifications.md](prd-notifications.md). This doc covers the
 **shipped implementation** of issue #218 (the framework-agnostic core — event
 detection, rule catalog, dispatcher, fired-alert store, settings schema),
 issue #219 (the two delivery surfaces — a banner toast host and a ping
-sound), and issue #220 (the Notifications history panel — a second,
-independent viewer over the same store). The settings gear (issue #221 in
-the PRD's §11 implementation plan) still builds on the same contract this
-doc describes. Naming: the subsystem is `alerts` internally, "Notifications"
+sound), issue #220 (the Notifications history panel — a second, independent
+viewer over the same store), and issue #221 (the per-panel settings gear —
+`overlay-renderer.md` §2's "Per-panel settings gear" covers the generic
+mechanism; this doc covers its first user, the Notifications panel's
+settings view). Naming: the subsystem is `alerts` internally, "Notifications"
 user-facing (PRD §1).
 
 ## Files
@@ -29,6 +30,12 @@ user-facing (PRD §1).
 | `overlay/src/renderer/src/alerts/alertStoreContext.ts` | `AlertStoreContext`/`useAlertStore()` (issue #220) — exposes the App-level `AlertEngine.store` to panels mounted deep under `PanelCanvas`, with no direct parent/child relationship to `App.tsx`. |
 | `overlay/src/renderer/src/panels/NotificationsPanel.tsx` | The history panel (issue #220) — a `PANEL_REGISTRY` entry rendering the store's session log, newest first. |
 | `overlay/src/renderer/src/harness/alertGallerySeed.ts` | `seedGallery` (issue #219, reused by #220) — four representative fired alerts, shared by `AlertToastGalleryMount.tsx` and `harness/PanelMount.tsx`'s `notifications` case for `npm run shots`. |
+| `overlay/src/renderer/src/alerts/AlertSettings.tsx` | `NotificationsSettingsView` (issue #221) — the Notifications panel's settings view (`registry.ts`'s `settings` field); the per-panel gear mechanism's first user. |
+| `overlay/src/renderer/src/alerts/settingsRows.ts` | `buildRuleRows()` (issue #221) — React-free: one row per `CATALOG` entry with its resolved `RuleSettings`, so a new catalog entry needs no settings-UI edit (`test/alerts-settingsRows.test.ts` proves this with a synthetic entry). |
+| `overlay/src/renderer/src/alerts/paramsEditors.ts` | `PARAMS_EDITORS` (issue #221) — the UI-side `AlertKind.id → ComponentType<ParamsEditorProps>` registry (PRD §3). Only imports pre-built editor components itself — never defines one — so it can export a non-component value without tripping `react-refresh/only-export-components`. |
+| `overlay/src/renderer/src/alerts/paramsEditorTypes.ts` | `ParamsEditorProps` (issue #221) — split into its own type-only file so `paramsEditors.ts` and an editor component never need a value import from each other. |
+| `overlay/src/renderer/src/alerts/EnchantedDropParamsEditor.tsx` | `enchantedDrop`'s params editor (issue #221, PRD §3): tier dropdown + add/remove SlotType-category and item-name override rows. Registered under `paramsEditors.ts`. |
+| `overlay/src/renderer/src/alerts/useItemNameCatalog.ts` | `useItemNameCatalog()` (issue #221) — every distinct name from the bridge's `lootBagTypes.itemNames` (issue #217's widened, all-color table), for the item-override autocomplete. A standalone `onPacketBatch` subscription, not routed through `AlertEngine`'s internal `LootTracker` — a UI-only concern outside the layering contract below. |
 
 ## Architecture
 
@@ -267,6 +274,94 @@ store — the same unconditional-but-idle provider pattern already used there
 for Sprite/EntityRegistry/ItemInfo) and provides it via `AlertStoreContext`,
 producing `docs/screenshots/panels/notifications-{sm,md,lg}.png`.
 
+## Settings gear (`AlertSettings.tsx` — issue #221)
+
+The Notifications panel's `PanelSpec.settings` entry (`registry.ts`), the
+first user of the generic per-panel gear mechanism —
+`docs/overlay-renderer.md` §2's "Per-panel settings gear" covers the
+mechanism itself (the gear button, the frame-local flip, `PanelSettingsProps`);
+this section covers what the Notifications panel puts behind it.
+
+`NotificationsSettingsView` owns its own storage (PRD §5): on mount it loads
+the full `OverlaySettings` via `getSettings()` (keeping the whole object,
+not just the `notifications` slice, in a ref) and subscribes
+`onSettingsChanged` so an edit made elsewhere (e.g. `ConfigWindow`, a
+different window) while this view is open is folded into the next save
+instead of clobbered. Every edit updates local state immediately and writes
+back via `saveSettings()` after a short (300ms) debounce — apply-on-change,
+no Save button, same rationale as the rest of PRD §5.
+
+The view renders, top to bottom:
+
+- A master **enabled** checkbox (`NotificationsSettings.enabled`).
+- A **volume** slider plus a **"Test ping"** button. The button dynamically
+  `import()`s `./sound` at click time rather than statically importing
+  `pingPlayer` — `sound.ts` statically imports the bundled `.wav` asset,
+  and `registry.ts` (which now reaches `AlertSettings.tsx` via the
+  `notifications` panel's `settings` field) is evaluated directly by
+  `e2e/shots.spec.ts`'s top-level `PANEL_REGISTRY` loop, which Playwright's
+  Node-based test collector runs with no Vite asset transform — a static
+  binary-file import in that reachable path fails to parse. The dynamic
+  import keeps `sound.ts` out of that eagerly-resolved graph entirely, with
+  no change to `sound.ts` itself.
+- One row per `CATALOG` entry, generated by `settingsRows.ts`'s
+  `buildRuleRows(CATALOG, notifications)` — a React-free function returning
+  `{ kindId, title, settings: RuleSettings }[]`, so a future catalog entry
+  needs zero settings-UI edits to get a row (`test/alerts-settingsRows.test.ts`
+  proves this with a synthetic entry, mirroring `AlertEngine`'s own
+  extensibility test). Each row shows the kind's title and enable/banner/
+  sound checkboxes **stacked below the title, not beside it** — a 220px `sm`
+  panel can't fit a title plus three labeled checkboxes on one line without
+  squeezing both unreadable (see the `notifications-sm-settings.png` gallery
+  shot's git history for the before/after). Editing a checkbox writes
+  `rules[kindId]` via `updateRule()`, seeded from the row's already-resolved
+  settings (catalog defaults + any existing override) on first edit so a
+  toggle never loses the kind's other fields.
+- If `paramsEditors.ts`'s `PARAMS_EDITORS` has an entry for that row's
+  `kindId`, its editor renders below the checkboxes. Only `enchantedDrop`
+  has one today (`EnchantedDropParamsEditor.tsx`): a global tier dropdown
+  (rarity names — uncommon/rare/legendary/divine — not numbers, per PRD §3)
+  plus add/remove override rows for SlotType categories (`slotTypeNames.ts`)
+  and item names (autocomplete via `useItemNameCatalog()` over the widened
+  `lootBagTypes.itemNames`, stored lowercased on commit — matching
+  `enchantedDrop.match`'s case-insensitive lookup in `catalog.ts`). Kept in
+  its own file (`paramsEditors.ts` only imports it, never defines a
+  component itself) for the same `react-refresh/only-export-components`
+  reason `registry.ts` stays free of local component definitions:
+  `PARAMS_EDITORS` is a non-component export, and Vite's fast-refresh plugin
+  requires every export of a component-containing file to itself be a
+  component.
+- A **Done** button (`onDone`, from `PanelSettingsProps`) at the bottom,
+  flipping the panel back to its normal content — the same effect as
+  clicking the gear again.
+
+The whole view is a single flat flow (no nested `overflow-y-auto`) so
+`PanelFrame`'s own content wrapper is the sole scroll container — matching
+every other panel body, and load-bearing for `e2e/shots.spec.ts`'s
+below-the-fold clip detection, which only measures that outer wrapper; an
+earlier version nested a second scrollport for the rule-row list and the
+below-the-fold check couldn't see it clip, producing a silently-incomplete
+`sm` shot with no `-full` variant to signal the gap.
+
+**Panel gallery shots.** `e2e/shots.spec.ts` mounts every `PANEL_REGISTRY`
+entry whose `spec.settings` is defined (only `notifications` today) a second
+time via the harness's `&settings=1` flag (`PanelMount.tsx`/`mount.tsx`),
+producing `docs/screenshots/panels/notifications-{sm,md,lg}-settings.png`
+alongside the normal content shots — with the identical below-the-fold
+`-full` variant treatment (`captureFullVariantIfClipped`, shared with the
+main per-panel loop), since the settings view reliably clips at every
+preset size once `enchantedDrop`'s editor is showing.
+
+**PRD §10 open item, verified.** "Verify the `save-settings` main handler is
+cheap/idempotent for unchanged hotkey/title fields before adopting
+apply-on-change saves" — confirmed already true, no code change needed:
+`main/index.ts`'s `save-settings` handler only calls
+`globalShortcut.unregister`/`registerHotkey` when `hotkeyChanged` is true,
+and window-title attach (`OverlayController.attachByTitle`) is only ever
+called once at startup, outside this handler entirely — a title change just
+sets the `needsRestart` flag in the response for `ConfigWindow` to prompt
+on, it never re-attaches inline.
+
 ## Settings (`shared/settings.ts`)
 
 ```ts
@@ -324,11 +419,15 @@ export const CATALOG: readonly AlertKind[] = [whiteBag, orangeBag, enchantedDrop
 ```
 
 No change is needed to `dispatcher.ts`, `store.ts`, or `AlertEngine.ts` — the
-extensibility test above proves this end-to-end. A rule needing typed params
-(like `enchantedDrop`) defines its own params interface in `catalog.ts` and
-casts `rawParams` to it inside `match`, same as `enchantedDrop` does. A rule
-with a params **editor UI** additionally registers one in
-`alerts/paramsEditors.tsx` (issue #221 — doesn't exist yet).
+extensibility test above proves this end-to-end. Nor is any change needed to
+the settings UI (`AlertSettings.tsx`) — `settingsRows.ts`'s `buildRuleRows`
+generates that new entry's row from `CATALOG` directly, proved the same way
+by `test/alerts-settingsRows.test.ts`'s synthetic-entry test. A rule needing
+typed params (like `enchantedDrop`) defines its own params interface in
+`catalog.ts` and casts `rawParams` to it inside `match`, same as
+`enchantedDrop` does. A rule with a params **editor UI** additionally
+registers one in `alerts/paramsEditors.ts` (issue #221 — see "Settings gear"
+above).
 
 Only a genuinely **new event kind** (not just a new rule over an existing
 one) requires touching `types.ts` (`GameEvent`) and `AlertEngine.ts` (a new
