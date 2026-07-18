@@ -17,6 +17,7 @@ import type { PanelInstance } from '../shared/panels'
 import type { OverlaySettings } from '../shared/settings'
 import { startBridgeClient, stopBridgeClient } from './bridgeClient'
 import { ensureBridgeRunning, stopBridge } from './bridgeSupervisor'
+import { chatProbeStatus, pushChatProbeBatch, startChatProbe, stopChatProbe } from './chatProbe'
 import { openConfigWindow } from './configWindow'
 import { getBufferedMainLogs, installMainConsoleCapture, setMainLogSink } from './consoleCapture'
 import { loadPanelLayout, persistPanelLayout } from './panelLayout'
@@ -336,6 +337,10 @@ app.whenReady().then(() => {
         captureRing.push(p)
       }
       recordBatch(packets as PacketEnvelope[])
+      // Deliberately separate from the two retention paths above: the chat
+      // probe retains exactly the chat/party types those exclude, locally
+      // and only while user-armed - see main/chatProbe.ts.
+      pushChatProbeBatch(packets as PacketEnvelope[])
     },
     onConnected: requestSpritePack,
     onSpritePack: onSpritePackMessage
@@ -361,6 +366,13 @@ app.whenReady().then(() => {
   // a ground-truth corpus without a bug to report. Reachable from the Status
   // panel and the tray menu (see createTray() above).
   ipcMain.handle(IPC.captureNow, (): Promise<BugReportResult> => dumpCaptureRing(false))
+
+  // Chat probe (docs/prd-notifications.md §6): user-armed local capture of
+  // the chat/party envelope types the capture ring deliberately drops, for
+  // pinning the party-chat wire shape (#222). See main/chatProbe.ts.
+  ipcMain.handle(IPC.chatProbeStart, () => startChatProbe())
+  ipcMain.handle(IPC.chatProbeStop, () => stopChatProbe())
+  ipcMain.handle(IPC.getChatProbeStatus, () => chatProbeStatus())
 
   startUpdatePolling((info) => {
     if (overlayWindow && !overlayWindow.isDestroyed()) {
