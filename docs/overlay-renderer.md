@@ -1356,7 +1356,15 @@ delta carries no objectType, so a bag is only recognized there once
 `newObjects` has introduced its id) — re-sends the same contents; each
 `(bagObjectId, slot)` is logged once. The log is chronological, not a
 de-duplicated set, so two identical drops in one session both appear. A
-`UpdatePacket.drops` id removes that bag's in-view bookkeeping.
+`UpdatePacket.drops` id removes that bag's in-view bookkeeping (`bagsInView`,
+so a later `NewTickPacket` delta for it is ignored until `newObjects`
+re-introduces it) but deliberately **not** its logged-slot record
+(`loggedBagSlots`) — that persists until `resetPerInstance()`/a map change.
+A stationary ground bag sends its own id through `drops` whenever it merely
+leaves the client's render range (the player walks away), not only when it's
+destroyed/emptied; clearing `loggedBagSlots` there too (soak #237) meant
+walking back into range re-logged — and re-notified for — the exact same
+slots each time.
 
 **`onEntry` subscription (issue #217).** `onEntry(listener)` registers a
 callback invoked exactly once per newly-logged entry (returns an unsubscribe

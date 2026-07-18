@@ -43,6 +43,7 @@ each entry below.
 | `soak-122-equip-unequip.json.gz` | **Real** (soak #122, `0.15.5-alpha`) | Self-contained: the regression only needs "no bag entity => no entries," which the real 300-envelope trace supports directly. |
 | `soak-144-loot-empty.json.gz` | Synthetic | The real #144 capture (verified: 300 envelopes, zero `lootBagTypes`) predates PR #146 adding `lootBagTypes` to `CAPTURE_ALLOWED_TYPES` - it contains **no** `lootBagTypes` envelope at all, so it cannot exercise the metadata-arrives-late recovery race PR #146 fixed, which is exactly what this fixture's test asserts. |
 | `soak-50-other-player-damage.json.gz` | Synthetic | The real #50 capture (verified: 300 envelopes, `UpdateAckPacket`/`ShowEffectPacket`/`PlayerShootPacket`-heavy) contains **no** `{type:"dps"}` envelope and no `DamagePacket`/`EnemyHitPacket` - the ring had rotated past whatever damage traffic triggered the report. `DpsTracker` only *displays* the bridge's precomputed `dps` envelope, so without one this fixture can only power a "doesn't throw" smoke test, not the multi-player-row assertion the #50 regression is about. Named `soak-50-other-player-damage.json.gz` (not the real branch's `soak-50-dps-attribution.json.gz`) since the fixture that ships here is the synthetic one, not that download. |
+| `soak-237-loot-reenter.json.gz` | **Real** (soak #237, `0.22.4-alpha`, trimmed) | Self-contained: the regression only needs the same loot-bag entity's `newObjects`/`drops` cycle, which the real trace supports directly - trimmed from the full 10,000-envelope ring (see its own section below) purely for fixture size, not because the real data was insufficient. |
 
 If a future issue records a fresh capture (PRD §7.3) or a `lootBagTypes`/`dps`
 envelope-bearing real trace turns up for #144/#50, it can replace the
@@ -130,6 +131,34 @@ player's).
 surface every row the bridge sends, not just the local player's, for the
 locked quest-objective target. Guards against a future regression that
 filters or drops non-local rows in `ingestBridgeDps`/`snapshot`.
+
+### `soak-237-loot-reenter.json.gz` (real, trimmed)
+
+**Reported bug:** a ground bag's notification re-fires after the player walks
+away and comes back (fixed in the soak-#237 fix-forward PR).
+
+**Contents:** trimmed from the real 10,000-envelope soak-#237 bug-report
+capture (attached to issue #237, downloaded via the redirect through
+`objects.githubusercontent.com` - the direct `github.com/user-attachments/...`
+URL is blocked by this environment's egress policy, same class of block issue
+#160 previously hit and cleared with `WebFetch`'s automatic redirect
+resolution). The real capture is a `0.22.4-alpha` live-game session: a single
+`lootBagTypes` envelope (trimmed to the one relevant bag/item mapping - the
+untrimmed envelope is ~700 KB of the full asset-facts dump, all real values,
+just filtered down) plus the 10 real `UpdatePacket` envelopes for loot-bag
+entity objectId 609 (a BagType-2 bag, entity objectType 1287, holding one
+"Greater Magic Potion", objectType 2796, in its first slot): `newObjects` /
+`drops` / `newObjects` / `drops` / ... five times over, the exact
+walk-away-and-back cycle the report describes. Every field (objectIds, item
+id, timestamps, stat values, the enchant code) is copied verbatim from the
+real capture; only *which* envelopes and *which* keys of the `lootBagTypes`
+maps were kept was trimmed.
+
+**What it supports:** replaying it into a `LootTracker`/`AlertEngine`
+reproduces the exact live-repro mechanism - the same bag objectId re-entering
+view five times with no new item - so a regression back to clearing
+`loggedBagSlots` on `drops` fails `alerts-replay.test.ts`'s soak-#237 case
+(5 fired alerts instead of 1).
 
 ### `baseline-session.ndjson.gz` (real — the kitchen-sink seed corpus, PRD §7.3/D5)
 
