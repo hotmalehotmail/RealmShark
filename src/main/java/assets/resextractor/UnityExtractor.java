@@ -155,6 +155,15 @@ public class UnityExtractor {
      */
     private void extractUiSprites(Resources res, File input, File outputFolder) {
         try {
+            // Create the output dir BEFORE any availability guard: its
+            // presence is the freshness gate's "this extractor version
+            // attempted UI sprites" marker
+            // (AssetExtractor.EXTRACTOR_OUTPUT_MARKERS, issue #211). Created
+            // even when the atlas/pixel data is unavailable this game build,
+            // so a best-effort miss can't retrigger a full re-extraction on
+            // every launch - an empty dir means "attempted, nothing found",
+            // a missing dir means "this extractor never ran".
+            outputFolder.mkdirs();
             SpriteAtlas guiAtlas = findAtlasByName(res, GUI_ATLAS_NAME);
             if (guiAtlas == null) return;
 
@@ -172,7 +181,6 @@ public class UnityExtractor {
             if (!pixels.isAvailable()) return;
 
             Map<String, Rectangle2D> rectsByName = joinSpriteNamesToRects(res, guiAtlas);
-            outputFolder.mkdirs();
             for (String name : UiSpriteNames.ALLOWLIST) {
                 Rectangle2D rect = rectsByName.get(name);
                 if (rect == null) continue;

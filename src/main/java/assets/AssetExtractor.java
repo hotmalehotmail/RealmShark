@@ -48,6 +48,34 @@ public class AssetExtractor {
         new File("assets/sprites/"),
         new File("assets/xml/"),
     };
+
+    /**
+     * Every on-disk output a completed extraction leaves behind, presence-checked
+     * by {@link #checkUpdateAssets} (issue #211). The freshness gate used to key
+     * ONLY on the game file's mtime (+ the two .list files), so a bridge upgrade
+     * whose extractor gained a NEW output - #207's {@code assets/sprites/ui/} -
+     * computed an identical marker against an unchanged game and skipped
+     * extraction forever: the new output was never generated on any
+     * warm-cache install (the bug that kept #206's real rarity pips from
+     * rendering live).
+     * <p>
+     * CONTRACT: when the extractor gains a new output, add its marker path
+     * here - that presence check is what triggers the one-time re-extraction
+     * on existing installs. And the marker must be created UNCONDITIONALLY by
+     * the extraction step (see {@code UnityExtractor.extractUiSprites}'s
+     * mkdirs-before-guards comment): a best-effort step's marker means "this
+     * extractor version attempted it", never "the game had it" - otherwise a
+     * game build lacking the source data would retrigger a full re-extraction
+     * on every launch.
+     */
+    public static final String[] EXTRACTOR_OUTPUT_MARKERS = {
+        ASSETS_OBJECT_FILE_DIR_PATH,
+        ASSETS_TILE_FILE_DIR_PATH,
+        "assets/flatbuffer",
+        "assets/sprites",
+        "assets/xml",
+        "assets/sprites/ui", // #207 UI sprites - the output #211 was filed about
+    };
     private static String REALM_RES_PATH;
     private static JOptionPane pane;
 
@@ -354,14 +382,21 @@ public class AssetExtractor {
     }
 
     /**
-     * Checks if asset folders exist and current build version is matching.
+     * The freshness gate (issue #211): stale (non-zero) when any declared
+     * extractor output is missing from disk - a bridge upgrade added a new
+     * output the warm cache predates - or when the stored game-file marker no
+     * longer matches (the game updated). 0 = up to date, skip extraction.
      *
      * @param lastModifiedTime Last modified time of the assets file.
-     * @return True if assets are missing.
      */
     private static int checkUpdateAssets(String lastModifiedTime) {
-        if (!new File(ASSETS_OBJECT_FILE_DIR_PATH).exists()) return 1;
-        if (!new File(ASSETS_TILE_FILE_DIR_PATH).exists()) return 2;
+        String missing = firstMissingOutputMarker(new File("."));
+        if (missing != null) {
+            System.out.println(
+                "[assets] extraction output missing (" + missing +
+                    ") - re-extracting (#211)");
+            return 1;
+        }
         if (
             !Objects.equals(
                 PropertiesManager.getProperty("lastModifiedTime"),
@@ -369,6 +404,19 @@ public class AssetExtractor {
             )
         ) return 3;
         return 0;
+    }
+
+    /**
+     * First entry of {@link #EXTRACTOR_OUTPUT_MARKERS} missing under
+     * {@code baseDir}, or null when all are present. Package-visible + pure
+     * (no cwd, no properties) so the gate's presence logic is unit-testable
+     * against a temp dir ({@code AssetExtractorFreshnessTest}).
+     */
+    static String firstMissingOutputMarker(File baseDir) {
+        for (String marker : EXTRACTOR_OUTPUT_MARKERS) {
+            if (!new File(baseDir, marker).exists()) return marker;
+        }
+        return null;
     }
 
     /**
