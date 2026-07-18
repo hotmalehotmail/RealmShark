@@ -15,17 +15,27 @@ import type { LootBagTypesData } from '../loot/types'
 export function useItemNameCatalog(): readonly string[] {
   const [names, setNames] = useState<readonly string[]>([])
   const namesReceivedCount = useRef(0)
+  const lastMetaVersion = useRef<string | undefined>(undefined)
 
   useEffect(() => {
     const offBatch = window.overlay.onPacketBatch((packets) => {
       for (const env of packets) {
         if (env.type === 'lootBagTypes') {
           const data = env.data as LootBagTypesData | null
+          const version = data?.metaVersion
+          // Version short-circuit first (issue #239): a same-version
+          // re-delivery (WS reconnect) skips even the Object.values scan of
+          // the ~12.4k-entry table. A changed version applies regardless of
+          // the count below (a re-extraction can change names without
+          // changing how many there are); the count guard remains only as the
+          // change signal for version-less (pre-#239 capture) envelopes.
+          if (version != null && version === lastMetaVersion.current) continue
           const values = Object.values(data?.itemNames ?? {})
-          if (values.length > 0 && values.length !== namesReceivedCount.current) {
-            namesReceivedCount.current = values.length
-            setNames([...new Set(values)].sort((a, b) => a.localeCompare(b)))
-          }
+          if (values.length === 0) continue
+          if (version == null && values.length === namesReceivedCount.current) continue
+          namesReceivedCount.current = values.length
+          lastMetaVersion.current = version
+          setNames([...new Set(values)].sort((a, b) => a.localeCompare(b)))
         }
       }
     })

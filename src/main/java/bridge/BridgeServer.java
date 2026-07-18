@@ -25,7 +25,17 @@ public class BridgeServer extends WebSocketServer {
         void onMessage(WebSocket conn, String message);
     }
 
+    /**
+     * Notified right after the hello frame whenever a new client connects -
+     * the "client connected after readiness" delivery edge for the metadata
+     * tables (issue #239), now that they're no longer periodically re-broadcast.
+     */
+    public interface ConnectListener {
+        void onClientConnected(WebSocket conn);
+    }
+
     private MessageHandler messageHandler;
+    private ConnectListener connectListener;
 
     public BridgeServer(int port) {
         super(new InetSocketAddress("127.0.0.1", port));
@@ -35,6 +45,11 @@ public class BridgeServer extends WebSocketServer {
     /** Registers the handler for inbound client messages (replaces the receive-only default). */
     public void setMessageHandler(MessageHandler handler) {
         this.messageHandler = handler;
+    }
+
+    /** Registers the new-connection listener (called after the hello frame). */
+    public void setConnectListener(ConnectListener listener) {
+        this.connectListener = listener;
     }
 
     @Override
@@ -49,6 +64,9 @@ public class BridgeServer extends WebSocketServer {
         // bridge (and a compatible protocol) rather than a stray listener on the port.
         conn.send("{\"type\":\"hello\",\"service\":\"" + SERVICE
                 + "\",\"protocol\":" + PROTOCOL_VERSION + "}");
+        if (connectListener != null) {
+            connectListener.onClientConnected(conn);
+        }
     }
 
     @Override

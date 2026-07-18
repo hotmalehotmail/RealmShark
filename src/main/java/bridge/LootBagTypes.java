@@ -62,6 +62,19 @@ public class LootBagTypes {
     }
 
     /**
+     * Content-version key for the edge-triggered delivery contract (issue
+     * #239): the table is rebuilt exactly when the loaded object count
+     * changes ({@link #envelopeJson}'s cache key), so the count IS the
+     * version. Cheap enough for {@code PacketBridge}'s poll to compare every
+     * tick without building any JSON; also stamped into the envelope as
+     * {@code data.metaVersion} so clients can skip re-applying a table they
+     * already hold (a WS reconnect legitimately redelivers it).
+     */
+    public String version() {
+        return "oc" + IdToAsset.loadedObjectCount();
+    }
+
+    /**
      * The envelope JSON, rebuilt only when the loaded object count changes (a
      * re-extraction/reload), so repeated polling is cheap.
      */
@@ -133,6 +146,7 @@ public class LootBagTypes {
         Envelope env = new Envelope();
         env.time = System.currentTimeMillis();
         env.data = new Data();
+        env.data.metaVersion = "oc" + count;
         env.data.bagTypeTable = bagTypeTable;
         env.data.lootBagIcons = lootBagIcons;
         env.data.lootBagObjectTypes = lootBagObjectTypes;
@@ -146,6 +160,7 @@ public class LootBagTypes {
     }
 
     private static final class Data {
+        String metaVersion;
         Map<String, Integer> bagTypeTable;
         Map<String, Integer> lootBagIcons;
         Map<String, Integer> lootBagObjectTypes;

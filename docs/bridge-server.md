@@ -49,7 +49,7 @@ Out of scope (own docs): `bridge/dps/**` → [dps-engine.md](dps-engine.md);
     │    objectNames.envelopeFor ──enqueue──►│      every 2s   ── maybeBroadcast    │
     └─ dps.feed(packet)                      │        SpritePack (one-shot)         │
                                               │      every 2s   ── maybeBroadcast    │
-                                              ▼        LootBagTypes (repeats)        │
+                                              ▼        Metadata (version-gated #239)  │
                               LinkedBlockingQueue<String>(5000)                     │
                               drop-oldest on overflow                              ▼
                                                                     BridgeServer.send()
@@ -164,9 +164,7 @@ All seven periodic jobs run on **one** single-thread daemon scheduler named
 | DPS snapshot | polls every 50 ms; sends on damage or a 250 ms heartbeat | `dps.snapshotJson()`, enqueue if non-null | `:134-142` |
 | engine diagnostic | 3000 ms | `System.out.println("[dps-engine] " + dps.debugState())` | `:146-148` |
 | sprite-pack readiness | 2000 ms | `maybeBroadcastSpritePack()` (one-shot) | `:154-155` |
-| loot BagType readiness | 2000 ms | `maybeBroadcastLootBagTypes()` (repeats every poll once ready) | `:164-165` |
-| item-info readiness | 2000 ms | `maybeBroadcastItemInfo()` (repeats every poll once ready, issue #109) | `:169-170` |
-| enchant-name table | 2000 ms | `enqueue(enchantNames.envelopeJson())` (repeats every poll, no readiness gate needed) | `:176-177` |
+| metadata tables | 2000 ms | `maybeBroadcastMetadata()` — enqueues `lootBagTypes`/`itemInfo`/`enchantNames` **only when a table's `version()` differs from the last broadcast** (ready-transition or re-extraction; issue #239). Steady state = three string compares, nothing sent | `:164-165` |
 
 The DPS snapshot is *enqueued*, so it flows out with the next 33 ms flush like
 any other message. The diagnostic writes to stdout only (it surfaces in the
@@ -481,13 +479,29 @@ bridge plumbing.
   `direction:"internal"`) - see the full JSON shape in
   [architecture.md](architecture.md#4f-lootbagtypes-envelope-inside-a-batch--synthetic-re-sent-periodically).
 
-**Re-sent every poll, not one-shot.** `PacketBridge.maybeBroadcastLootBagTypes`
-(`PacketBridge.java:167-176`) enqueues the envelope on **every** 2 s tick once
-`ready()`, unlike the sprite pack's single `spritePackSent` latch. The payload
-is tiny (two small id maps), so the simplest way to guarantee a client that
-connects *after* the first broadcast still receives it is to keep sending it,
-rather than adding a second on-demand request/response message alongside
-`spritePackRequest`.
+**Edge-triggered + versioned, never periodic (issue #239).** The original
+design re-enqueued this envelope on every 2 s tick, justified by "the payload
+is tiny" — an assumption issue #217's all-color widening silently invalidated
+(~630 KB per send, a full renderer-side table rebuild each time, a rhythmic
+overlay-wide hitch). Delivery now happens on exactly three edges, shared by
+all three metadata tables (`lootBagTypes`/`itemInfo`/`enchantNames`):
+
+- **connection open** — `BridgeServer`'s connect listener calls
+  `PacketBridge.sendMetadataTo(conn)`, which sends every currently-ready
+  table directly to the new client as one `{"batch":[...]}` frame (bypassing
+  the shared queue so already-served clients see nothing);
+- **not-ready → ready** and **content change** (re-extraction) — detected by
+  `maybeBroadcastMetadata`'s 2 s poll comparing each table's cheap
+  `version()` key (a count read, no JSON built) against the last one
+  broadcast.
+
+Each envelope carries the same key as `data.metaVersion`, and the renderer
+consumers (`LootTracker.ingestLootMeta`, `ItemInfoProvider`,
+`useItemNameCatalog`) skip a same-version re-delivery — a WS reconnect
+legitimately redelivers the tables, and the guard also makes any future
+bridge-side re-send regression collapse to a string compare instead of a
+~35k-entry map rebuild (pinned by `overlay/test/loot-metaVersion.test.ts` and
+`LootBagTypesTest.versionIsStableUntilTheLoadedObjectCountChanges`).
 
 ---
 

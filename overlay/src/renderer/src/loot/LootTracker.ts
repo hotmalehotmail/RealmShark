@@ -175,6 +175,18 @@ export class LootTracker {
   private nextEntryId = 1
 
   /**
+   * Fingerprint of the last-applied `lootBagTypes` envelope, so an identical
+   * re-delivery (a WS reconnect, an old capture's repeated envelopes, or any
+   * future bridge-side re-send regression) skips the full ~35k-entry map
+   * rebuild (issue #239). `metaVersion` when the envelope carries one
+   * (post-#239 bridges), else a cheap table-size fallback for legacy
+   * captures. Deliberately NOT cleared by `reset()` - the tables themselves
+   * survive reset (asset-derived, not per-session), so their fingerprint must
+   * too.
+   */
+  private lastMetaFingerprint: string | null = null
+
+  /**
    * Ingests a batch of packet envelopes. Returns true if display-relevant
    * state changed. NOTE: adding/removing an `env.type ===` branch here also
    * means updating `CONSUMED_ENVELOPE_TYPES` above.
@@ -211,6 +223,15 @@ export class LootTracker {
 
   private ingestLootMeta(data: LootBagTypesData | null): boolean {
     if (!data) return false
+    const fingerprint =
+      data.metaVersion != null
+        ? `v:${data.metaVersion}`
+        : `f:${Object.keys(data.bagTypeTable ?? {}).length}:${
+            Object.keys(data.itemNames ?? {}).length
+          }:${Object.keys(data.lootBagObjectTypes ?? {}).length}:${
+            Object.keys(data.slotTypes ?? {}).length
+          }:${(data.shinyItemTypes ?? []).length}`
+    if (fingerprint === this.lastMetaFingerprint) return false
     this.bagTypeTable.clear()
     for (const [k, v] of Object.entries(data.bagTypeTable ?? {})) {
       if (this.isTrackedBagType(v)) this.bagTypeTable.set(Number(k), v)
@@ -243,6 +264,7 @@ export class LootTracker {
       this.pendingNewObjects = []
       for (const p of pending) this.ingestBagObject(p.objectType, p.objectId, p.stats)
     }
+    this.lastMetaFingerprint = fingerprint
     return true
   }
 

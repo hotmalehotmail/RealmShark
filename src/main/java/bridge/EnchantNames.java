@@ -69,6 +69,7 @@ public class EnchantNames {
         Envelope env = new Envelope();
         env.time = System.currentTimeMillis();
         env.data = new Data();
+        env.data.metaVersion = "ec" + count;
         env.data.names = names;
 
         cachedJson = gson.toJson(env);
@@ -76,7 +77,20 @@ public class EnchantNames {
         return cachedJson;
     }
 
+    /**
+     * Content-version key - same contract as {@link LootBagTypes#version()}
+     * (issue #239). Reads {@link ParseEnchants#ENCHANTS}' size under the same
+     * class monitor {@code reload()} uses (see {@link #envelopeJson}'s
+     * threading note).
+     */
+    public String version() {
+        synchronized (ParseEnchants.class) {
+            return "ec" + ParseEnchants.ENCHANTS.size();
+        }
+    }
+
     private static final class Data {
+        String metaVersion;
         Map<String, String> names;
     }
 

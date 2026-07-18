@@ -35,6 +35,15 @@ export interface NewTickPacketData {
  * that narrower set itself via `LootTracker`'s constructor parameter.
  */
 export interface LootBagTypesData {
+  /**
+   * Content-version key (issue #239): changes exactly when the bridge rebuilds
+   * the table (a re-extraction/reload). Consumers skip re-applying an envelope
+   * whose version they already hold - reconnects legitimately redeliver the
+   * table, and the guard keeps that (and any future bridge-side re-send
+   * regression) a string compare instead of a ~35k-entry map rebuild. Absent
+   * on pre-#239 captures.
+   */
+  metaVersion?: string
   /** item objectType -> BagType (every BagType present, not just 6/8). */
   bagTypeTable?: Record<string, number>
   /** BagType -> a representative ground-bag entity objectType (the Loot panel's category-header sprite; 6/8 only). */

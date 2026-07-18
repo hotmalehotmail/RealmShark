@@ -192,4 +192,35 @@ public class LootBagTypesTest {
         assertEquals(10, slotTypes.get("82101").getAsInt());
         assertEquals(0, slotTypes.get("82102").getAsInt());
     }
+
+    /**
+     * Issue #239 (edge-triggered metadata delivery): {@code version()} is the
+     * broadcast-decision key, so it must be stable while the loaded assets
+     * are unchanged - {@code PacketBridge.maybeBroadcastMetadata} sends
+     * nothing when it matches the last broadcast - and must move (along with
+     * the envelope's own {@code data.metaVersion} stamp) when the object
+     * count changes (a re-extraction/reload; here another registerFake).
+     */
+    @Test
+    public void versionIsStableUntilTheLoadedObjectCountChanges() {
+        IdToAsset.registerFake(83001, "Equipment", 6, "", "Potion of Life", "Potion of Life", "");
+        LootBagTypes table = new LootBagTypes();
+
+        String v1 = table.version();
+        String json1 = table.envelopeJson();
+        assertEquals(v1, table.version());
+        // The cached JSON is returned as the SAME instance while the count is
+        // unchanged - the whole point of the cheap version key is that no
+        // JSON is rebuilt (or re-sent) at steady state.
+        org.junit.Assert.assertSame(json1, table.envelopeJson());
+        assertEquals(v1, JsonParser.parseString(json1)
+            .getAsJsonObject().getAsJsonObject("data").get("metaVersion").getAsString());
+
+        IdToAsset.registerFake(83002, "Equipment", 8, "", "Sword of Splendor", "Sword of Splendor", "");
+
+        String v2 = table.version();
+        assertFalse("version must change when the loaded object count changes", v1.equals(v2));
+        assertEquals(v2, JsonParser.parseString(table.envelopeJson())
+            .getAsJsonObject().getAsJsonObject("data").get("metaVersion").getAsString());
+    }
 }
