@@ -32,14 +32,27 @@ export function ItemInfoProvider({ children }: { children: React.ReactNode }): R
   const [, setGen] = useState(0)
 
   useEffect(() => {
+    // Same-version re-deliveries (a WS reconnect; issue #239) are skipped
+    // BEFORE the state bump: this provider wraps most of the app tree and
+    // rebuilds its context value on every generation bump, so an un-guarded
+    // duplicate table re-rendered every context consumer for nothing. A
+    // version-less envelope (a pre-#239 capture) always applies.
     const offBatch = window.overlay.onPacketBatch((packets: PacketEnvelope[]) => {
       let changed = false
       for (const env of packets) {
         if (env.type === 'itemInfo') {
-          itemRef.current = (env.data as ItemInfoData | null) ?? {}
+          const data = (env.data as ItemInfoData | null) ?? {}
+          if (data.metaVersion != null && data.metaVersion === itemRef.current.metaVersion) {
+            continue
+          }
+          itemRef.current = data
           changed = true
         } else if (env.type === 'enchantNames') {
-          enchantRef.current = (env.data as EnchantNamesData | null) ?? {}
+          const data = (env.data as EnchantNamesData | null) ?? {}
+          if (data.metaVersion != null && data.metaVersion === enchantRef.current.metaVersion) {
+            continue
+          }
+          enchantRef.current = data
           changed = true
         }
       }

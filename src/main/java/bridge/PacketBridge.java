@@ -58,6 +58,7 @@ public class PacketBridge {
     public PacketBridge(int port) {
         server = new BridgeServer(port);
         server.setMessageHandler(this::handleClientMessage);
+        server.setConnectListener(this::sendMetadataTo);
     }
 
     /**
@@ -157,24 +158,19 @@ public class PacketBridge {
         flusher.scheduleAtFixedRate(
             this::maybeBroadcastSpritePack, 2000, 2000, TimeUnit.MILLISECONDS);
 
-        // Same readiness-poll pattern as the sprite pack above, but for the
-        // loot BagType metadata specifically - it needs only IdToAsset (no
-        // atlas PNG), so it can become ready and broadcast well before (or
-        // without) the full sprite pack ever does.
+        // Metadata tables (loot BagTypes, item info, enchant names) are
+        // delivered edge-triggered, never periodically (issue #239: the old
+        // "re-broadcast forever, the payload is tiny" shortcut silently became
+        // a ~630 KB lootBagTypes push every 2s once issue #217 widened that
+        // table to all bag colors, costing every client a parse + full table
+        // rebuild per tick). This poll only DETECTS two of the three delivery
+        // edges - the not-ready -> ready transition and a content change
+        // (re-extraction) - by comparing each table's cheap version key
+        // against the last one broadcast; an unchanged version sends nothing.
+        // The third edge, a client connecting after readiness, is handled
+        // per-connection in sendMetadataTo (BridgeServer's connect listener).
         flusher.scheduleAtFixedRate(
-            this::maybeBroadcastLootBagTypes, 2000, 2000, TimeUnit.MILLISECONDS);
-
-        // Same readiness-poll pattern, for the item-info table (name/tier/class/
-        // description/damage per objectType) the item tooltip (issue #109) reads.
-        flusher.scheduleAtFixedRate(
-            this::maybeBroadcastItemInfo, 2000, 2000, TimeUnit.MILLISECONDS);
-
-        // Enchant id -> name table for the item tooltip's enchantment list. No
-        // readiness gate needed (see EnchantNames' docstring) - just re-sent
-        // periodically like the tables above, so a late-connecting client still
-        // gets it with no separate request message.
-        flusher.scheduleAtFixedRate(
-            () -> enqueue(enchantNames.envelopeJson()), 2000, 2000, TimeUnit.MILLISECONDS);
+            this::maybeBroadcastMetadata, 2000, 2000, TimeUnit.MILLISECONDS);
 
         // 4. Start the packet source.
         if (fake) {
@@ -207,41 +203,70 @@ public class PacketBridge {
         }
     }
 
-    private boolean lootBagTypesLogged = false;
+    // Last version key broadcast per metadata table. Touched only on the
+    // flusher thread (maybeBroadcastMetadata); the per-connection path
+    // (sendMetadataTo, WS thread) deliberately doesn't read them - it always
+    // sends the current tables to exactly one new client.
+    private String sentLootVersion;
+    private String sentItemInfoVersion;
+    private String sentEnchantVersion;
 
     /**
-     * Once object assets finish loading, broadcast the loot BagType table.
-     * Unlike the one-shot sprite pack (which has an on-demand request/response
-     * fallback for a late-connecting client), this keeps re-broadcasting on
-     * every poll - the payload is tiny (two small id maps), and it's the
-     * simplest way to guarantee a client that connects after the first
-     * broadcast still gets it, with no separate request message needed.
+     * Broadcasts each metadata table only when its content version differs
+     * from the last one broadcast - i.e. on the not-ready -> ready transition
+     * and on a re-extraction/reload, never merely because the poll fired
+     * (issue #239). Version keys are cheap (a count read, no JSON built), so
+     * the steady-state cost of this poll is three string compares.
+     * <p>
+     * A client that connects in the window between readiness and this poll's
+     * next tick receives the tables twice (its own on-open copy, then this
+     * first broadcast) - accepted: it's one duplicate per version transition
+     * instead of one every 2s, and the renderer's metaVersion guard reduces
+     * it to a string compare anyway.
      */
-    private void maybeBroadcastLootBagTypes() {
-        if (!lootBagTypes.ready()) return;
-        if (!lootBagTypesLogged) {
-            lootBagTypesLogged = true;
-            System.out.println("[bridge] loot bag types ready - broadcasting to clients");
+    private void maybeBroadcastMetadata() {
+        if (lootBagTypes.ready()) {
+            String v = lootBagTypes.version();
+            if (!v.equals(sentLootVersion)) {
+                sentLootVersion = v;
+                enqueue(lootBagTypes.envelopeJson());
+                System.out.println("[bridge] loot bag types " + v + " - broadcast to clients");
+            }
         }
-        enqueue(lootBagTypes.envelopeJson());
+        if (itemInfo.ready()) {
+            String v = itemInfo.version();
+            if (!v.equals(sentItemInfoVersion)) {
+                sentItemInfoVersion = v;
+                enqueue(itemInfo.envelopeJson());
+                System.out.println("[bridge] item info " + v + " - broadcast to clients");
+            }
+        }
+        // No readiness gate (see EnchantNames' docstring) - its version key
+        // moves from the near-empty pre-extraction table to the real one on
+        // reload, and this comparison picks that up like any other change.
+        String ev = enchantNames.version();
+        if (!ev.equals(sentEnchantVersion)) {
+            sentEnchantVersion = ev;
+            enqueue(enchantNames.envelopeJson());
+        }
     }
 
-    private boolean itemInfoLogged = false;
-
     /**
-     * Once object assets finish loading, broadcast the item-info table (name/
-     * tier/class/description/damage per objectType) the item tooltip (issue
-     * #109) reads. Same re-broadcast-forever rationale as
-     * {@link #maybeBroadcastLootBagTypes()} - simplest way to guarantee a late
-     * client still gets it, and the payload stays small.
+     * The third delivery edge (issue #239): a client connecting after a table
+     * became ready would otherwise never see it, now that the periodic
+     * re-broadcast is gone. Sends the current tables straight to the new
+     * connection as one batch frame (clients only parse hello and
+     * {@code {"batch":[...]}} messages), bypassing the shared queue so the
+     * tables can't be duplicated to already-served clients. Runs on the WS
+     * server thread - the table getters are synchronized and normally just
+     * return their cached JSON.
      */
-    private void maybeBroadcastItemInfo() {
-        if (!itemInfo.ready()) return;
-        if (!itemInfoLogged) {
-            itemInfoLogged = true;
-            System.out.println("[bridge] item info ready - broadcasting to clients");
-        }
-        enqueue(itemInfo.envelopeJson());
+    private void sendMetadataTo(WebSocket conn) {
+        List<String> envelopes = new ArrayList<>();
+        if (lootBagTypes.ready()) envelopes.add(lootBagTypes.envelopeJson());
+        if (itemInfo.ready()) envelopes.add(itemInfo.envelopeJson());
+        envelopes.add(enchantNames.envelopeJson());
+        conn.send(batchOf(envelopes));
     }
 
     /** Enqueue a JSON message, dropping the oldest if the queue is full so capture never blocks. */
@@ -258,13 +283,17 @@ public class PacketBridge {
         List<String> drained = new ArrayList<>();
         queue.drainTo(drained);
         if (drained.isEmpty()) return;
-        // Items are already JSON objects; join them into a batch array.
+        server.send(batchOf(drained));
+    }
+
+    /** Joins already-serialized JSON objects into one {@code {"batch":[...]}} frame. */
+    private static String batchOf(List<String> envelopes) {
         StringBuilder sb = new StringBuilder("{\"batch\":[");
-        for (int i = 0; i < drained.size(); i++) {
+        for (int i = 0; i < envelopes.size(); i++) {
             if (i > 0) sb.append(',');
-            sb.append(drained.get(i));
+            sb.append(envelopes.get(i));
         }
         sb.append("]}");
-        server.send(sb.toString());
+        return sb.toString();
     }
 }
