@@ -53,11 +53,19 @@ export function initSpritePack(notify: (pack: SpritePack) => void): void {
  * cheap no-op instead of re-sending the whole (multi-MB) payload.
  */
 export function requestSpritePack(send: (msg: unknown) => void): void {
-  // Force a full refetch if the cached pack predates the dye/animation data
-  // (maskTable / dyeTable / animTable / animDyeTable): such a cache matches on
-  // version but lacks it, so treat it as stale by claiming no version.
+  // Force a full refetch if the cached pack predates a later-added section
+  // (maskTable / dyeTable / animTable / animDyeTable / uiSprites): such a cache
+  // matches on version but lacks it, so treat it as stale by claiming no
+  // version. A bridge with no game assets sends ready:false and never reaches
+  // onSpritePackMessage's assignment, so a ready cache always has these; a
+  // present-but-empty section (e.g. no UI sprites extracted) is `{}`, which is
+  // truthy, so it correctly counts as "have it" and doesn't loop.
   const haveVersion =
-    current.maskTable && current.dyeTable && current.animTable && current.animDyeTable
+    current.maskTable &&
+    current.dyeTable &&
+    current.animTable &&
+    current.animDyeTable &&
+    current.uiSprites
       ? (current.version ?? null)
       : null
   send({ type: 'spritePackRequest', haveVersion })
@@ -83,7 +91,13 @@ export function onSpritePackMessage(msg: SpritePack & { upToDate?: boolean }): v
     maskTable: msg.maskTable,
     dyeTable: msg.dyeTable,
     animTable: msg.animTable,
-    animDyeTable: msg.animDyeTable
+    animDyeTable: msg.animDyeTable,
+    // Forward the named UI sprites (rarity pips / shiny icon - issue #206) the
+    // same as every other section. Omitting it here (this reconstruction is a
+    // hand-maintained field list, not a spread) silently strips a section the
+    // bridge sent and the renderer's getUiSprite() expects, so it draws the CSS
+    // ring / SVG-star fallback even when real sprites are available.
+    uiSprites: msg.uiSprites
   }
   saveToDisk(current)
   notifyRenderer?.(current)
