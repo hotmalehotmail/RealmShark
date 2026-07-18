@@ -141,10 +141,15 @@ just asserted.
   `harness/PanelMount.tsx` directly into `#root` instead, and returns `true`
   so `main.tsx` skips its own render. `PanelMount` mounts exactly one
   `PANEL_REGISTRY[type]` entry at its preset pixel dimensions, wrapped in the
-  same providers (`SpriteProvider`/`EntityRegistryProvider`/`ItemInfoProvider`)
-  and the same chrome (title bar) `PanelFrame` renders, minus drag/pin/resize
-  affordances - irrelevant to a single frozen shot. This is the unit
-  `npm run shots` screenshots.
+  same providers (`SpriteProvider`/`EntityRegistryProvider`/`ItemInfoProvider`/
+  `AlertStoreContext`) and the same chrome (title bar) `PanelFrame` renders,
+  minus drag/pin/resize affordances - irrelevant to a single frozen shot.
+  This is the unit `npm run shots` screenshots. For `type === 'notifications'`
+  (issue #220) specifically, `PanelMount` seeds the provided `FiredAlertStore`
+  with `harness/alertGallerySeed.ts`'s `seedGallery` - the same four
+  representative alerts the toast gallery below uses - so the shot shows
+  real content instead of the empty state; every other panel type gets an
+  unseeded, harmless store.
 - **Alert toast gallery** — `?toastGallery=1` (issue #219): renders
   `harness/AlertToastGalleryMount.tsx` instead, for the one UI surface that
   isn't a `PANEL_REGISTRY` entry (`AlertToastHost` is an App-level singleton,

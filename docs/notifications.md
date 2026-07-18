@@ -2,11 +2,12 @@
 
 Design doc: [prd-notifications.md](prd-notifications.md). This doc covers the
 **shipped implementation** of issue #218 (the framework-agnostic core — event
-detection, rule catalog, dispatcher, fired-alert store, settings schema) and
+detection, rule catalog, dispatcher, fired-alert store, settings schema),
 issue #219 (the two delivery surfaces — a banner toast host and a ping
-sound). The history panel and settings gear (issues #220-#221 in the PRD's
-§11 implementation plan) still build on the same contract this doc
-describes. Naming: the subsystem is `alerts` internally, "Notifications"
+sound), and issue #220 (the Notifications history panel — a second,
+independent viewer over the same store). The settings gear (issue #221 in
+the PRD's §11 implementation plan) still builds on the same contract this
+doc describes. Naming: the subsystem is `alerts` internally, "Notifications"
 user-facing (PRD §1).
 
 ## Files
@@ -25,6 +26,9 @@ user-facing (PRD §1).
 | `overlay/src/renderer/src/alerts/sound.ts` | `PingPlayer`/`pingPlayer` (issue #219) — plays the bundled ping, coalesced to ≤1 per ~700ms. |
 | `overlay/src/renderer/src/alerts/AlertToastHost.tsx` | The banner UI (issue #219) — the one file a future redesign touches (PRD §1). |
 | `overlay/src/renderer/src/assets/sfx/ping.wav` | The bundled ping asset — a short synthesized tone (self-authored, CC0), imported through Vite. |
+| `overlay/src/renderer/src/alerts/alertStoreContext.ts` | `AlertStoreContext`/`useAlertStore()` (issue #220) — exposes the App-level `AlertEngine.store` to panels mounted deep under `PanelCanvas`, with no direct parent/child relationship to `App.tsx`. |
+| `overlay/src/renderer/src/panels/NotificationsPanel.tsx` | The history panel (issue #220) — a `PANEL_REGISTRY` entry rendering the store's session log, newest first. |
+| `overlay/src/renderer/src/harness/alertGallerySeed.ts` | `seedGallery` (issue #219, reused by #220) — four representative fired alerts, shared by `AlertToastGalleryMount.tsx` and `harness/PanelMount.tsx`'s `notifications` case for `npm run shots`. |
 
 ## Architecture
 
@@ -211,11 +215,57 @@ defensive belt-and-suspenders, not the actual fix.
 App-level singleton, not a draggable/resizable panel), so it doesn't fall out
 of `npm run shots`' per-panel loop automatically. `harness/
 AlertToastGalleryMount.tsx` (mounted via `?toastGallery=1`) seeds a
-`FiredAlertStore` directly with four representative banner-worthy alerts —
-no packet fixture needed, since the store's public API is all
-`AlertToastHost` ever reads — producing the cap-3 + "+1 more" overflow shot
-at `docs/screenshots/panels/alertToastHost-gallery.png`. See
+`FiredAlertStore` directly (via `harness/alertGallerySeed.ts`'s `seedGallery`)
+with four representative banner-worthy alerts — no packet fixture needed,
+since the store's public API is all `AlertToastHost` ever reads — producing
+the cap-3 + "+1 more" overflow shot at
+`docs/screenshots/panels/alertToastHost-gallery.png`. See
 `docs/overlay-harness.md` for the harness mount-mode convention this follows.
+
+## History panel (`NotificationsPanel.tsx` — issue #220)
+
+A second, independent viewer over `engine.store`, unlike `AlertToastHost`
+this one **is** an ordinary `PANEL_REGISTRY` entry (`registry.ts`'s
+`notifications` key) — draggable/resizable/closable-off-the-canvas exactly
+like any other panel, added to `PanelCanvas.tsx`'s `defaultLayout()` so
+existing users get it on upgrade via `panelLayout.ts`'s `mergeWithDefaults`
+(`test/panelCanvas-notifications.test.ts`).
+
+Reads the store through `alertStoreContext.ts`'s `AlertStoreContext`/
+`useAlertStore()` rather than a prop — `NotificationsPanel` is mounted by
+registry lookup deep under `PanelCanvas`, with no direct parent/child
+relationship to `App.tsx` (the same rationale as
+`dps/dpsDetailContext.ts`). `App.tsx` provides the context around `AppShell`
+with the same `alertEngine.store` instance already passed to
+`AlertToastHost` as a prop, so both surfaces watch the identical store.
+`NotificationsPanel` imports nothing from `AlertEngine`/`catalog`/
+`dispatcher`, and no packet type — only the store's subscribe API and
+`FiredAlert` (PRD §1 layering contract, binding for every notification-
+system UI surface).
+
+Renders the session log newest-first: each row shows the fired time, the
+payload's `icon` via `ItemSprite` when set, title/body, and (hidden at `sm`,
+no room) the full `matchedKindIds` list — the history is where "why did this
+fire" is fully visible even though a banner only ever shows one payload (PRD
+§3 point 4). Empty state uses the shared `EmptyState`. Because the panel only
+reads the store, deleting it from the layout doesn't stop alerts firing —
+same "pure viewer" property `LootPanel` has over `LootTracker`.
+
+Persistence/reset are entirely the store's own semantics (`store.ts`,
+above) — the panel adds no logic of its own here, so
+`test/notificationsPanel.test.ts` asserts them through the identical
+`getAll`/`subscribe`/`reset` calls the panel's data-source effect makes,
+rather than duplicating `alerts-store.test.ts`'s lower-level coverage.
+
+**Panel gallery shot.** Unlike `AlertToastHost`, this panel *is* a
+`PANEL_REGISTRY` entry, so `npm run shots` picks it up automatically through
+the normal per-panel loop (`harness/PanelMount.tsx`) — no dedicated harness
+mount mode needed. `PanelMount` seeds a `FiredAlertStore` with the same
+`alertGallerySeed.ts`'s `seedGallery` used by the toast gallery (only for
+`type === 'notifications'`; every other panel type gets an empty, harmless
+store — the same unconditional-but-idle provider pattern already used there
+for Sprite/EntityRegistry/ItemInfo) and provides it via `AlertStoreContext`,
+producing `docs/screenshots/panels/notifications-{sm,md,lg}.png`.
 
 ## Settings (`shared/settings.ts`)
 

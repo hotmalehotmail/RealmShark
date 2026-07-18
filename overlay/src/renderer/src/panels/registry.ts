@@ -9,6 +9,7 @@ import DpsPanel from './DpsPanel'
 import DpsSummaryPanel from './DpsSummaryPanel'
 import InstancePanel from './InstancePanel'
 import LootPanel from './LootPanel'
+import NotificationsPanel from './NotificationsPanel'
 import StatusPanel from './StatusPanel'
 
 export interface PanelContentProps {
@@ -113,5 +114,15 @@ export const PANEL_REGISTRY: Record<string, PanelSpec> = {
       lg: { width: 340, height: 300 }
     },
     component: LootPanel
+  },
+  notifications: {
+    type: 'notifications',
+    title: 'Notifications',
+    sizes: {
+      sm: { width: 220, height: 150 },
+      md: { width: 300, height: 240 },
+      lg: { width: 380, height: 320 }
+    },
+    component: NotificationsPanel
   }
 }
