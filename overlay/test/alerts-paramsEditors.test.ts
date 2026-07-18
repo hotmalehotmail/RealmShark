@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { PARAMS_EDITORS } from '../src/renderer/src/alerts/paramsEditors'
 
 /**
- * `paramsEditors.tsx`'s UI-side registry (issue #221, PRD §3): only
+ * `paramsEditors.ts`'s UI-side registry (issue #221, PRD §3): only
  * `enchantedDrop` has typed params in the v1 catalog (`whiteBag`/`orangeBag`
  * take none), so it's the only kind with a registered editor -
  * `AlertSettings.tsx` renders one only when `PARAMS_EDITORS[kindId]` exists.

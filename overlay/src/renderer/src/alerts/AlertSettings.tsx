@@ -15,7 +15,7 @@ const SAVE_DEBOUNCE_MS = 300
  * `PanelSettingsProps`, `panels/PanelFrame.tsx`). Master on/off, a volume
  * slider with a test-ping button, and one row per catalog entry (enable/
  * banner/sound + its params editor if one is registered in
- * `paramsEditors.tsx`) - rows come from `settingsRows.ts`'s `buildRuleRows`,
+ * `paramsEditors.ts`) - rows come from `settingsRows.ts`'s `buildRuleRows`,
  * so a future catalog entry needs no edit here.
  * <p>
  * Owns its own storage (PRD §5 "Each settings component owns its storage"):
@@ -42,7 +42,10 @@ export function NotificationsSettingsView({ onDone }: PanelSettingsProps): React
     })
     return () => {
       offSettings()
-      clearTimeout(saveTimer.current)
+      if (saveTimer.current !== undefined) {
+        clearTimeout(saveTimer.current)
+        if (fullSettingsRef.current) window.overlay.saveSettings(fullSettingsRef.current)
+      }
     }
   }, [])
 
@@ -52,6 +55,7 @@ export function NotificationsSettingsView({ onDone }: PanelSettingsProps): React
       fullSettingsRef.current = { ...fullSettingsRef.current, notifications: next }
     clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => {
+      saveTimer.current = undefined
       if (fullSettingsRef.current) window.overlay.saveSettings(fullSettingsRef.current)
     }, SAVE_DEBOUNCE_MS)
   }
