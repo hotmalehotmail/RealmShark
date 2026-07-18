@@ -49,6 +49,54 @@ async function freezeNondeterminism(page: import('@playwright/test').Page): Prom
 }
 
 /**
+ * Below-the-fold blind spot (issue #178), factored out so both the panel-
+ * content loop and the settings-view loop (issue #221) share the exact same
+ * clip-detect-and-re-render logic instead of two copies drifting apart. See
+ * the main loop's doc comment below for the full rationale.
+ */
+async function captureFullVariantIfClipped(
+  page: import('@playwright/test').Page,
+  frame: import('@playwright/test').Locator,
+  fullPath: string
+): Promise<void> {
+  const content = page.locator('[data-panel-content]')
+  const { scrollHeight, clientHeight } = await content.evaluate((el) => ({
+    scrollHeight: el.scrollHeight,
+    clientHeight: el.clientHeight
+  }))
+  const clips = scrollHeight - clientHeight > 1
+
+  if (!clips) {
+    if (existsSync(fullPath)) unlinkSync(fullPath)
+    return
+  }
+
+  // Give the frame room to grow past the default 900px viewport before
+  // measuring/capturing its natural height, so Playwright never has to
+  // stitch or clip the capture itself.
+  await page.setViewportSize({ width: 1280, height: MAX_FULL_HEIGHT_PX + 200 })
+  await frame.evaluate((el) => {
+    ;(el as HTMLElement).style.height = 'auto'
+  })
+  await content.evaluate((el) => {
+    const style = (el as HTMLElement).style
+    style.flex = 'none'
+    style.height = 'auto'
+    style.overflow = 'visible'
+  })
+  const naturalHeight = await frame.evaluate((el) => el.getBoundingClientRect().height)
+  const cappedHeight = Math.min(naturalHeight, MAX_FULL_HEIGHT_PX)
+  await frame.evaluate((el, h) => {
+    ;(el as HTMLElement).style.height = `${h}px`
+  }, cappedHeight)
+
+  // `frame` keeps its own `overflow-hidden`, so if `naturalHeight` exceeded
+  // the cap the capped frame still visually clips at MAX_FULL_HEIGHT_PX
+  // rather than spilling the screenshot past it.
+  await frame.screenshot({ path: fullPath })
+}
+
+/**
  * `npm run shots` (PRD §5.3): mounts every registered panel (`registry.ts` -
  * never hardcoded here) at every preset size against the standard
  * `gallery.json`/`spritePack.json` fixtures, and screenshots each into the
@@ -93,42 +141,58 @@ for (const [type, spec] of Object.entries(PANEL_REGISTRY)) {
 
       await frame.screenshot({ path: resolve(SCREENSHOT_DIR, `${type}-${size}.png`) })
 
-      const fullPath = resolve(SCREENSHOT_DIR, `${type}-${size}-full.png`)
-      const content = page.locator('[data-panel-content]')
-      const { scrollHeight, clientHeight } = await content.evaluate((el) => ({
-        scrollHeight: el.scrollHeight,
-        clientHeight: el.clientHeight
-      }))
-      const clips = scrollHeight - clientHeight > 1
+      await captureFullVariantIfClipped(
+        page,
+        frame,
+        resolve(SCREENSHOT_DIR, `${type}-${size}-full.png`)
+      )
+    })
+  }
+}
 
-      if (!clips) {
-        if (existsSync(fullPath)) unlinkSync(fullPath)
-        return
-      }
-
-      // Give the frame room to grow past the default 900px viewport before
-      // measuring/capturing its natural height, so Playwright never has to
-      // stitch or clip the capture itself.
-      await page.setViewportSize({ width: 1280, height: MAX_FULL_HEIGHT_PX + 200 })
-      await frame.evaluate((el) => {
-        ;(el as HTMLElement).style.height = 'auto'
+/**
+ * Per-panel settings views (issue #221, PRD §5 "the per-panel gear"): a
+ * second shot per `(panel type, size)` combo whose `PanelSpec.settings` is
+ * defined (only `notifications` today), captured via the harness's
+ * `&settings=1` mount flag (`PanelMount.tsx`) - the same static
+ * single-view render `PanelFrame`'s gear flip produces live, minus the flip
+ * animation. Subject to the identical below-the-fold clipping as any other
+ * panel content (a `notifications-sm-settings.png` shot is real evidence of
+ * how little fits in a 220x150 frame), so it gets the same `-full` variant
+ * treatment via `captureFullVariantIfClipped`. Unlike `-full`, though,
+ * `-settings.png`'s existence tracks a static registry property
+ * (`spec.settings`), not runtime-detected clipping - removing a panel's
+ * settings view is a deliberate registry edit that should delete its old
+ * `-settings*.png` files in the same change, there's nothing to auto-prune.
+ */
+for (const [type, spec] of Object.entries(PANEL_REGISTRY)) {
+  if (!spec.settings) continue
+  for (const size of SIZES) {
+    test(`${type} settings @ ${size}`, async ({ page }) => {
+      await freezeNondeterminism(page)
+      await page.goto(`/?panel=${type}&size=${size}&settings=1&fixture=gallery`)
+      await page.addStyleTag({
+        content:
+          '*, *::before, *::after { animation-duration: 0s !important; animation-delay: 0s !important; transition-duration: 0s !important; transition-delay: 0s !important; }'
       })
-      await content.evaluate((el) => {
-        const style = (el as HTMLElement).style
-        style.flex = 'none'
-        style.height = 'auto'
-        style.overflow = 'visible'
+      await page.waitForFunction(() => window.__harnessFixtureReady === true, undefined, {
+        timeout: FIXTURE_READY_TIMEOUT_MS
       })
-      const naturalHeight = await frame.evaluate((el) => el.getBoundingClientRect().height)
-      const cappedHeight = Math.min(naturalHeight, MAX_FULL_HEIGHT_PX)
-      await frame.evaluate((el, h) => {
-        ;(el as HTMLElement).style.height = `${h}px`
-      }, cappedHeight)
 
-      // `frame` keeps its own `overflow-hidden`, so if `naturalHeight`
-      // exceeded the cap the capped frame still visually clips at
-      // MAX_FULL_HEIGHT_PX rather than spilling the screenshot past it.
-      await frame.screenshot({ path: fullPath })
+      const frame = page.locator('[data-panel-frame]')
+      await expect(frame).toBeVisible()
+      // The settings view loads via its own async getSettings() call
+      // (`AlertSettings.tsx`) - wait for its "Loading settings…" placeholder
+      // to clear so the shot never races that resolve.
+      await expect(page.getByText('Loading settings…')).toHaveCount(0)
+
+      await frame.screenshot({ path: resolve(SCREENSHOT_DIR, `${type}-${size}-settings.png`) })
+
+      await captureFullVariantIfClipped(
+        page,
+        frame,
+        resolve(SCREENSHOT_DIR, `${type}-${size}-settings-full.png`)
+      )
     })
   }
 }

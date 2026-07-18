@@ -24,10 +24,10 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/DpsList.tsx` | Presentational DPS rows (target + per-attacker list). |
 | `overlay/src/renderer/src/env.d.ts` | Vite client types only. |
 | `overlay/src/renderer/src/panels/PanelCanvas.tsx` | Owns the panel array, layout load/save, drag/size/pin/z-order dispatch, programmatic open/close. |
-| `overlay/src/renderer/src/panels/PanelFrame.tsx` | One panel's chrome: title bar, drag, size/pin/close buttons, visibility. |
+| `overlay/src/renderer/src/panels/PanelFrame.tsx` | One panel's chrome: title bar, drag, size/pin/close/settings-gear buttons, visibility. |
 | `overlay/src/renderer/src/panels/panelSpawn.ts` | `PanelSpawnContext` / `usePanelSpawn()` - lets a panel body open/close another panel on the canvas (§2's "Programmatic panel spawn/close"). |
 | `overlay/src/renderer/src/panels/anchor.ts` | Percentage-anchor ↔ pixel math (`panelStyle`, `anchorFromPointer`). |
-| `overlay/src/renderer/src/panels/registry.ts` | `type → { title, per-size px dims, component, closable? }` and `PanelContentProps`. |
+| `overlay/src/renderer/src/panels/registry.ts` | `type → { title, per-size px dims, component, closable?, settings? }`, `PanelContentProps`, and `PanelSettingsProps` (§2's "Per-panel settings gear", issue #221). |
 | `overlay/src/renderer/src/panels/panelLayout.ts` | `defaultLayout()`/`mergeWithDefaults()`/`isPersistablePanel()` - split out of `PanelCanvas.tsx` (a component file can't also export plain functions - `react-refresh/only-export-components`), same rationale as `dps/dpsDetailContext.ts`. |
 | `overlay/src/renderer/src/panels/{Status,Dps,Console,Character,Instance,DpsSummary,DpsDetail,Loot,Notifications}Panel.tsx` | The nine panel bodies. |
 | `overlay/src/renderer/src/ui/*.tsx` | Shared UI primitives (`Button`, `EmptyState`, `Swatch`, `GearRow`, `MeterRow`, `StatRow`, `Tooltip`) — see `overlay-ui-style.md`. |
@@ -60,6 +60,12 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/alerts/useAlertEngine.ts` | React hook mounting one `AlertEngine` at App level (§8), wiring packet/settings/detach IPC. |
 | `overlay/src/renderer/src/alerts/slotTypeNames.ts` | SlotType id → display name, empirically derived from the facts file. |
 | `overlay/src/renderer/src/alerts/alertStoreContext.ts` | `AlertStoreContext`/`useAlertStore()` (issue #220) - exposes `AlertEngine.store` to panels mounted under `PanelCanvas`, with no direct parent/child relationship to `App.tsx`. |
+| `overlay/src/renderer/src/alerts/AlertSettings.tsx` | `NotificationsSettingsView` (issue #221) - the Notifications panel's `PanelSpec.settings` component; the per-panel gear's first user. See `docs/notifications.md`. |
+| `overlay/src/renderer/src/alerts/settingsRows.ts` | `buildRuleRows()` - React-free: one row per catalog entry, resolved settings included, for `AlertSettings.tsx` to map over. |
+| `overlay/src/renderer/src/alerts/paramsEditors.ts` | `PARAMS_EDITORS` - UI-side `kindId → ComponentType` registry (only imports pre-built editor components itself, same `react-refresh/only-export-components` rationale as `registry.ts`). |
+| `overlay/src/renderer/src/alerts/paramsEditorTypes.ts` | `ParamsEditorProps` - shared type only, so `paramsEditors.ts` and an editor component need no value import from each other. |
+| `overlay/src/renderer/src/alerts/EnchantedDropParamsEditor.tsx` | `enchantedDrop`'s params editor (tier + SlotType-category + item-name override rows) - registered in `paramsEditors.ts`. |
+| `overlay/src/renderer/src/alerts/useItemNameCatalog.ts` | Every distinct name from the bridge's `lootBagTypes` envelope, for the item-name-override autocomplete - a standalone subscription, not routed through `AlertEngine`. |
 
 ---
 
@@ -396,6 +402,56 @@ mechanism any future panel can reuse, not a DPS-specific hack:
   would otherwise just show its "No session selected" empty state instead of
   real per-enemy/per-player content.
 
+### Per-panel settings gear (issue #221)
+
+A second small generic mechanism alongside spawn/close above, for the
+opposite direction: instead of one panel opening *another*, a panel flips
+its *own* body in place to a settings view. `docs/prd-notifications.md` §5
+introduced it as a cross-cutting mechanism (future users: the Loot panel's
+bag-type filter, the DPS panel's column config), with the Notifications
+panel's settings view (`docs/notifications.md`) as its first, proving user.
+
+- **`registry.ts`'s `settings?: ComponentType<PanelSettingsProps>`** on
+  `PanelSpec`, alongside `component`. `PanelSettingsProps` is `{ onDone: ()
+  => void }` — no `size`, unlike `PanelContentProps`: a settings form is read
+  top-to-bottom, not glanced at, so it doesn't scale its own content by
+  preset the way a content body does. Omitting `settings` (every panel but
+  `notifications` today) means no gear at all — there is no separate
+  opt-out flag to forget.
+- **`PanelFrame.tsx`** renders a gear button in the title bar (interactive
+  mode only, alongside pin/size/close) iff `spec.settings` is set, and holds
+  one frame-local `showSettings` boolean (`useState`, not lifted to
+  `PanelCanvas` — this is purely this panel's own display mode, nothing else
+  needs to know). Clicking the gear toggles it; the body then renders
+  `<spec.settings onDone={() => setShowSettings(false)}/>` in place of
+  `<spec.component size={panel.size}/>` when true. The settings view can
+  additionally call `onDone` itself (e.g. a "Done" button at the bottom of
+  its own form) to flip back without requiring the user to find the gear
+  again — both paths land on the same toggle. `showSettings` persists across
+  an `interactive` toggle exactly like `pinned`/`size` do (§2 above: panels
+  keep their live state across toggles) — the gear itself is only reachable
+  while interactive, so a stale `true` value can only mean the user
+  themselves last left the panel flipped open.
+- **Dragging/pin/size/close all keep working while flipped** — flipping only
+  swaps which component renders inside the content wrapper; none of
+  `PanelFrame`'s chrome (title bar, drag handling, the size-cycle/pin/close
+  buttons) is aware of `showSettings` at all.
+- **A settings view owns its own storage.** Unlike `PanelContentProps`
+  consumers, which read live data via `window.overlay.on…`/shared contexts,
+  a settings view is expected to read *and write* — `NotificationsSettingsView`
+  (`docs/notifications.md`) is the reference implementation: it loads via
+  `getSettings()`, edits its own slice of `OverlaySettings`, and saves
+  (debounced) via `saveSettings()` on every change — no new IPC surface, no
+  Save button (PRD §5 "apply on change").
+- **The harness (`harness/PanelMount.tsx`, `harness/mount.tsx`)** gained a
+  `&settings=1` query flag mirroring the gear flip statically: it renders
+  `spec.settings` (with a no-op `onDone`, since there's no click to simulate
+  in a frozen shot) instead of `spec.component`. `npm run shots`
+  (`docs/overlay-harness.md`) picks this up automatically for any panel type
+  whose `spec.settings` is defined, alongside its normal per-panel loop —
+  `<type>-<size>-settings.png`, with the same below-the-fold `-full` variant
+  treatment as ordinary panel content.
+
 ---
 
 ## 3. The panels
@@ -415,7 +471,7 @@ item tooltip (§4.2) with no per-panel wiring.
 | `DpsSummaryPanel` | "DPS Summary" | `useDpsHistory()` | A master list only: retained past instances (icon + name + a "You: Xdmg (#rank)" headline). Clicking a row opens that instance's breakdown in the separate `dpsDetail` panel below rather than swapping this panel's own content — see §2's "Programmatic panel spawn/close" and §5.1. |
 | `DpsDetailPanel` | "DPS Detail" | `useDpsDetailSelection()` | The large, closable, independently draggable/resizable panel `DpsSummaryPanel` opens on row click (issue #194): the selected instance's enemies ranked by total damage, expandable to a frozen per-player breakdown (gear/dyes/enchants). A single reused panel instance re-targeted on each new selection, not one spawned per session. Renders "No session selected" if opened with nothing selected (shouldn't happen via the normal row-click path). See §2, §5.1. |
 | `LootPanel` | "Loot" | `useLootTracker()` | Session log of white/orange bags (BagType 6/8) that dropped near the player, both always shown under their own bag sprite + count (no text label), with per-item rarity border + shiny badge + enchant tooltip, chronological (not de-duplicated). See §7. |
-| `NotificationsPanel` | "Notifications" | `useAlertStore()` | Session log of fired alerts (issue #220), newest first: time, payload icon (`ItemSprite`, when set), title/body, matched catalog kind ids (hidden at `sm`). A pure viewer over the same `FiredAlertStore` `AlertToastHost` reads - see §8/`docs/notifications.md`. |
+| `NotificationsPanel` | "Notifications" | `useAlertStore()` | Session log of fired alerts (issue #220), newest first: time, payload icon (`ItemSprite`, when set), title/body, matched catalog kind ids (hidden at `sm`). A pure viewer over the same `FiredAlertStore` `AlertToastHost` reads - see §8/`docs/notifications.md`. The only panel with a settings gear today (issue #221, `AlertSettings.tsx` - §2's "Per-panel settings gear"). |
 
 **StatusPanel** (`panels/StatusPanel.tsx`) is the only panel wired straight to
 the IPC surface rather than a shared service. It subscribes to `onBridgeStatus`,
@@ -1350,7 +1406,7 @@ no inset, `overflow-y-auto` clips exactly at the content edge). Sized/registered
 
 ---
 
-## 8. Notification system (issues #218-#220)
+## 8. Notification system (issues #218-#221)
 
 `useAlertEngine()` mounts one `AlertEngine` instance in `App.tsx` (called
 unconditionally near the top of the component, alongside the other
@@ -1371,8 +1427,8 @@ Each new entry (`onEntry`, issue #217) becomes a `loot-drop` `GameEvent`,
 matched against a small rule catalog (`whiteBag`/`orangeBag`/
 `enchantedDrop`), and any match is appended to a bounded, subscribable
 `FiredAlertStore` — the store's subscribe API is the contract every UI
-surface reads from, so the history panel (issue #220) and a future settings
-gear (issue #221) never need to reach into `AlertEngine` internals.
+surface reads from, so the history panel (issue #220) and the settings gear
+(issue #221) never need to reach into `AlertEngine` internals.
 
 `AlertToastHost` (issue #219, rendered in `AppShell` above `PanelCanvas` —
 §2's panel system doesn't apply to it, it's not a `PANEL_REGISTRY` entry)
@@ -1396,9 +1452,21 @@ time/icon/title/body/`matchedKindIds` — deleting it from the layout doesn't
 stop alerts firing, same "pure viewer" property `LootPanel` has over
 `LootTracker`.
 
+`NotificationsPanel`'s settings gear (issue #221, `AlertSettings.tsx`) is the
+first user of the generic per-panel gear mechanism described in §2's
+"Per-panel settings gear" above — a `PanelSpec.settings` component
+`PanelFrame` flips the panel body to in place, no floating popover. It reads
+and writes `OverlaySettings.notifications` directly (`getSettings`/
+`saveSettings`, debounced, apply-on-change), rendering one row per `CATALOG`
+entry via the React-free `settingsRows.ts`'s `buildRuleRows()` and, for
+`enchantedDrop`, its registered params editor
+(`alerts/paramsEditors.ts`/`EnchantedDropParamsEditor.tsx`) — a category/
+item-name override editor backed by `slotTypeNames.ts` and
+`useItemNameCatalog.ts`'s live `lootBagTypes.itemNames` subscription.
+
 Full architecture, the multi-match dispatch semantics, the delivery layer,
-the history panel, the settings schema, and the SlotType name derivation:
-see **[notifications.md](notifications.md)**.
+the history panel, the settings gear/schema, and the SlotType name
+derivation: see **[notifications.md](notifications.md)**.
 
 ---
 
