@@ -29,6 +29,11 @@ public class ItemInfo {
         return IdToAsset.loadedObjectCount() > 1;
     }
 
+    /** Content-version key - same contract as {@link LootBagTypes#version()} (issue #239). */
+    public String version() {
+        return "oc" + IdToAsset.loadedObjectCount();
+    }
+
     /**
      * The envelope JSON, rebuilt only when the loaded object count changes (a
      * re-extraction/reload), so repeated polling is cheap.
@@ -76,6 +81,7 @@ public class ItemInfo {
         Envelope env = new Envelope();
         env.time = System.currentTimeMillis();
         env.data = new Data();
+        env.data.metaVersion = "oc" + count;
         env.data.names = names;
         env.data.tiers = tiers;
         env.data.classes = classes;
@@ -89,6 +95,7 @@ public class ItemInfo {
     }
 
     private static final class Data {
+        String metaVersion;
         Map<String, String> names;
         Map<String, String> tiers;
         Map<String, String> classes;

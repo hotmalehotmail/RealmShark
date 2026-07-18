@@ -49,7 +49,7 @@ Out of scope (own docs): `bridge/dps/**` → [dps-engine.md](dps-engine.md);
     │    objectNames.envelopeFor ──enqueue──►│      every 2s   ── maybeBroadcast    │
     └─ dps.feed(packet)                      │        SpritePack (one-shot)         │
                                               │      every 2s   ── maybeBroadcast    │
-                                              ▼        LootBagTypes (repeats)        │
+                                              ▼        Metadata (version-gated #239)  │
                               LinkedBlockingQueue<String>(5000)                     │
                               drop-oldest on overflow                              ▼
                                                                     BridgeServer.send()
@@ -164,9 +164,7 @@ All seven periodic jobs run on **one** single-thread daemon scheduler named
 | DPS snapshot | polls every 50 ms; sends on damage or a 250 ms heartbeat | `dps.snapshotJson()`, enqueue if non-null | `:134-142` |
 | engine diagnostic | 3000 ms | `System.out.println("[dps-engine] " + dps.debugState())` | `:146-148` |
 | sprite-pack readiness | 2000 ms | `maybeBroadcastSpritePack()` (one-shot) | `:154-155` |
-| loot BagType readiness | 2000 ms | `maybeBroadcastLootBagTypes()` (repeats every poll once ready) | `:164-165` |
-| item-info readiness | 2000 ms | `maybeBroadcastItemInfo()` (repeats every poll once ready, issue #109) | `:169-170` |
-| enchant-name table | 2000 ms | `enqueue(enchantNames.envelopeJson())` (repeats every poll, no readiness gate needed) | `:176-177` |
+| metadata tables | 2000 ms | `maybeBroadcastMetadata()` — enqueues `lootBagTypes`/`itemInfo`/`enchantNames` **only when a table's `version()` differs from the last broadcast** (ready-transition or re-extraction; issue #239). Steady state = three string compares, nothing sent | `:164-165` |
 
 The DPS snapshot is *enqueued*, so it flows out with the next 33 ms flush like
 any other message. The diagnostic writes to stdout only (it surfaces in the
@@ -425,13 +423,16 @@ envelope with `type:"dps"`, `direction:"internal"`:
 
 ## 6. `LootBagTypes` — synthetic loot categorization
 
-`LootBagTypes` resolves which item ids are BagType 6 (white bag) / 8
-(orange/ST bag) — the two categories the overlay's Loot panel tracks (issue
-#105) — from the same `IdToAsset` data `ObjectNames` reads, so the panel needs
-no hand-maintained item list. Full field semantics (what `bagType` means, how
-`Class=Bag` entities self-identify a color's icon) are in
-[asset-pipeline.md](asset-pipeline.md); this section only covers the bridge
-plumbing.
+`LootBagTypes` resolves which item ids are loot items (every BagType present
+in the loaded assets, not just 6/white or 8/orange — issue #217 widened this)
+and which are ground-bag entities, from the same `IdToAsset` data
+`ObjectNames` reads, so the overlay side needs no hand-maintained item list —
+neither the Loot panel (issue #105, still 6/8-only via its own `LootTracker`
+construction) nor the notification system's all-color rules
+(`docs/prd-notifications.md` §2). Full field semantics (what `bagType` means,
+how `Class=Bag` entities self-identify a color's icon, what `SlotType` is) are
+in [asset-pipeline.md](asset-pipeline.md); this section only covers the
+bridge plumbing.
 
 - **`ready()`** — `IdToAsset.loadedObjectCount() > 1`. Deliberately **not**
   gated on the sprite pack's atlas-readiness (`SpritePackService.ready()`,
@@ -444,37 +445,63 @@ plumbing.
   satisfy `ready()` and demonstrate the Loot panel with no game or atlas at
   all - see §7 below.
 - **`envelopeJson()`** — walks `IdToAsset.objectIds()` once, keeping ids whose
-  `getBagType(id)` is 6 or 8. A `Class=Bag` **entity** among them goes into
-  `lootBagObjectTypes` (bag entity id → BagType — the set the overlay's drop
-  tracker watches for); that set is then extended with every entity matching
-  the real assets' id-name rule (`IdToAsset.lootBagEntityTypes()`,
-  `"Loot Bag <N>[ Boost]"` — the only mechanism real assets satisfy, and what
-  covers the boosted variants; see
-  [asset-pipeline.md](asset-pipeline.md)'s BagType section, issue #189);
-  every other such id is an item, added to `bagTypeTable` (item id → BagType) +
-  `itemNames` (item id → `IdToAsset.objectName`) + `shinyItemTypes` (item ids
-  flagged by `IdToAsset.isShiny`, issue #215 - a dedicated signal, since
-  `objectName` usually resolves a real shiny item's shared, suffix-stripped
-  display name instead of its raw `" Shiny"`-suffixed id). Separately,
-  `IdToAsset.findBagIconObjectType(bagType)` resolves each tracked BagType's one
-  representative `Class=Bag` entity id into `lootBagIcons` (the panel's category
-  header sprite) — **and** (soak #144) is also folded into `lootBagObjectTypes`
-  for that color, since the XML scan above finds no `Class=Bag`+own-`BagType`
+  `getBagType(id)` is `>= 0` (every BagType present, not just 6/8 — issue
+  #217; `-1` means no `<BagType>` at all, the only value excluded). A
+  `Class=Bag` **entity** among them goes into `lootBagObjectTypes` (bag entity
+  id → BagType — the set a drop tracker watches for); that set is then
+  extended with every entity matching the real assets' id-name rule
+  (`IdToAsset.lootBagEntityTypes()`, `"Loot Bag <N>[ Boost]"` — the only
+  mechanism real assets satisfy, and what covers the boosted variants; see
+  [asset-pipeline.md](asset-pipeline.md)'s BagType section, issue #189), now
+  for every color rather than just 6/8; every other such id is an item, added
+  to `bagTypeTable` (item id → BagType) + `itemNames` (item id →
+  `IdToAsset.objectName`) + `slotTypes` (item id → `IdToAsset.getSlotType`,
+  issue #217 — see [asset-pipeline.md](asset-pipeline.md)'s SlotType section)
+  + `shinyItemTypes` (item ids flagged by `IdToAsset.isShiny`, issue #215 - a
+  dedicated signal, since `objectName` usually resolves a real shiny item's
+  shared, suffix-stripped display name instead of its raw `" Shiny"`-suffixed
+  id). Separately, `IdToAsset.findBagIconObjectType(bagType)` resolves each of
+  `LootBagTypes.TRACKED_BAG_TYPES`' (6/8 only, the Loot panel's own
+  category-header colors — deliberately **not** widened) one representative
+  `Class=Bag` entity id into `lootBagIcons` (the panel's category header
+  sprite) — **and** (soak #144) is also folded into `lootBagObjectTypes` for
+  that color, since the XML scan above finds no `Class=Bag`+own-`BagType`
   match at all on real assets (soak #113) and `lootBagObjectTypes` would
   otherwise stay permanently empty on a real client, with no drop ever
   recognized. Cached and only rebuilt when `IdToAsset.loadedObjectCount()`
-  changes (a reload), so repeated polling is cheap.
+  changes (a reload), so repeated polling is cheap. Widening the item table
+  to every color grows it substantially (~1.8k → ~12k entries against the
+  committed facts file); measured serialized size in `--fake` mode with every
+  facts item/entity registered is ~630 KB, comfortably under the ~1 MB size
+  budget (`docs/prd-notifications.md` §10) — no `itemNames`/`itemInfo.names`
+  dedupe needed yet.
 - **Envelope shape** mirrors `ObjectNames`'s (`type:"lootBagTypes"`,
   `direction:"internal"`) - see the full JSON shape in
   [architecture.md](architecture.md#4f-lootbagtypes-envelope-inside-a-batch--synthetic-re-sent-periodically).
 
-**Re-sent every poll, not one-shot.** `PacketBridge.maybeBroadcastLootBagTypes`
-(`PacketBridge.java:167-176`) enqueues the envelope on **every** 2 s tick once
-`ready()`, unlike the sprite pack's single `spritePackSent` latch. The payload
-is tiny (two small id maps), so the simplest way to guarantee a client that
-connects *after* the first broadcast still receives it is to keep sending it,
-rather than adding a second on-demand request/response message alongside
-`spritePackRequest`.
+**Edge-triggered + versioned, never periodic (issue #239).** The original
+design re-enqueued this envelope on every 2 s tick, justified by "the payload
+is tiny" — an assumption issue #217's all-color widening silently invalidated
+(~630 KB per send, a full renderer-side table rebuild each time, a rhythmic
+overlay-wide hitch). Delivery now happens on exactly three edges, shared by
+all three metadata tables (`lootBagTypes`/`itemInfo`/`enchantNames`):
+
+- **connection open** — `BridgeServer`'s connect listener calls
+  `PacketBridge.sendMetadataTo(conn)`, which sends every currently-ready
+  table directly to the new client as one `{"batch":[...]}` frame (bypassing
+  the shared queue so already-served clients see nothing);
+- **not-ready → ready** and **content change** (re-extraction) — detected by
+  `maybeBroadcastMetadata`'s 2 s poll comparing each table's cheap
+  `version()` key (a count read, no JSON built) against the last one
+  broadcast.
+
+Each envelope carries the same key as `data.metaVersion`, and the renderer
+consumers (`LootTracker.ingestLootMeta`, `ItemInfoProvider`,
+`useItemNameCatalog`) skip a same-version re-delivery — a WS reconnect
+legitimately redelivers the tables, and the guard also makes any future
+bridge-side re-send regression collapse to a string compare instead of a
+~35k-entry map rebuild (pinned by `overlay/test/loot-metaVersion.test.ts` and
+`LootBagTypesTest.versionIsStableUntilTheLoadedObjectCountChanges`).
 
 ---
 

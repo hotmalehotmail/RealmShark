@@ -1,5 +1,6 @@
 import type { ComponentType } from 'react'
 import type { PanelSize } from '../../../shared/panels'
+import { NotificationsSettingsView } from '../alerts/AlertSettings'
 import { dpsPanelHeight } from '../dps/rowLayout'
 import type { SizePx } from './anchor'
 import CharacterPanel from './CharacterPanel'
@@ -9,10 +10,23 @@ import DpsPanel from './DpsPanel'
 import DpsSummaryPanel from './DpsSummaryPanel'
 import InstancePanel from './InstancePanel'
 import LootPanel from './LootPanel'
+import NotificationsPanel from './NotificationsPanel'
 import StatusPanel from './StatusPanel'
 
 export interface PanelContentProps {
   size: PanelSize
+}
+
+/**
+ * Props for a panel's settings view (issue #221, PRD §5 "the per-panel
+ * gear"). Unlike `PanelContentProps`, no `size` - a settings view always
+ * renders at whatever size the panel currently is, same as `component`, but
+ * doesn't need to scale its own content by preset the way a content body
+ * does (a settings form is read top-to-bottom, not glanced at).
+ */
+export interface PanelSettingsProps {
+  /** Flips the panel body back to `component` - wired to both the gear button (toggle) and, optionally, a "Done" control the settings view renders itself. */
+  onDone: () => void
 }
 
 export interface PanelSpec {
@@ -27,6 +41,14 @@ export interface PanelSpec {
    * layout (e.g. `dpsDetail`). Omit/false for every ordinary always-on panel.
    */
   closable?: boolean
+  /**
+   * Optional settings view (issue #221). When set, `PanelFrame` renders a
+   * gear button (interactive mode only, next to pin/size) that flips the
+   * panel body in place to this component instead of `component`. Omit for
+   * an ordinary panel with no configurable settings - `PanelFrame` then
+   * renders no gear at all, per panel type.
+   */
+  settings?: ComponentType<PanelSettingsProps>
 }
 
 export const PANEL_REGISTRY: Record<string, PanelSpec> = {
@@ -113,5 +135,16 @@ export const PANEL_REGISTRY: Record<string, PanelSpec> = {
       lg: { width: 340, height: 300 }
     },
     component: LootPanel
+  },
+  notifications: {
+    type: 'notifications',
+    title: 'Notifications',
+    sizes: {
+      sm: { width: 220, height: 150 },
+      md: { width: 300, height: 240 },
+      lg: { width: 380, height: 320 }
+    },
+    component: NotificationsPanel,
+    settings: NotificationsSettingsView
   }
 }

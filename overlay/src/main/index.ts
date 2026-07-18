@@ -13,10 +13,12 @@ import {
   type SaveSettingsResult
 } from '../shared/ipc'
 import { CaptureRing } from '../shared/capture'
+import { LatestMetadataCache } from '../shared/metadataCache'
 import type { PanelInstance } from '../shared/panels'
 import type { OverlaySettings } from '../shared/settings'
 import { startBridgeClient, stopBridgeClient } from './bridgeClient'
 import { ensureBridgeRunning, stopBridge } from './bridgeSupervisor'
+import { chatProbeStatus, pushChatProbeBatch, startChatProbe, stopChatProbe } from './chatProbe'
 import { openConfigWindow } from './configWindow'
 import { getBufferedMainLogs, installMainConsoleCapture, setMainLogSink } from './consoleCapture'
 import { loadPanelLayout, persistPanelLayout } from './panelLayout'
@@ -40,6 +42,12 @@ installMainConsoleCapture()
 // electron-overlay-window relies on native window compositing; hardware
 // acceleration can break overlay transparency. https://github.com/electron/electron/issues/25153
 app.disableHardwareAcceleration()
+
+// The notification ping (renderer/src/alerts/sound.ts, issue #219) must play
+// with no prior user gesture - a fired alert is a game event, not a click.
+// Chromium's default autoplay policy blocks that; this is the standard fix
+// (must be set before app.whenReady()).
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
 
 // Neither the overlay HUD nor the settings window needs the default
 // File/Edit/View/Window/Help menu bar - drop it app-wide.
@@ -266,6 +274,7 @@ app.whenReady().then(() => {
   // for the ring's capacity/quota model and the replay tests that consume its
   // output shape.
   const captureRing = new CaptureRing()
+  const metadataCache = new LatestMetadataCache()
 
   // Shared by both capture entry points (IPC.reportBug/IPC.captureNow and the
   // tray's "Capture now" item) - the only difference is whether the
@@ -330,6 +339,15 @@ app.whenReady().then(() => {
         captureRing.push(p)
       }
       recordBatch(packets as PacketEnvelope[])
+      // Deliberately separate from the two retention paths above: the chat
+      // probe retains exactly the chat/party types those exclude, locally
+      // and only while user-armed - see main/chatProbe.ts.
+      pushChatProbeBatch(packets as PacketEnvelope[])
+      // Latest metadata tables, kept for IPC.replayMetadata (issue #245) -
+      // the bridge delivers them edge-triggered (#239), so a renderer
+      // consumer that subscribes after the one-shot delivery re-requests
+      // them from here instead of never seeing them.
+      for (const p of packets as PacketEnvelope[]) metadataCache.push(p)
     },
     onConnected: requestSpritePack,
     onSpritePack: onSpritePackMessage
@@ -355,6 +373,26 @@ app.whenReady().then(() => {
   // a ground-truth corpus without a bug to report. Reachable from the Status
   // panel and the tray menu (see createTray() above).
   ipcMain.handle(IPC.captureNow, (): Promise<BugReportResult> => dumpCaptureRing(false))
+
+  // Chat probe (docs/prd-notifications.md §6): user-armed local capture of
+  // the chat/party envelope types the capture ring deliberately drops, for
+  // pinning the party-chat wire shape (#222). See main/chatProbe.ts.
+  ipcMain.handle(IPC.chatProbeStart, () => startChatProbe())
+  ipcMain.handle(IPC.chatProbeStop, () => stopChatProbe())
+  ipcMain.handle(IPC.getChatProbeStatus, () => chatProbeStatus())
+
+  // Re-send the cached metadata tables through the normal packet-batch path
+  // (issue #245; see METADATA_ENVELOPE_TYPES in shared/ipc.ts). Requested by
+  // App on mount (the WS can connect before React's subscribers exist when
+  // the supervisor found an already-running bridge) and by late-mounted
+  // consumers (the settings view's item-name catalog). Safe to call any
+  // time: consumers skip same-metaVersion envelopes with a string compare.
+  ipcMain.handle(IPC.replayMetadata, () => {
+    const cached = metadataCache.snapshot()
+    if (cached.length > 0 && overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.webContents.send(IPC.packetBatch, cached)
+    }
+  })
 
   startUpdatePolling((info) => {
     if (overlayWindow && !overlayWindow.isDestroyed()) {

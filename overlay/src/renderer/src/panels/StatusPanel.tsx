@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import type { ChatProbeStatus } from '../../../shared/chatProbe'
 import type { BridgeStatus, PacketEnvelope, UpdateInfo } from '../../../shared/ipc'
 import { DEFAULT_SETTINGS } from '../../../shared/settings'
 import { Button } from '../ui/Button'
@@ -34,12 +35,14 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
   const [checking, setChecking] = useState(false)
   const [downloadPct, setDownloadPct] = useState<number | null>(null)
   const [actionMsg, setActionMsg] = useState('')
+  const [probe, setProbe] = useState<ChatProbeStatus>({ active: false, captured: 0 })
 
   useEffect(() => {
     window.overlay.getSettings().then((settings) => setToggleHotkey(settings.toggleHotkey))
     window.overlay.getAppVersion().then(setVersion)
     window.overlay.getBridgeStatus().then(setStatus)
     window.overlay.getUpdateStatus().then(setUpdate)
+    window.overlay.getChatProbeStatus().then(setProbe)
     const offStatus = window.overlay.onBridgeStatus(setStatus)
     const offBatch = window.overlay.onPacketBatch((packets) => {
       setPacketCount((n) => n + packets.length)
@@ -61,6 +64,34 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
       clearInterval(memoryInterval)
     }
   }, [])
+
+  // Live captured-count in the button label while the probe is armed, so a
+  // test message sent in-game gives immediate "the packet arrived" feedback
+  // without stopping the probe. Separate from the always-on memory interval:
+  // this one exists only while armed.
+  useEffect(() => {
+    if (!probe.active) return
+    const interval = setInterval(
+      () => window.overlay.getChatProbeStatus().then(setProbe),
+      MEMORY_POLL_MS
+    )
+    return () => clearInterval(interval)
+  }, [probe.active])
+
+  const toggleChatProbe = async (): Promise<void> => {
+    if (probe.active) {
+      const result = await window.overlay.stopChatProbe()
+      setProbe({ active: false, captured: 0 })
+      setActionMsg(
+        result.file
+          ? `Chat probe: ${result.captured} envelopes saved (folder opened)`
+          : 'Chat probe: nothing captured'
+      )
+    } else {
+      setProbe(await window.overlay.startChatProbe())
+      setActionMsg('Chat probe armed — send test messages in game')
+    }
+  }
 
   const checkUpdates = async (): Promise<void> => {
     setChecking(true)
@@ -160,6 +191,18 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
               </Button>
               <Button size="xs" onClick={captureNow}>
                 Capture now
+              </Button>
+              <Button
+                size="xs"
+                variant={probe.active ? 'warn' : 'subtle'}
+                onClick={toggleChatProbe}
+                title={
+                  probe.active
+                    ? 'Stop the chat probe and write the captured envelopes to a local NDJSON file'
+                    : 'Capture chat/party packets to a LOCAL file for wire-shape diagnosis (issue #222) — this data is never part of bug captures'
+                }
+              >
+                {probe.active ? `Stop probe (${probe.captured})` : 'Chat probe'}
               </Button>
             </div>
             {actionMsg && <div className="mt-0.5 truncate text-2xs text-fg-faint">{actionMsg}</div>}

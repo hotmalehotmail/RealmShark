@@ -14,6 +14,7 @@ import packets.incoming.MapInfoPacket;
 import packets.incoming.NewTickPacket;
 import packets.incoming.QuestObjectIdPacket;
 import packets.incoming.ServerPlayerShootPacket;
+import packets.incoming.TextPacket;
 import packets.incoming.UpdatePacket;
 import packets.data.SlotObjectData;
 import packets.outgoing.EnemyHitPacket;
@@ -82,7 +83,12 @@ import java.util.Random;
  * categorization, and per-item enchant/rarity display are demonstrable and
  * regression-testable with no game installed (issue #105). One drop variant
  * is a real "Shiny"-suffixed facts item ({@link #SHINY_ITEM_TYPE}), so the
- * Loot panel's shiny-item badge (issue #193) is exercised the same way.
+ * Loot panel's shiny-item badge (issue #193) is exercised the same way. One
+ * more drop variant is a fully-enchanted item of a color OTHER than 6/8
+ * ({@link #WIDE_ITEM_TYPE}, BagType {@link #WIDE_BAG_TYPE}) - the Loot panel
+ * itself never shows it, but it proves the bridge's widened `lootBagTypes`
+ * envelope (issue #217: every BagType, plus a per-item `slotTypes` map) is
+ * demonstrable with no game installed too.
  * <p>
  * Every roster member's UNIQUE_DATA_STRING stat also carries synthetic
  * per-slot enchant data ({@link #ROSTER_ENCHANTS}, encoded via
@@ -97,6 +103,15 @@ import java.util.Random;
  * followed by the correlated {@link NewTickPacket} slot deltas - the same
  * shape a real client sends), exercising the Character/Instance panels
  * re-rendering a live equip/unequip.
+ * <p>
+ * Also emits a periodic chat cycle ({@link #chatMessage}, issue #222) exercising
+ * the overlay's {@code partyChat} notification: a party message from another
+ * roster member (recipient {@code "*Party*"}, objectId -1 - the wire shape
+ * pinned via the Status panel's chat-probe diagnostic, PR #231), a local/world
+ * message from another player (recipient {@code ""}, the sender's own live
+ * entity id - wrong channel, must never fire the rule), and a party message
+ * FROM the local player (must be self-ignored by name, since a party sender's
+ * objectId is never a real local-player id to match against).
  */
 public class FakePacketSource {
 
@@ -167,6 +182,29 @@ public class FakePacketSource {
     private static final int SWAP_PLAYER_ID = ROSTER_IDS[1]; // Bob
     private static final int[] SWAP_WEAPONS = {4001, 4010, 4020, 4030};
 
+    // Chat notification demo (issue #222, phase 2): a party message from
+    // another roster member and a local/world message, matching the wire
+    // shape pinned via the Status panel's chat-probe diagnostic (PR #231,
+    // docs/overlay-main-process.md "Chat probe") - party senders carry
+    // recipient="*Party*" and objectId=-1 (they may not be in the local
+    // object space); local/world senders carry recipient="" and their own
+    // live entity id. `text` carries the uncensored message; `cleanText`
+    // simulates the profanity filter on a different word so a test can prove
+    // AlertEngine's keyword matching reads `text`, not `cleanText` (PRD §6).
+    // A third message is also emitted FROM the local player on the party
+    // channel (self-ignore demo - AlertEngine.ts's chat detector must ignore
+    // it by name, since a party sender's objectId is never the local
+    // player's real id either way).
+    private static final String PARTY_CHAT_SENDER_NAME = "Bob";
+    private static final String PARTY_CHAT_TEXT = "anyone want to help with the boss?";
+    private static final String PARTY_CHAT_CLEAN_TEXT = "anyone want to help with the ****?";
+    private static final int LOCAL_CHAT_SENDER_ID = ROSTER_IDS[2]; // Carol
+    private static final String LOCAL_CHAT_SENDER_NAME = "Carol";
+    private static final String LOCAL_CHAT_TEXT = "gl all";
+    private static final String LOCAL_PLAYER_NAME = "Alice";
+    private static final String SELF_PARTY_CHAT_TEXT = "on my way";
+    private static final int CHAT_CYCLE_TICKS = 20;
+
     // A transient player who joins then leaves on a cycle, so the roster is exercised
     // reacting to players LEAVING (UpdatePacket.drops), not only joining.
     private static final int TRANSIENT_ID = 5;
@@ -202,6 +240,17 @@ public class FakePacketSource {
     // here is whatever real shiny item happens to be lowest-numbered with
     // BagType 6 (no BagType-8 shiny items exist in the facts snapshot).
     private static final int SHINY_ITEM_TYPE = factsShinyItemType(6, 9400);
+    // A non-white/orange bag color (issue #217: bridge/LootBagTypes.java now
+    // covers every BagType, not just 6/8) - 7 chosen because its lowest-id
+    // facts item is objectType 283 "The Hive Key" (slotType 10), the exact
+    // example the widened-coverage feature was specced against. The Loot
+    // panel itself never shows this (LootTracker still tracks only [6, 8] by
+    // default), but the bridge envelope and a wide-set LootTracker instance
+    // (the future alert engine, issue #218) both need real non-6/8 traffic to
+    // exercise against headlessly - see lootBagDrop()'s variant 4.
+    private static final int WIDE_BAG_TYPE = 7;
+    private static final int WIDE_BAG_ICON_TYPE = factsEntityType(WIDE_BAG_TYPE, false, 9005);
+    private static final int WIDE_ITEM_TYPE = factsItemType(WIDE_BAG_TYPE, 9500);
 
     /** Lowest-id facts entity with this bagType/boosted flag, or {@code fallback} when no facts are bundled. */
     private static int factsEntityType(int bagType, boolean boosted, int fallback) {
@@ -229,7 +278,7 @@ public class FakePacketSource {
         assets.facts.AssetFacts.Item item = FACTS.items.get(String.valueOf(type));
         if (item == null) return;
         IdToAsset.registerFake(
-            type, "Equipment", item.bagType,
+            type, "Equipment", item.bagType, item.slotType,
             item.tier == null ? "" : item.tier,
             item.name,
             item.displayId != null ? item.displayId : item.name,
@@ -305,17 +354,19 @@ public class FakePacketSource {
             // exercises the same code path the real client does, boosted
             // variants included.
             FACTS.entities.forEach((key, entity) -> {
-                if (entity.bagType != 6 && entity.bagType != 8) return;
+                if (entity.bagType != 6 && entity.bagType != 8 && entity.bagType != WIDE_BAG_TYPE) return;
                 IdToAsset.registerFakeNamed(Integer.parseInt(key), entity.name, entity.clazz, -1);
             });
             registerFactsItem(ORANGE_ITEM_TYPE);
             registerFactsItem(FILLER_ITEM_TYPE);
             registerFactsItem(WHITE_ITEM_TYPE);
             registerFactsItem(SHINY_ITEM_TYPE);
+            registerFactsItem(WIDE_ITEM_TYPE);
         } else {
             IdToAsset.registerFake(WHITE_BAG_ICON_TYPE, "Bag", 6);
             IdToAsset.registerFake(ORANGE_BAG_ICON_TYPE, "Bag", 8);
             IdToAsset.registerFake(BOOSTED_WHITE_BAG_ICON_TYPE, "Bag", 6);
+            IdToAsset.registerFake(WIDE_BAG_ICON_TYPE, "Bag", WIDE_BAG_TYPE);
             IdToAsset.registerFake(ORANGE_ITEM_TYPE, "Equipment", 8);
             IdToAsset.registerFake(FILLER_ITEM_TYPE, "Equipment", 3);
             IdToAsset.registerFake(
@@ -329,6 +380,11 @@ public class FakePacketSource {
                 SHINY_ITEM_TYPE, "Equipment", 6, "13",
                 "Fake Blade of Testing Shiny", "Fake Blade of Testing",
                 "A synthetic shiny loot item seeded by --fake mode for the shiny-badge demo."
+            );
+            IdToAsset.registerFake(
+                WIDE_ITEM_TYPE, "Equipment", WIDE_BAG_TYPE, 10, "",
+                "", "Fake Hive Key",
+                "A synthetic non-white/orange loot item seeded by --fake mode for the all-color coverage demo."
             );
         }
         IdToAsset.registerFake(
@@ -426,6 +482,28 @@ public class FakePacketSource {
             // Loot panel logs it as a DROP - no pickup required. See lootBagDrop().
             if (tick > 0 && tick % LOOT_CYCLE_TICKS == 0) {
                 Register.INSTANCE.emitPacketLogs(lootBagDrop(tick / LOOT_CYCLE_TICKS));
+            }
+            // Chat notification demo (issue #222) - three distinct TextPackets on a
+            // cycle: a party message from another player (should fire partyChat), a
+            // local/world message from another player (should never fire it,
+            // wrong channel), and a party message FROM the local player (should
+            // never fire it, self-ignore) - see the constants' doc comment above.
+            int chatOffset = tick % CHAT_CYCLE_TICKS;
+            if (chatOffset == 3) {
+                Register.INSTANCE.emitPacketLogs(chatMessage(
+                    "*Party*", -1, PARTY_CHAT_SENDER_NAME, (short) 5, 0,
+                    PARTY_CHAT_TEXT, PARTY_CHAT_CLEAN_TEXT
+                ));
+            } else if (chatOffset == 7) {
+                Register.INSTANCE.emitPacketLogs(chatMessage(
+                    "", LOCAL_CHAT_SENDER_ID, LOCAL_CHAT_SENDER_NAME, (short) 0, 0,
+                    LOCAL_CHAT_TEXT, LOCAL_CHAT_TEXT
+                ));
+            } else if (chatOffset == 11) {
+                Register.INSTANCE.emitPacketLogs(chatMessage(
+                    "*Party*", -1, LOCAL_PLAYER_NAME, (short) 5, 0,
+                    SELF_PARTY_CHAT_TEXT, SELF_PARTY_CHAT_TEXT
+                ));
             }
             // A NewTickPacket every tick, like a real client. It carries the
             // server clock the DPS engine uses as its time base - without it the
@@ -564,6 +642,31 @@ public class FakePacketSource {
         return p;
     }
 
+    /**
+     * A chat message (issue #222, phase 2) matching the wire shape pinned via
+     * the Status panel's chat-probe diagnostic (docs/overlay-main-process.md
+     * "Chat probe"). `text`/`cleanText` are populated independently - a real
+     * client's `cleanText` is the profanity-filtered variant of `text` (see
+     * the class doc comment for why the fake data deliberately differs
+     * between the two).
+     */
+    private TextPacket chatMessage(
+        String recipient, int objectId, String name, short numStars, int starBackground,
+        String text, String cleanText
+    ) {
+        TextPacket p = new TextPacket();
+        p.name = name;
+        p.objectId = objectId;
+        p.numStars = numStars;
+        p.bubbleTime = 10;
+        p.recipient = recipient;
+        p.text = text;
+        p.cleanText = cleanText;
+        p.isSupporter = false;
+        p.starBackground = starBackground;
+        return p;
+    }
+
     /** Establishes that PET_ID is a summon owned by the local player. */
     private ServerPlayerShootPacket petOwnership() {
         ServerPlayerShootPacket p = new ServerPlayerShootPacket();
@@ -630,18 +733,24 @@ public class FakePacketSource {
      * the white bag pairs an enchanted white item with an off-tier filler
      * that must NOT be listed (proving per-item filtering), the orange bag
      * carries a more-enchanted orange item, the boosted bag proves both the
-     * boosted entity's detection and a zero-enchant item, and the shiny-white
+     * boosted entity's detection and a zero-enchant item, the shiny-white
      * bag drops {@link #SHINY_ITEM_TYPE} - a real facts item whose raw id name
      * keeps its " Shiny" suffix (see {@link #registerFactsItem(int)}, checked
      * via {@link IdToAsset#isShiny}) - so the renderer's shiny-badge detection
-     * (issue #193/#215) is exercised with no game installed. The previous bag
-     * is despawned ({@link UpdatePacket}.drops) so bags don't pile up in view.
+     * (issue #193/#215) is exercised with no game installed, and (issue #217)
+     * a bag of {@link #WIDE_BAG_TYPE} (7, not 6/8) drops a fully-enchanted
+     * (4 filled slots) {@link #WIDE_ITEM_TYPE} - the Loot panel never shows
+     * this one ({@code LootTracker}'s default tracked set stays [6, 8]), but
+     * it proves the bridge's widened `lootBagTypes` envelope carries real
+     * non-6/8 traffic (bagTypeTable/itemNames/lootBagObjectTypes/slotTypes)
+     * end-to-end with no game installed. The previous bag is despawned
+     * ({@link UpdatePacket}.drops) so bags don't pile up in view.
      */
     private UpdatePacket lootBagDrop(int cycle) {
         int bagObjectType;
         int[] items;
         int[] enchantCounts;
-        int variant = cycle % 4;
+        int variant = cycle % 5;
         if (variant == 1) {
             bagObjectType = ORANGE_BAG_ICON_TYPE;
             items = new int[]{ORANGE_ITEM_TYPE};
@@ -654,6 +763,10 @@ public class FakePacketSource {
             bagObjectType = WHITE_BAG_ICON_TYPE;
             items = new int[]{SHINY_ITEM_TYPE};
             enchantCounts = new int[]{1};
+        } else if (variant == 4) {
+            bagObjectType = WIDE_BAG_ICON_TYPE;
+            items = new int[]{WIDE_ITEM_TYPE};
+            enchantCounts = new int[]{4};
         } else {
             bagObjectType = WHITE_BAG_ICON_TYPE;
             items = new int[]{WHITE_ITEM_TYPE, FILLER_ITEM_TYPE};

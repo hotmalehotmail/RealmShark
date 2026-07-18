@@ -116,9 +116,10 @@ Tracing one incoming packet (say a `DamagePacket`) from wire to render:
  flush(): drainTo(list) → join into {"batch":[ … ]} → server.send(...)
    │                                                  PacketBridge.java:197
    ▼   (a 50 ms-polling timer also enqueues a `dps` snapshot when dpsDirty,
-   ▼    else on a 250 ms heartbeat; a 2 s poll also (re-)enqueues `lootBagTypes`
-   ▼    / `itemInfo` once IdToAsset is loaded, and `enchantNames` unconditionally
-   ▼    — see bridge-server.md)
+   ▼    else on a 250 ms heartbeat; a 2 s poll enqueues `lootBagTypes` /
+   ▼    `itemInfo` / `enchantNames` ONLY when a table's version key changed —
+   ▼    ready-transition or re-extraction; new clients get the tables on
+   ▼    connect instead (issue #239) — see bridge-server.md)
  BridgeServer.broadcast(json)  ──►  WebSocket 127.0.0.1:47474
  ── TIER 3: Electron main process ───────────────────────────────────────────
    ▼
@@ -302,12 +303,17 @@ damage is already folded into the owning player by the engine. `null` is returne
 `DpsBroadcaster.java:130-153` are the protocol; consumed at `DpsTracker.ts:101`.
 The engine internals are [dps-engine.md](dps-engine.md).
 
-### 4f. `lootBagTypes` envelope (inside a batch) — synthetic, re-sent periodically
+### 4f. `lootBagTypes` envelope (inside a batch) — synthetic, versioned, edge-triggered
 
-Resolves which item ids are BagType 6 (white bag) / 8 (orange/ST bag) — the
-Loot panel's session log (issue #105) — from the same extracted asset data
-`ObjectNames` reads, independent of the sprite pack's atlas-readiness gate
-(this data needs no atlas, only `IdToAsset`; see `asset-pipeline.md`):
+Resolves which item ids are loot items and which are ground-bag entities, for
+**every BagType present in the loaded assets** (issue #217 widened this from
+the original BagType 6/white or 8/orange-only scope) — feeding both the Loot
+panel's session log (issue #105, which still only tracks 6/8 via
+`LootTracker`'s default constructor argument) and the notification system's
+all-color rules (`docs/prd-notifications.md` §2) — from the same extracted
+asset data `ObjectNames` reads, independent of the sprite pack's
+atlas-readiness gate (this data needs no atlas, only `IdToAsset`; see
+`asset-pipeline.md`):
 
 ```json
 {
@@ -315,47 +321,67 @@ Loot panel's session log (issue #105) — from the same extracted asset data
   "direction": "internal",
   "time": 1720000000000,
   "data": {
+    "metaVersion": "oc12345",
     "bagTypeTable": { "<itemObjectType>": 6 },
     "lootBagIcons": { "6": <bagObjectType>, "8": <bagObjectType> },
     "lootBagObjectTypes": { "<bagObjectType>": 6, "<bagObjectType>": 8 },
     "itemNames": { "<itemObjectType>": "<display name>" },
-    "shinyItemTypes": [ <itemObjectType>, ... ]
+    "shinyItemTypes": [ <itemObjectType>, ... ],
+    "slotTypes": { "<itemObjectType>": <slotType> }
   }
 }
 ```
 
-`bagTypeTable` maps a **string** item objectType to its BagType (only 6/8
-entries — untracked BagTypes are omitted, and the ground-bag entities
+`bagTypeTable` maps a **string** item objectType to its BagType (every BagType
+present in the loaded assets, not just 6/8 — the ground-bag entities
 themselves, `Class=Bag`, are excluded so they can't be mistaken for
 pickupable items). `lootBagObjectTypes` is the complement: every `Class=Bag`
-**entity** objectType for the tracked colors (regular *and* boosted variants),
-mapped to its BagType — the set the Loot panel's drop tracker watches for in
+**entity** objectType for every color (regular *and* boosted variants),
+mapped to its BagType — the set a drop tracker watches for in
 `UpdatePacket.newObjects` to read a dropped bag's contents (its
 `INVENTORY_0..7` items + `UNIQUE_DATA_STRING` enchants). This always includes
-each tracked color's `findBagIconObjectType` result too (soak #144) — on real
-assets the `Class=Bag`+own-`BagType` scan alone finds nothing (soak #113), so
-without this fallback the drop tracker had no entity to watch for at all.
-`lootBagIcons` is a
-single representative bag entity per color — the sprite the Loot panel renders
-as a category header, resolved through the same `objectType → atlas rect` path
-as any other sprite (`sprites/Sprite.tsx`, no special-casing). `itemNames` is
-`IdToAsset.objectName` for the tracked items (the always-visible inline label).
-`shinyItemTypes` (issue #215) is a **separate** list of shiny item objectTypes
-from `IdToAsset.isShiny` — deliberately not derived from `itemNames`, since a
-real shiny item's `objectName` result is usually its shared, suffix-stripped
-display name (see `asset-pipeline.md`'s `LootBagTypes` bullet). Built by
-`LootBagTypes.envelopeJson()` (`bridge/LootBagTypes.java`).
+each of `TRACKED_BAG_TYPES`' (6/8 only) `findBagIconObjectType` result too
+(soak #144) — on real assets the `Class=Bag`+own-`BagType` scan alone finds
+nothing (soak #113), so without this fallback the drop tracker had no entity
+to watch for at all. `lootBagIcons` is a single representative bag entity per
+**tracked** (6/8 only — the Loot panel's own category-header colors,
+deliberately unaffected by the widening above) color — the sprite the Loot
+panel renders as a category header, resolved through the same
+`objectType → atlas rect` path as any other sprite (`sprites/Sprite.tsx`, no
+special-casing). `itemNames` is `IdToAsset.objectName` for every item in
+`bagTypeTable` (the always-visible inline label). `shinyItemTypes` (issue
+#215) is a **separate** list of shiny item objectTypes from
+`IdToAsset.isShiny` — deliberately not derived from `itemNames`, since a real
+shiny item's `objectName` result is usually its shared, suffix-stripped
+display name (see `asset-pipeline.md`'s `LootBagTypes` bullet). `slotTypes`
+(issue #217) is `IdToAsset.getSlotType` (the item's equipment-category enum,
+e.g. objectType 283 "The Hive Key" → `10`) for every item in `bagTypeTable` —
+feeds the notification system's per-category enchant-threshold overrides
+(`docs/prd-notifications.md` §3). Built by `LootBagTypes.envelopeJson()`
+(`bridge/LootBagTypes.java`).
 
-**Unlike the sprite pack (one-shot broadcast), this is re-sent on every 2 s
-readiness poll** once `IdToAsset.loadedObjectCount() > 1`
-(`PacketBridge.maybeBroadcastLootBagTypes`) rather than latched to a single
-broadcast — the payload is tiny (two small id maps), and re-sending is the
-simplest way to guarantee a client that connects *after* the first broadcast
-still receives it, with no separate request/response message needed (unlike
-`spritePackRequest` below). Consumed at `LootTracker.ingest`
+**Delivery contract (issue #239): metadata tables are edge-triggered and
+versioned, never periodic.** `data.metaVersion` is the content-version key
+(derived from `IdToAsset.loadedObjectCount()`, the same signal that keys the
+bridge-side JSON cache), and the envelope is sent on exactly three edges —
+per-client on connection open once ready (`BridgeServer`'s connect listener →
+`PacketBridge.sendMetadataTo`), broadcast on the not-ready → ready transition,
+and broadcast on a content change (re-extraction), the latter two detected by
+`PacketBridge.maybeBroadcastMetadata`'s 2 s *poll* comparing `version()`
+against the last version broadcast (the poll itself never sends when nothing
+changed). This replaced an earlier re-send-every-poll design whose "the
+payload is tiny" rationale silently expired when issue #217 widened the table
+to all bag colors (~630 KB — issue #239's rhythmic overlay-wide hitch).
+Consumers skip a same-`metaVersion` re-delivery (a WS reconnect legitimately
+redelivers) instead of rebuilding their tables. One hop up, the Electron main
+process keeps the latest envelope per metadata type and re-sends them over
+the ordinary `packet-batch` IPC on `IPC.replayMetadata` — the same late-joiner
+treatment for *renderer subscribers* that the connect listener gives late
+*socket connections* (issue #245; see `docs/overlay-main-process.md`
+"Metadata replay"). Consumed at `LootTracker.ingest`
 (`overlay/src/renderer/src/loot/LootTracker.ts`).
 
-### 4g. `itemInfo` envelope (inside a batch) — synthetic, re-sent periodically
+### 4g. `itemInfo` envelope (inside a batch) — synthetic, versioned, edge-triggered
 
 Item metadata for the overlay's item hover tooltip (`ItemSprite` - issue
 #109): display name, tier, class, description, and weapon damage range per
@@ -369,6 +395,7 @@ extraction):
   "direction": "internal",
   "time": 1720000000000,
   "data": {
+    "metaVersion": "oc12345",
     "names": { "<objectType>": "<display name>" },
     "tiers": { "<objectType>": "<tier>" },
     "classes": { "<objectType>": "<asset Class>" },
@@ -384,13 +411,15 @@ a non-empty value for that field - a missing key means "unresolved", not
 "empty string"/"zero". `minDamage`/`maxDamage` are present only for objectTypes
 with projectile data at all (weapons), read from `IdToAsset`'s existing
 projectile getters, slot 0. Built by `ItemInfo.envelopeJson()`
-(`bridge/ItemInfo.java`), cached the same way as `lootBagTypes` and re-sent on
-the same 2 s readiness poll once `IdToAsset.loadedObjectCount() > 1`
-(`PacketBridge.maybeBroadcastItemInfo`) - same "tiny payload, simplest way to
-reach a late-connecting client" rationale as `lootBagTypes` (4f). Consumed by
-`ItemInfoProvider` (`overlay/src/renderer/src/items/ItemInfoProvider.tsx`).
+(`bridge/ItemInfo.java`), cached and `metaVersion`-stamped the same way as
+`lootBagTypes`, and delivered under the same edge-triggered contract (4f:
+on-connect / ready-transition / content-change, via
+`PacketBridge.maybeBroadcastMetadata` + `sendMetadataTo` — issue #239).
+Consumed by `ItemInfoProvider`
+(`overlay/src/renderer/src/items/ItemInfoProvider.tsx`), which skips a
+same-`metaVersion` re-delivery before its context-value state bump.
 
-### 4h. `enchantNames` envelope (inside a batch) — synthetic, re-sent periodically
+### 4h. `enchantNames` envelope (inside a batch) — synthetic, versioned, edge-triggered
 
 Enchant id → display name, for the item tooltip's enchantment list on an
 equipped item (issue #109):
@@ -401,6 +430,7 @@ equipped item (issue #109):
   "direction": "internal",
   "time": 1720000000000,
   "data": {
+    "metaVersion": "ec123",
     "names": { "<enchantId>": "<display name>" }
   }
 }
@@ -420,8 +450,10 @@ background extraction thread has finished writing that file - the same race
 and `EnchantNames.envelopeJson()` tracks `ENCHANTS.size()` (like `itemInfo`/
 `lootBagTypes` track `loadedObjectCount()`) to rebuild its cached envelope
 when a reload changes it, both under `ParseEnchants.class`'s lock so a reload
-can't race the envelope build's read of the map. Still re-sent on the same
-2 s poll as `itemInfo`/`lootBagTypes` (no separate request/response). Consumed
+can't race the envelope build's read of the map. That same size is its
+`metaVersion` (`"ec<size>"`), so the post-reload table lands via the ordinary
+content-change edge of the delivery contract in 4f (issue #239) — no
+readiness gate, no periodic re-send, no separate request/response. Consumed
 by `ItemInfoProvider`, same as `itemInfo`.
 
 The *item's* enchant data itself is not a separate envelope - `UNIQUE_DATA_STRING`
@@ -493,9 +525,9 @@ re-asking. The client handles a top-level `spritePack` message
 | packet envelope | S→C | inside `batch` | `PacketSerializer` |
 | `objectNames` | S→C | inside `batch` | `ObjectNames` |
 | `dps` | S→C | inside `batch` | `DpsBroadcaster` |
-| `lootBagTypes` | S→C | inside `batch`, re-sent every 2s poll | `LootBagTypes` |
-| `itemInfo` | S→C | inside `batch`, re-sent every 2s poll | `ItemInfo` |
-| `enchantNames` | S→C | inside `batch`, re-sent every 2s poll | `EnchantNames` |
+| `lootBagTypes` | S→C | inside `batch`, edge-triggered + versioned (on-connect / ready / change — #239) | `LootBagTypes` |
+| `itemInfo` | S→C | inside `batch`, edge-triggered + versioned (on-connect / ready / change — #239) | `ItemInfo` |
+| `enchantNames` | S→C | inside `batch`, edge-triggered + versioned (on-connect / ready / change — #239) | `EnchantNames` |
 | `spritePackRequest` | C→S | top-level | `spritePack.ts` |
 | `spritePack` | S→C | top-level (reply or broadcast) | `SpritePackService` |
 

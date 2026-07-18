@@ -24,11 +24,12 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/DpsList.tsx` | Presentational DPS rows (target + per-attacker list). |
 | `overlay/src/renderer/src/env.d.ts` | Vite client types only. |
 | `overlay/src/renderer/src/panels/PanelCanvas.tsx` | Owns the panel array, layout load/save, drag/size/pin/z-order dispatch, programmatic open/close. |
-| `overlay/src/renderer/src/panels/PanelFrame.tsx` | One panel's chrome: title bar, drag, size/pin/close buttons, visibility. |
+| `overlay/src/renderer/src/panels/PanelFrame.tsx` | One panel's chrome: title bar, drag, size/pin/close/settings-gear buttons, visibility. |
 | `overlay/src/renderer/src/panels/panelSpawn.ts` | `PanelSpawnContext` / `usePanelSpawn()` - lets a panel body open/close another panel on the canvas (§2's "Programmatic panel spawn/close"). |
 | `overlay/src/renderer/src/panels/anchor.ts` | Percentage-anchor ↔ pixel math (`panelStyle`, `anchorFromPointer`). |
-| `overlay/src/renderer/src/panels/registry.ts` | `type → { title, per-size px dims, component, closable? }` and `PanelContentProps`. |
-| `overlay/src/renderer/src/panels/{Status,Dps,Console,Character,Instance,DpsSummary,DpsDetail,Loot}Panel.tsx` | The eight panel bodies. |
+| `overlay/src/renderer/src/panels/registry.ts` | `type → { title, per-size px dims, component, closable?, settings? }`, `PanelContentProps`, and `PanelSettingsProps` (§2's "Per-panel settings gear", issue #221). |
+| `overlay/src/renderer/src/panels/panelLayout.ts` | `defaultLayout()`/`mergeWithDefaults()`/`isPersistablePanel()` - split out of `PanelCanvas.tsx` (a component file can't also export plain functions - `react-refresh/only-export-components`), same rationale as `dps/dpsDetailContext.ts`. |
+| `overlay/src/renderer/src/panels/{Status,Dps,Console,Character,Instance,DpsSummary,DpsDetail,Loot,Notifications}Panel.tsx` | The nine panel bodies. |
 | `overlay/src/renderer/src/ui/*.tsx` | Shared UI primitives (`Button`, `EmptyState`, `Swatch`, `GearRow`, `MeterRow`, `StatRow`, `Tooltip`) — see `overlay-ui-style.md`. |
 | `overlay/src/renderer/src/ui/interactiveContext.ts` | `InteractiveContext` / `useInteractive()` - the click-through-mode flag, for `Tooltip` (§4.2). |
 | `overlay/src/renderer/src/assets/main.css` | Tailwind entry + the `@theme` design-token block — see `overlay-ui-style.md`. |
@@ -50,10 +51,21 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/dps/dpsDetailContext.ts` | `DpsDetailSelectionContext` / `useDpsDetailSelection()` - the selected `DpsHistoryEntry` the `dpsDetail` panel renders (§2's "Programmatic panel spawn/close"). |
 | `overlay/src/renderer/src/dps/DpsDetailSelectionProvider.tsx` | Owns the selection state for the context above; mounted once in `App`. |
 | `overlay/src/renderer/src/dps/types.ts` | Packet-field shapes the tracker reads. |
-| `overlay/src/renderer/src/loot/LootTracker.ts` | Framework-agnostic class ingesting packets → a session-scoped log of white/orange bags that dropped near the player, incl. per-item enchants (§7). |
+| `overlay/src/renderer/src/loot/LootTracker.ts` | Framework-agnostic class ingesting packets → a session-scoped log of bags that dropped near the player (tracked-bag-type set is a constructor parameter, default `[6, 8]`), incl. per-item enchants + `onEntry` subscription (§7). |
 | `overlay/src/renderer/src/loot/useLootTracker.ts` | React hook wrapping `LootTracker` (event-driven on `onPacketBatch`, re-renders only when `ingest` reports a change). |
 | `overlay/src/renderer/src/loot/types.ts` | Packet-field shapes the loot tracker reads, incl. the synthetic `lootBagTypes` envelope. |
 | `overlay/src/renderer/src/harness/*` | The browser renderer harness (no Electron) - dev-flag-gated, out of the production bundle. See `docs/overlay-harness.md`. |
+| `overlay/src/renderer/src/alerts/AlertEngine.ts` | Framework-agnostic notification engine (issue #218) - owns a wide (all-color) `LootTracker`, dispatches matched events into `store`. See `docs/notifications.md`. |
+| `overlay/src/renderer/src/alerts/{types,catalog,dispatcher,store}.ts` | The engine's React-free core: event/rule types, the `whiteBag`/`orangeBag`/`enchantedDrop` catalog, multi-match dispatch, the bounded fired-alert log. |
+| `overlay/src/renderer/src/alerts/useAlertEngine.ts` | React hook mounting one `AlertEngine` at App level (§8), wiring packet/settings/detach IPC. |
+| `overlay/src/renderer/src/alerts/slotTypeNames.ts` | SlotType id → display name, empirically derived from the facts file. |
+| `overlay/src/renderer/src/alerts/alertStoreContext.ts` | `AlertStoreContext`/`useAlertStore()` (issue #220) - exposes `AlertEngine.store` to panels mounted under `PanelCanvas`, with no direct parent/child relationship to `App.tsx`. |
+| `overlay/src/renderer/src/alerts/AlertSettings.tsx` | `NotificationsSettingsView` (issue #221) - the Notifications panel's `PanelSpec.settings` component; the per-panel gear's first user. See `docs/notifications.md`. |
+| `overlay/src/renderer/src/alerts/settingsRows.ts` | `buildRuleRows()` - React-free: one row per catalog entry, resolved settings included, for `AlertSettings.tsx` to map over. |
+| `overlay/src/renderer/src/alerts/paramsEditors.ts` | `PARAMS_EDITORS` - UI-side `kindId → ComponentType` registry (only imports pre-built editor components itself, same `react-refresh/only-export-components` rationale as `registry.ts`). |
+| `overlay/src/renderer/src/alerts/paramsEditorTypes.ts` | `ParamsEditorProps` - shared type only, so `paramsEditors.ts` and an editor component need no value import from each other. |
+| `overlay/src/renderer/src/alerts/EnchantedDropParamsEditor.tsx` | `enchantedDrop`'s params editor (tier + SlotType-category + item-name override rows) - registered in `paramsEditors.ts`. |
+| `overlay/src/renderer/src/alerts/useItemNameCatalog.ts` | Every distinct name from the bridge's `lootBagTypes` envelope, for the item-name-override autocomplete - a standalone subscription, not routed through `AlertEngine`. Mounts late (with the settings view), so it requests `replayMetadata()` on mount (issue #245). |
 
 ---
 
@@ -390,11 +402,61 @@ mechanism any future panel can reuse, not a DPS-specific hack:
   would otherwise just show its "No session selected" empty state instead of
   real per-enemy/per-player content.
 
+### Per-panel settings gear (issue #221)
+
+A second small generic mechanism alongside spawn/close above, for the
+opposite direction: instead of one panel opening *another*, a panel flips
+its *own* body in place to a settings view. `docs/prd-notifications.md` §5
+introduced it as a cross-cutting mechanism (future users: the Loot panel's
+bag-type filter, the DPS panel's column config), with the Notifications
+panel's settings view (`docs/notifications.md`) as its first, proving user.
+
+- **`registry.ts`'s `settings?: ComponentType<PanelSettingsProps>`** on
+  `PanelSpec`, alongside `component`. `PanelSettingsProps` is `{ onDone: ()
+  => void }` — no `size`, unlike `PanelContentProps`: a settings form is read
+  top-to-bottom, not glanced at, so it doesn't scale its own content by
+  preset the way a content body does. Omitting `settings` (every panel but
+  `notifications` today) means no gear at all — there is no separate
+  opt-out flag to forget.
+- **`PanelFrame.tsx`** renders a gear button in the title bar (interactive
+  mode only, alongside pin/size/close) iff `spec.settings` is set, and holds
+  one frame-local `showSettings` boolean (`useState`, not lifted to
+  `PanelCanvas` — this is purely this panel's own display mode, nothing else
+  needs to know). Clicking the gear toggles it; the body then renders
+  `<spec.settings onDone={() => setShowSettings(false)}/>` in place of
+  `<spec.component size={panel.size}/>` when true. The settings view can
+  additionally call `onDone` itself (e.g. a "Done" button at the bottom of
+  its own form) to flip back without requiring the user to find the gear
+  again — both paths land on the same toggle. `showSettings` persists across
+  an `interactive` toggle exactly like `pinned`/`size` do (§2 above: panels
+  keep their live state across toggles) — the gear itself is only reachable
+  while interactive, so a stale `true` value can only mean the user
+  themselves last left the panel flipped open.
+- **Dragging/pin/size/close all keep working while flipped** — flipping only
+  swaps which component renders inside the content wrapper; none of
+  `PanelFrame`'s chrome (title bar, drag handling, the size-cycle/pin/close
+  buttons) is aware of `showSettings` at all.
+- **A settings view owns its own storage.** Unlike `PanelContentProps`
+  consumers, which read live data via `window.overlay.on…`/shared contexts,
+  a settings view is expected to read *and write* — `NotificationsSettingsView`
+  (`docs/notifications.md`) is the reference implementation: it loads via
+  `getSettings()`, edits its own slice of `OverlaySettings`, and saves
+  (debounced) via `saveSettings()` on every change — no new IPC surface, no
+  Save button (PRD §5 "apply on change").
+- **The harness (`harness/PanelMount.tsx`, `harness/mount.tsx`)** gained a
+  `&settings=1` query flag mirroring the gear flip statically: it renders
+  `spec.settings` (with a no-op `onDone`, since there's no click to simulate
+  in a frozen shot) instead of `spec.component`. `npm run shots`
+  (`docs/overlay-harness.md`) picks this up automatically for any panel type
+  whose `spec.settings` is defined, alongside its normal per-panel loop —
+  `<type>-<size>-settings.png`, with the same below-the-fold `-full` variant
+  treatment as ordinary panel content.
+
 ---
 
 ## 3. The panels
 
-All eight bodies are thin; the data lives in the shared services. `size` maps
+All nine bodies are thin; the data lives in the shared services. `size` maps
 to per-panel scale tables at the top of each file. Every gear/loot icon below
 renders through `ItemSprite`, not `Sprite` directly, so it's hoverable for the
 item tooltip (§4.2) with no per-panel wiring.
@@ -409,17 +471,22 @@ item tooltip (§4.2) with no per-panel wiring.
 | `DpsSummaryPanel` | "DPS Summary" | `useDpsHistory()` | A master list only: retained past instances (icon + name + a "You: Xdmg (#rank)" headline). Clicking a row opens that instance's breakdown in the separate `dpsDetail` panel below rather than swapping this panel's own content — see §2's "Programmatic panel spawn/close" and §5.1. |
 | `DpsDetailPanel` | "DPS Detail" | `useDpsDetailSelection()` | The large, closable, independently draggable/resizable panel `DpsSummaryPanel` opens on row click (issue #194): the selected instance's enemies ranked by total damage, expandable to a frozen per-player breakdown (gear/dyes/enchants). A single reused panel instance re-targeted on each new selection, not one spawned per session. Renders "No session selected" if opened with nothing selected (shouldn't happen via the normal row-click path). See §2, §5.1. |
 | `LootPanel` | "Loot" | `useLootTracker()` | Session log of white/orange bags (BagType 6/8) that dropped near the player, both always shown under their own bag sprite + count (no text label), with per-item rarity border + shiny badge + enchant tooltip, chronological (not de-duplicated). See §7. |
+| `NotificationsPanel` | "Notifications" | `useAlertStore()` | Session log of fired alerts (issue #220), newest first: time, payload icon (`ItemSprite`, when set), title/body, matched catalog kind ids (hidden at `sm`). A pure viewer over the same `FiredAlertStore` `AlertToastHost` reads - see §8/`docs/notifications.md`. The only panel with a settings gear today (issue #221, `AlertSettings.tsx` - §2's "Per-panel settings gear"). |
 
 **StatusPanel** (`panels/StatusPanel.tsx`) is the only panel wired straight to
 the IPC surface rather than a shared service. It subscribes to `onBridgeStatus`,
 `onPacketBatch` (just to count: `packetCount += packets.length`, `StatusPanel.tsx:42-45`),
 `onUpdateAvailable`, and `onUpdateProgress`, and polls `performance.memory`
 (a non-standard Chrome/Electron field, guarded, `StatusPanel.tsx:14-22`) every
-1 s. It also hosts the updater UI (Check / Update & restart), plus "Report bug"
-and "Capture now" (`build-and-release.md`). Content beyond the header is gated
+1 s. It also hosts the updater UI (Check / Update & restart), plus "Report bug",
+"Capture now" (`build-and-release.md`), and "Chat probe" — the toggle for the
+local chat/party wire-shape diagnostic (`docs/overlay-main-process.md` "Chat
+probe"; renders amber with a live captured-count while armed, polled via
+`getChatProbeStatus` once per second only in that state). Content beyond the
+header is gated
 on `size !== 'sm'`, and the last-packet line only on `size === 'lg'` — `sm`
 (160×50) stays a bare status glance with no actions at all, by design (#179).
-At `md`/`lg` the three actions render as a single row of compact (`size="xs"`)
+At `md`/`lg` the actions render as a single row of compact (`size="xs"`)
 buttons **pinned to the panel's bottom edge** (`mt-auto`) so they're always
 reachable without scrolling, regardless of how much info renders above them;
 their status feedback shares one `actionMsg` line below the row instead of a
@@ -1221,7 +1288,13 @@ is the bag itself.) Categorization is entirely asset-derived (no
 hand-maintained item list): see [asset-pipeline.md](asset-pipeline.md)'s
 "BagType — loot categorization" section for how `<BagType>` is extracted and
 shipped as the bridge's synthetic `lootBagTypes` envelope, and
-[bridge-server.md](bridge-server.md) §6 for the broadcast mechanics.
+[bridge-server.md](bridge-server.md) §6 for the broadcast mechanics. The
+underlying `LootTracker` class is more general than the panel: the envelope
+itself carries every BagType present in the loaded assets (issue #217), and
+`LootTracker`'s tracked-bag-type set is a constructor parameter — the Loot
+panel just happens to construct one with the narrow `[6, 8]` default. The
+notification system (`docs/prd-notifications.md` §2) is the other consumer,
+constructing its own wide (all-color) instance.
 
 ### `LootTracker` (`loot/LootTracker.ts`)
 
@@ -1229,6 +1302,18 @@ A framework-agnostic class (no React, same shape as `DpsTracker`) ingesting
 `PacketEnvelope[]` independently of every other tracker. It mirrors the
 upstream `tomato` overlay's `DungeonStatData.updateItems`, which reads a loot
 bag container's 8 item slots the same way.
+
+**Tracked-bag-type set (issue #217).** The constructor takes an optional
+`trackedBagTypes: readonly number[]`, defaulting to `TRACKED_BAG_TYPES`
+(`[6, 8]`) — only entries whose BagType is in that set are kept from
+`bagTypeTable`/`lootBagIcons`/`lootBagObjectTypes` when a `lootBagTypes`
+envelope is ingested; everything else is silently dropped, same as before
+this widening for the default two-color instance. `useLootTracker()` (the
+Loot panel's hook) still constructs a default instance, so the panel's
+tracked set and displayed behavior are unchanged. `LootEntry` gained a
+`slotType` field (from the envelope's `slotTypes` map, `0` when
+unresolved) — the notification system's per-category enchant-threshold rules
+key off it.
 
 **Detecting a bag.** The `lootBagTypes` envelope carries `lootBagObjectTypes` —
 every loot-bag *entity* objectType for the tracked colors (regular *and*
@@ -1271,16 +1356,35 @@ delta carries no objectType, so a bag is only recognized there once
 `newObjects` has introduced its id) — re-sends the same contents; each
 `(bagObjectId, slot)` is logged once. The log is chronological, not a
 de-duplicated set, so two identical drops in one session both appear. A
-`UpdatePacket.drops` id removes that bag's in-view bookkeeping.
+`UpdatePacket.drops` id removes that bag's in-view bookkeeping (`bagsInView`,
+so a later `NewTickPacket` delta for it is ignored until `newObjects`
+re-introduces it) but deliberately **not** its logged-slot record
+(`loggedBagSlots`) — that persists until `resetPerInstance()`/a map change.
+A stationary ground bag sends its own id through `drops` whenever it merely
+leaves the client's render range (the player walks away), not only when it's
+destroyed/emptied; clearing `loggedBagSlots` there too (soak #237) meant
+walking back into range re-logged — and re-notified for — the exact same
+slots each time.
+
+**`onEntry` subscription (issue #217).** `onEntry(listener)` registers a
+callback invoked exactly once per newly-logged entry (returns an unsubscribe
+function). It fires from the same push inside `processBagSlots` that both the
+live `newObjects`/`NewTickPacket` path and the `pendingNewObjects` startup-race
+replay above go through, so a listener sees every entry exactly once
+regardless of which path logged it — no separate wiring needed for the replay
+case. This is what lets a caller (the notification system's alert engine,
+issue #218) see each drop as a discrete event instead of diffing `entries`
+itself; the Loot panel doesn't use it (`useLootTracker` still re-renders off
+`ingest()`'s return value).
 
 **Session-scoped, mirroring `DpsTracker`'s retained history (§5.1).** `entries`
 (the log itself) persists across `MapInfoPacket` and is cleared only by
 `reset()` (overlay detach / game close). `MapInfoPacket` calls
 `resetPerInstance()` (forgets the in-view bags + their logged slots — bags are
 per-instance), never touching `entries`. `bagTypeTable`/`lootBagIcons`/
-`bagEntityTypes`/`itemNames`/`shinyItemTypes` (asset-derived categorization)
-are never cleared by either reset — like the sprite pack, they're
-app-lifetime data.
+`bagEntityTypes`/`itemNames`/`shinyItemTypes`/`slotTypes` (asset-derived
+categorization) are never cleared by either reset — like the sprite pack,
+they're app-lifetime data.
 
 ### `useLootTracker` (`loot/useLootTracker.ts`)
 
@@ -1311,6 +1415,70 @@ the sprite's own box — aren't clipped by the container edge (issue #193; with
 no inset, `overflow-y-auto` clips exactly at the content edge). Sized/registered via the standard checklist
 (§2): `registry.ts`'s `loot` entry, a default-layout instance in
 `PanelCanvas.tsx`.
+
+---
+
+## 8. Notification system (issues #218-#221)
+
+`useAlertEngine()` mounts one `AlertEngine` instance in `App.tsx` (called
+unconditionally near the top of the component, alongside the other
+App-level effects) — unlike every per-panel tracker (`useLootTracker`,
+`useDpsHistory`), this one is a **singleton at App level**, because its side
+effects (a banner, a ping sound) must fire even when no panel is open. Its
+`ingest`/`reset` are wired to the same `onPacketBatch`/`onOverlayDetach`
+events every tracker uses, plus `getSettings`/`onSettingsChanged` so a live
+settings change applies without an engine restart; the hook returns both the
+engine and the live `notifications.volume` (issue #219), which `App.tsx`
+forwards to `AlertToastHost`.
+
+`AlertEngine` owns a **second, private** `LootTracker` instance — not the one
+`useLootTracker()` creates for the Loot panel — constructed with a wide
+static superset of BagType ids so it sees a drop in any bag color, not just
+white/orange (§7's "the notification system is the other consumer" note).
+Each new entry (`onEntry`, issue #217) becomes a `loot-drop` `GameEvent`,
+matched against a small rule catalog (`whiteBag`/`orangeBag`/
+`enchantedDrop`), and any match is appended to a bounded, subscribable
+`FiredAlertStore` — the store's subscribe API is the contract every UI
+surface reads from, so the history panel (issue #220) and the settings gear
+(issue #221) never need to reach into `AlertEngine` internals.
+
+`AlertToastHost` (issue #219, rendered in `AppShell` above `PanelCanvas` —
+§2's panel system doesn't apply to it, it's not a `PANEL_REGISTRY` entry)
+consumes that store directly: a new alert with its `banner` flag set becomes
+a capped/auto-dismissing toast (`toastQueue.ts`'s `ToastQueue`), one with
+`sound` set plays the bundled ping (`sound.ts`'s `pingPlayer`, coalesced to
+≤1 per ~700ms). `main/index.ts` sets Chromium's `autoplay-policy` switch so
+the ping plays with no prior user gesture — a fired alert is a game event,
+not a click.
+
+`NotificationsPanel` (issue #220) is the store's **second** UI surface, and
+unlike `AlertToastHost` it *is* an ordinary §2 `PANEL_REGISTRY` entry
+(`registry.ts`'s `notifications` key, in `PanelCanvas.tsx`'s
+`defaultLayout()`). It reads the same `alertEngine.store` instance via
+`alertStoreContext.ts`'s `AlertStoreContext` — a context rather than a prop,
+since the panel is mounted by registry lookup with no direct parent/child
+relationship to `App.tsx` (`App.tsx` provides the context around `AppShell`
+alongside the existing `alertStore` prop it already passes to
+`AlertToastHost`). A pure viewer, newest-first, showing each fired alert's
+time/icon/title/body/`matchedKindIds` — deleting it from the layout doesn't
+stop alerts firing, same "pure viewer" property `LootPanel` has over
+`LootTracker`.
+
+`NotificationsPanel`'s settings gear (issue #221, `AlertSettings.tsx`) is the
+first user of the generic per-panel gear mechanism described in §2's
+"Per-panel settings gear" above — a `PanelSpec.settings` component
+`PanelFrame` flips the panel body to in place, no floating popover. It reads
+and writes `OverlaySettings.notifications` directly (`getSettings`/
+`saveSettings`, debounced, apply-on-change), rendering one row per `CATALOG`
+entry via the React-free `settingsRows.ts`'s `buildRuleRows()` and, for
+`enchantedDrop`, its registered params editor
+(`alerts/paramsEditors.ts`/`EnchantedDropParamsEditor.tsx`) — a category/
+item-name override editor backed by `slotTypeNames.ts` and
+`useItemNameCatalog.ts`'s live `lootBagTypes.itemNames` subscription.
+
+Full architecture, the multi-match dispatch semantics, the delivery layer,
+the history panel, the settings gear/schema, and the SlotType name
+derivation: see **[notifications.md](notifications.md)**.
 
 ---
 

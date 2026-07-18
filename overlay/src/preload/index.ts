@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { ChatProbeResult, ChatProbeStatus } from '../shared/chatProbe'
 import {
   IPC,
   type BridgeStatus,
@@ -125,6 +126,10 @@ const overlayApi: OverlayApi = {
   reportBug: (): Promise<BugReportResult> => ipcRenderer.invoke(IPC.reportBug),
   /** Same capture-ring dump as `reportBug`, minus opening the issue form - just write the file and reveal it. */
   captureNow: (): Promise<BugReportResult> => ipcRenderer.invoke(IPC.captureNow),
+  startChatProbe: (): Promise<ChatProbeStatus> => ipcRenderer.invoke(IPC.chatProbeStart),
+  stopChatProbe: (): Promise<ChatProbeResult> => ipcRenderer.invoke(IPC.chatProbeStop),
+  getChatProbeStatus: (): Promise<ChatProbeStatus> => ipcRenderer.invoke(IPC.getChatProbeStatus),
+  replayMetadata: (): Promise<void> => ipcRenderer.invoke(IPC.replayMetadata),
   setEditableFocused: (focused: boolean): void => {
     ipcRenderer.send(IPC.editableFocusChange, focused)
   }

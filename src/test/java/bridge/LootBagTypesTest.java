@@ -153,4 +153,74 @@ public class LootBagTypesTest {
         }
         return false;
     }
+
+    /**
+     * Issue #217: the envelope's item-carrying maps (bagTypeTable/itemNames/
+     * lootBagObjectTypes) used to filter to BagType 6/8 at the source
+     * ({@code bt != 6 && bt != 8}) - widened to cover every BagType present in
+     * the loaded assets, so an item/bag entity of any other color (here 7,
+     * the same color as the real "The Hive Key" fact) now shows up too.
+     * {@code lootBagIcons} deliberately stays 6/8-only (the Loot panel's own
+     * category-header colors), unaffected by this widening.
+     */
+    @Test
+    public void bagTypeTableAndLootBagObjectTypesCoverANonTrackedColor() {
+        IdToAsset.registerFake(82001, "Bag", 7);
+        IdToAsset.registerFake(82002, "Equipment", 7, "", "Fake Hive Key", "Fake Hive Key", "");
+
+        JsonObject data = JsonParser.parseString(new LootBagTypes().envelopeJson())
+            .getAsJsonObject()
+            .getAsJsonObject("data");
+
+        assertEquals(7, data.getAsJsonObject("lootBagObjectTypes").get("82001").getAsInt());
+        assertEquals(7, data.getAsJsonObject("bagTypeTable").get("82002").getAsInt());
+        assertEquals("Fake Hive Key", data.getAsJsonObject("itemNames").get("82002").getAsString());
+        assertFalse(data.getAsJsonObject("lootBagIcons").has("7"));
+    }
+
+    /** Issue #217: an item's SlotType (the equipment-category enum) rides along in the new `slotTypes` map. */
+    @Test
+    public void slotTypesCarriesEachItemsSlotType() {
+        IdToAsset.registerFake(82101, "Equipment", 7, 10, "", "", "Fake Hive Key", "");
+        IdToAsset.registerFake(82102, "Equipment", 6, "", "Potion of Life", "Potion of Life", "");
+
+        JsonObject slotTypes = JsonParser.parseString(new LootBagTypes().envelopeJson())
+            .getAsJsonObject()
+            .getAsJsonObject("data")
+            .getAsJsonObject("slotTypes");
+
+        assertEquals(10, slotTypes.get("82101").getAsInt());
+        assertEquals(0, slotTypes.get("82102").getAsInt());
+    }
+
+    /**
+     * Issue #239 (edge-triggered metadata delivery): {@code version()} is the
+     * broadcast-decision key, so it must be stable while the loaded assets
+     * are unchanged - {@code PacketBridge.maybeBroadcastMetadata} sends
+     * nothing when it matches the last broadcast - and must move (along with
+     * the envelope's own {@code data.metaVersion} stamp) when the object
+     * count changes (a re-extraction/reload; here another registerFake).
+     */
+    @Test
+    public void versionIsStableUntilTheLoadedObjectCountChanges() {
+        IdToAsset.registerFake(83001, "Equipment", 6, "", "Potion of Life", "Potion of Life", "");
+        LootBagTypes table = new LootBagTypes();
+
+        String v1 = table.version();
+        String json1 = table.envelopeJson();
+        assertEquals(v1, table.version());
+        // The cached JSON is returned as the SAME instance while the count is
+        // unchanged - the whole point of the cheap version key is that no
+        // JSON is rebuilt (or re-sent) at steady state.
+        org.junit.Assert.assertSame(json1, table.envelopeJson());
+        assertEquals(v1, JsonParser.parseString(json1)
+            .getAsJsonObject().getAsJsonObject("data").get("metaVersion").getAsString());
+
+        IdToAsset.registerFake(83002, "Equipment", 8, "", "Sword of Splendor", "Sword of Splendor", "");
+
+        String v2 = table.version();
+        assertFalse("version must change when the loaded object count changes", v1.equals(v2));
+        assertEquals(v2, JsonParser.parseString(table.envelopeJson())
+            .getAsJsonObject().getAsJsonObject("data").get("metaVersion").getAsString());
+    }
 }

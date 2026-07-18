@@ -46,6 +46,15 @@ public class IdToAsset {
     private final String tier;
     /** Raw, semicolon/newline-sanitized {@code <Description>} value, or "" if none. */
     private final String description;
+    /**
+     * Parsed {@code <SlotType>} value - the item's equipment-category enum
+     * (issue #217; e.g. objectType 283 "The Hive Key" -> 10), 0 when the
+     * object carries none - matching {@code AssetFacts.Item#slotType}'s same
+     * default, since 0 is indistinguishable from "unset" in both. NOT the
+     * same thing as {@link #getIdProjectileSlotType}, which reads the same
+     * XML tag but only for a weapon's projectile-group data.
+     */
+    private final int slotType;
     private static final HashMap<Integer, IdToAsset> objectID = new HashMap<>();
     private static final HashMap<Integer, IdToAsset> tileID = new HashMap<>();
     /**
@@ -71,8 +80,9 @@ public class IdToAsset {
      * @param bagType     Raw {@code <BagType>} value, or "" if none
      * @param tier        Raw {@code <Tier>} value, or "" if none
      * @param description Sanitized {@code <Description>} value, or "" if none
+     * @param slotType    Raw {@code <SlotType>} value, or "" if none
      */
-    public IdToAsset(String l, int id, String idName, String display, String clazz, Projectile[] projectiles, String texture, String label, String group, String bagType, String tier, String description) {
+    public IdToAsset(String l, int id, String idName, String display, String clazz, Projectile[] projectiles, String texture, String label, String group, String bagType, String tier, String description, String slotType) {
         this.l = l;
         this.id = id;
         this.idName = idName;
@@ -85,6 +95,7 @@ public class IdToAsset {
         this.bagType = parseBagType(bagType);
         this.tier = tier == null ? "" : tier;
         this.description = description == null ? "" : description;
+        this.slotType = parseIntField(slotType, 0);
         this.shiny = idName != null && idName.endsWith(SHINY_SUFFIX);
     }
 
@@ -111,6 +122,7 @@ public class IdToAsset {
         bagType = -1;
         tier = "";
         description = "";
+        slotType = 0;
         shiny = idName != null && idName.endsWith(SHINY_SUFFIX);
     }
 
@@ -171,7 +183,7 @@ public class IdToAsset {
     public static void registerFakeNamed(int id, String idName, String clazz, int bagType) {
         IdToAsset entry = new IdToAsset(
             "", id, idName == null || idName.isEmpty() ? "Fake" + id : idName,
-            "", clazz, null, "", "", "", String.valueOf(bagType), "", ""
+            "", clazz, null, "", "", "", String.valueOf(bagType), "", "", ""
         );
         fakeEntries.put(id, entry);
         objectID.put(id, entry);
@@ -213,10 +225,26 @@ public class IdToAsset {
     public static void registerFake(
         int id, String clazz, int bagType, String tier, String idName, String display, String description
     ) {
+        registerFake(id, clazz, bagType, 0, tier, idName, display, description);
+    }
+
+    /**
+     * Like {@link #registerFake(int, String, int, String, String, String, String)},
+     * additionally taking an explicit {@code slotType} (issue #217's item
+     * equipment-category enum) - needed for a facts-seeded item to carry its
+     * real {@code SlotType} in {@code --fake} mode, e.g.
+     * {@link bridge.FakePacketSource#registerFactsItem}.
+     *
+     * @param slotType SlotType to report for this id (see {@link #getSlotType}), 0 for none.
+     */
+    public static void registerFake(
+        int id, String clazz, int bagType, int slotType, String tier, String idName, String display, String description
+    ) {
         IdToAsset entry = new IdToAsset(
             "", id, idName == null || idName.isEmpty() ? "Fake" + id : idName,
             display == null ? "" : display, clazz, null, "", "", "",
-            String.valueOf(bagType), tier == null ? "" : tier, description == null ? "" : description
+            String.valueOf(bagType), tier == null ? "" : tier, description == null ? "" : description,
+            String.valueOf(slotType)
         );
         fakeEntries.put(id, entry);
         objectID.put(id, entry);
@@ -224,11 +252,16 @@ public class IdToAsset {
 
     /** Parses a raw {@code <BagType>} string (decimal or 0x-hex) to an int, or -1 if blank/unparseable. */
     private static int parseBagType(String raw) {
-        if (raw == null || raw.isEmpty()) return -1;
+        return parseIntField(raw, -1);
+    }
+
+    /** Parses a raw decimal-or-0x-hex XML value to an int, or {@code fallback} if blank/unparseable. */
+    private static int parseIntField(String raw, int fallback) {
+        if (raw == null || raw.isEmpty()) return fallback;
         try {
             return raw.startsWith("0x") ? Integer.decode(raw) : Integer.parseInt(raw.trim());
         } catch (Exception e) {
-            return -1;
+            return fallback;
         }
     }
 
@@ -255,12 +288,13 @@ public class IdToAsset {
                 String texture = l[5];
                 String label = l[6];
                 String idName = l[7];
-                // bagType/tier/description are newer columns - default "" for an
-                // older ObjectID.list written before they existed.
+                // bagType/tier/description/slotType are newer columns - default
+                // "" for an older ObjectID.list written before they existed.
                 String bagType = l.length > 8 ? l[8] : "";
                 String tier = l.length > 9 ? l[9] : "";
                 String description = l.length > 10 ? l[10] : "";
-                objectID.put(id, new IdToAsset(line, id, idName, display, clazz, projectiles, texture, label, group, bagType, tier, description));
+                String slotType = l.length > 11 ? l[11] : "";
+                objectID.put(id, new IdToAsset(line, id, idName, display, clazz, projectiles, texture, label, group, bagType, tier, description, slotType));
             }
             br.close();
         } catch (Exception e) {
@@ -268,7 +302,7 @@ public class IdToAsset {
             e.printStackTrace();
         }
 
-        objectID.put(-1, new IdToAsset("", -1, "Unloaded", "Unloaded", "", null, "", "", "Unloaded", "", "", ""));
+        objectID.put(-1, new IdToAsset("", -1, "Unloaded", "Unloaded", "", null, "", "", "Unloaded", "", "", "", ""));
     }
 
     /**
@@ -445,6 +479,24 @@ public class IdToAsset {
         IdToAsset i = objectID.get(id);
         if (i == null) return -1;
         return i.bagType;
+    }
+
+    /**
+     * SlotType of the object (issue #217) - the item's equipment-category
+     * enum from its {@code <SlotType>} tag (e.g. objectType 283 "The Hive
+     * Key" -&gt; 10; see {@code AssetFacts.Item#slotType} for the ground
+     * truth). NOT the same as {@link #getIdProjectileSlotType}, which reads
+     * the same XML tag but only for a weapon's projectile-group data.
+     *
+     * @param id Id of the object.
+     * @return SlotType, or 0 if unknown/not set (indistinguishable from an
+     *     object whose real SlotType is 0 - matches {@code AssetFacts.Item}'s
+     *     same default).
+     */
+    public static int getSlotType(int id) {
+        IdToAsset i = objectID.get(id);
+        if (i == null) return 0;
+        return i.slotType;
     }
 
     /**

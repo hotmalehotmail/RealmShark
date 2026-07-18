@@ -61,6 +61,13 @@ moving parts, each with its own doc below.
   shared `ui/` primitives (`Button`, `MeterRow`, `GearRow`, …), the type
   scale, and the conventions the PR review agent enforces. **Read before
   writing any panel UI.**
+- **[notifications.md](notifications.md)** — the overlay notification
+  ("alerts") system: the framework-agnostic core (`AlertEngine`, the rule
+  catalog including the `chat`-event `partyChat` rule, the multi-match
+  dispatcher, the fired-alert store, the settings schema, the `SlotType` id →
+  name table), its delivery layer (`AlertToastHost`'s banner stack, the
+  coalesced ping sound), the Notifications history panel, and the per-panel
+  settings gear — see `prd-notifications.md` for the full six-issue plan.
 - **[overlay-testing.md](overlay-testing.md)** — the vitest suite
   (`overlay/test/`): the capture-replay harness (`loadCapture`/`replay`, fake-
   timer anchoring), the fixtures convention, the capture-allowlist tripwire,
@@ -111,6 +118,11 @@ moving parts, each with its own doc below.
   plus the agent/human ownership split and the phased issue plan. A styled,
   viewable version is at
   [prd-agent-observability.html](prd-agent-observability.html) (same content).
+- **[prd-notifications.md](prd-notifications.md)** — PRD: the overlay notification
+  system ("alerts"). Detector → catalog → dispatcher pipeline, the binding layering
+  contract (swappable banner UI, one-catalog-entry extensibility), tiered
+  `enchantedDrop` thresholds grounded in the asset facts, the per-panel settings
+  gear, the `TextPacket` privacy constraint, and the six-issue implementation plan.
 
 ---
 

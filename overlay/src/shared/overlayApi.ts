@@ -1,3 +1,4 @@
+import type { ChatProbeResult, ChatProbeStatus } from './chatProbe'
 import type {
   BridgeStatus,
   BugReportResult,
@@ -49,6 +50,19 @@ export interface OverlayApi {
   reportBug: () => Promise<BugReportResult>
   /** Same capture-ring dump as `reportBug`, minus opening the issue form - just write the file and reveal it. */
   captureNow: () => Promise<BugReportResult>
+  /** Arm the chat probe: a local-only diagnostic retaining the chat/party envelope types bug captures deliberately drop (`shared/chatProbe.ts`). */
+  startChatProbe: () => Promise<ChatProbeStatus>
+  /** Disarm the probe; writes what it captured to `userData/diagnostics/*.ndjson` and reveals the file (no file when nothing captured). */
+  stopChatProbe: () => Promise<ChatProbeResult>
+  /** Current armed state + live captured count (polled by the Status panel while armed). */
+  getChatProbeStatus: () => Promise<ChatProbeStatus>
+  /**
+   * Ask main to re-send its cached metadata-table envelopes through the
+   * normal packet-batch path (issue #245 - for consumers that subscribed
+   * after the bridge's one-shot edge-triggered delivery). Idempotent for
+   * everyone else: same-metaVersion envelopes are skipped on arrival.
+   */
+  replayMetadata: () => Promise<void>
   /**
    * Tell the main process whether a text-editable element (input/textarea/
    * contenteditable) currently has focus in the renderer, so the global Esc
