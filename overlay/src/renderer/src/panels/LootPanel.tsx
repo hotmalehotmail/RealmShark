@@ -23,9 +23,10 @@ const ITEM_SIZE: Record<PanelSize, number> = { sm: 18, md: 24, lg: 30 }
  * Both tracked bag categories always render (even at 0 drops) so the panel's
  * layout is stable across a session; the header is just the bag sprite + a
  * count, no "White Bag"/"Orange Bag" text - the sprite is recognizable on its
- * own. The scroll container carries a small inset (`p-1.5`) so the leftmost/
- * topmost item's rarity ring and shiny badge (both outset overlays - see
- * sprites/enchantRarity.ts and sprites/shiny.ts) aren't clipped by the edge.
+ * own. The scroll container carries a small inset (`p-1.5`) so an edge
+ * item's rarity indicator (bottom-right) and shiny indicator (top-left)
+ * (both outset overlays - see sprites/enchantRarity.ts and sprites/shiny.ts)
+ * aren't clipped by the edge.
  * <p>
  * Enchantments: each dropped item's enchants come straight from the bag
  * entity's own `UNIQUE_DATA_STRING` (one encoded code per slot, captured by

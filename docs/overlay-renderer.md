@@ -552,15 +552,25 @@ chip** so an unresolved objectType is still a stable coloured box
 whether this particular sprite has an idle-frame or textile-frame animation,
 and only then does a local `setInterval` at `frameMs` re-render it
 (`Sprite.tsx:37-45`) — static sprites and event-driven panels never tick.
-`rarity` (0-4, see §4.1) adds a `ring-1 ring-rarity-<tier>` class on whichever
-of the three render paths (canvas/`<img>`/placeholder) is taken, so it never
-changes the sprite's rendered layout size the way a `border` would. `shiny`
-(see §4.3) similarly overlays a small rainbow-star badge in the top-left
-corner without affecting layout size — but unlike `rarity`, it needs an
-actual wrapper element (an absolutely-positioned `<svg>` badge can't be a
-Tailwind class on the sprite itself), so `Sprite` only wraps its output in a
-`position: relative` span when `shiny` is truthy, leaving every other caller's
-DOM shape unchanged.
+`rarity` (0-4, see §4.1) and `shiny` (see §4.3) render the game's own **UI
+sprites** (issue #205/#206) when available: the tier's `RarityIcon_N` pip in
+the sprite's bottom-right corner, and `shiny_item_icon` in its top-left
+corner — both resolved via `useSprites().getUiSprite(name)`, which reads
+`SpritePack.uiSprites` (a bridge-extracted, pre-cropped data-URL per sprite
+name; see `docs/asset-pipeline.md`). When that pack section is unavailable
+(a bridge that predates #205, or no game assets — dev/CI/headless) each falls
+back to a CSS approximation instead: `rarity` adds a `ring-1
+ring-rarity-<tier>` class (`RARITY_RING_CLASS`) on whichever of the three
+render paths (canvas/`<img>`/placeholder) is taken, so it never changes the
+sprite's rendered layout size the way a `border` would; `shiny` overlays a
+small SVG rainbow-star badge (`ShinyBadge`) in the top-left corner instead.
+Either way, a wrapper element is only needed for an absolutely-positioned
+overlay (the real pip/shiny `<img>`, or the fallback `<svg>` badge) — a
+Tailwind ring class needs no wrapper — so `Sprite` only wraps its output in a
+`position: relative` span when `shiny` is truthy or a rarity pip is being
+drawn, leaving every other caller's DOM shape unchanged. Both the real
+sprite and its CSS fallback are sized off the sprite's own display size
+(`overlaySize`, `Sprite.tsx`) so swapping between them never shifts layout.
 
 `CharacterSprite` (`sprites/CharacterSprite.tsx`) takes an **`objectId`** and
 resolves everything from the entity registry: base type is the equipped `skin` if
@@ -677,6 +687,18 @@ slots) across the fake roster via `ParseEnchants.encodeEnchantSlot`, so the
 tier boundaries are exercised and regression-tested (`ParseEnchantsRarityTest`,
 `PcStatsDecoderTest`) even with no game installed.
 
+**Real pip rendering (issue #205/#206).** `enchantRarity.ts` only computes the
+tier; how a tier is *drawn* lives in `Sprite.tsx`. `RARITY_PIP_SPRITE_NAME`
+(also in `enchantRarity.ts`) maps tier 1-4 to the game's own pip sprite name
+(`RarityIcon_1`..`RarityIcon_4`, confirmed against `enchantRarity.ts`'s own
+green/blue/purple/gold mapping — see #205's asset table), resolved through
+`useSprites().getUiSprite(name)` against the bridge's `uiSprites` pack
+section and rendered as a small `<img>` in the sprite's bottom-right corner.
+Tier 0 has no pip name and renders nothing. When `uiSprites` is unavailable
+(the bridge predates #205, or has no game assets — always true in this
+headless dev sandbox), `Sprite` falls back to the `RARITY_RING_CLASS` ring
+described above, so dev/soak screenshots still convey rarity.
+
 ### 4.2 The item tooltip — `ItemSprite`, `ItemInfoProvider`, `Tooltip` (issue #109)
 
 Every item sprite in the overlay — `GearRow`'s 4 equipped slots and the Loot
@@ -762,14 +784,17 @@ shiny — it also covers unrelated "nicer name" overrides), so the suffix check
 is the only correct rule.
 
 `LootPanel` computes `isShinyItemName(itemName(entry.objectType))` per entry
-and passes it as `ItemSprite`'s (→ `Sprite`'s) `shiny` prop, which renders a
-small rainbow-gradient star (`ShinyBadge` in `Sprite.tsx`) absolutely
-positioned over the sprite's top-left corner — the same "overlay without
-changing layout size" technique `rarity` uses (§4.1), except it needs an
-actual `position: relative` wrapper span since a badge can't be a class on
-the sprite element itself (see §4's `Sprite` writeup). The gradient's `<svg
-id>` is generated via `useId()` so multiple shiny badges on screen at once
-don't collide on a duplicate DOM id.
+and passes it as `ItemSprite`'s (→ `Sprite`'s) `shiny` prop. When the
+bridge's `uiSprites` pack section is available (issue #205/#206), `Sprite`
+resolves `shiny.ts`'s `SHINY_ICON_SPRITE_NAME` (`shiny_item_icon`) via
+`useSprites().getUiSprite` and renders that real sprite absolutely positioned
+over the sprite's top-left corner — the same "overlay without changing
+layout size" technique `rarity` uses (§4.1). Otherwise it falls back to a
+small SVG rainbow-gradient star (`ShinyBadge` in `Sprite.tsx`) in the same
+position. Either overlay needs an actual `position: relative` wrapper span
+since neither can be a class on the sprite element itself (see §4's `Sprite`
+writeup). The fallback gradient's `<svg id>` is generated via `useId()` so
+multiple shiny badges on screen at once don't collide on a duplicate DOM id.
 
 `FakePacketSource` seeds one real facts item whose name keeps its `" Shiny"`
 suffix (`SHINY_ITEM_TYPE`, registered via `registerFactsItem(id, true)` to
@@ -1266,10 +1291,10 @@ enchant list decoded from `entry.enchantCode` via `ItemSprite`'s
 — **newest first** so the latest drop is visible without scrolling. The
 resolved item name (`itemName`, from `lootBagTypes`'s `itemNames` table)
 renders beside the sprite at `size === 'lg'`. The scroll container carries a
-`p-1.5` inset so the leftmost/topmost item's rarity ring and shiny badge —
-both outset overlays that extend past the sprite's own box — aren't clipped
-by the container edge (issue #193; with no inset, `overflow-y-auto` clips
-exactly at the content edge). Sized/registered via the standard checklist
+`p-1.5` inset so an edge item's rarity indicator (bottom-right pip/ring) and
+shiny indicator (top-left icon/badge) — both outset overlays that extend past
+the sprite's own box — aren't clipped by the container edge (issue #193; with
+no inset, `overflow-y-auto` clips exactly at the content edge). Sized/registered via the standard checklist
 (§2): `registry.ts`'s `loot` entry, a default-layout instance in
 `PanelCanvas.tsx`.
 

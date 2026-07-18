@@ -14,3 +14,12 @@ const SHINY_NAME_SUFFIX = ' Shiny'
 export function isShinyItemName(name: string | null | undefined): boolean {
   return name != null && name.endsWith(SHINY_NAME_SUFFIX)
 }
+
+/**
+ * In-game shiny-indicator sprite name (issue #205/#206), keyed by the
+ * bridge's `uiSprites` pack section (`SpritePack.uiSprites`, via
+ * `useSprites().getUiSprite`). Falls back to the SVG rainbow-star badge
+ * (`Sprite.tsx`'s `ShinyBadge`) when the pack has no `uiSprites` section
+ * (older bridge, or no game assets).
+ */
+export const SHINY_ICON_SPRITE_NAME = 'shiny_item_icon'
