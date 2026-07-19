@@ -69,7 +69,10 @@ function EnemyRow({
   const fillPct = topDamage > 0 ? (enemyTotal / topDamage) * 100 : 0
 
   return (
-    <div className="rounded-sm bg-surface">
+    // data-enemy-row: lets e2e/shots.spec.ts expand the top enemy for the
+    // dpsDetail gallery shot, so the per-player breakdown (gear, damage
+    // share, avg/peak metrics) is actually visible in the committed gallery.
+    <div className="rounded-sm bg-surface" data-enemy-row="">
       <MeterRow fillPct={fillPct} className="px-1 py-1" onClick={onToggle}>
         <span className="w-3 shrink-0 text-fg-faint">{expanded ? '▾' : '▸'}</span>
         {enemy.objectType != null && (
@@ -98,7 +101,15 @@ function EnemyRow({
                 <span className="shrink-0 text-right font-mono tabular-nums">
                   <span className="text-fg">{formatDps(row.damage)}</span>
                   <span className="ml-1 text-2xs text-fg-faint">{pct}%</span>
-                  <span className="ml-1 text-2xs text-fg-faint">{formatDps(row.dps)} dps</span>
+                  {/* Renderer-computed rate metrics (PRD §5), NOT the wire
+                      `dps` field - that quotient reads 0 for burst kills and
+                      carried phases (PRD §1). Metric-less rows (fight
+                      predated our attach) show a dash, never a fake 0. */}
+                  <span className="ml-1 text-2xs text-fg-faint">
+                    {row.avgDps !== undefined
+                      ? `avg ${formatDps(row.avgDps)} · peak ${formatDps(row.peakDps ?? row.avgDps)}`
+                      : '—'}
+                  </span>
                 </span>
               </MeterRow>
             )

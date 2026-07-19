@@ -139,6 +139,16 @@ for (const [type, spec] of Object.entries(PANEL_REGISTRY)) {
       await expect(frame).toHaveCSS('width', `${width}px`)
       await expect(frame).toHaveCSS('height', `${height}px`)
 
+      // dpsDetail's per-player breakdown (gear, damage share, avg/peak
+      // metrics - PRD §5) only renders inside an expanded enemy row, which
+      // live requires a click - so the gallery shot expands the top enemy the
+      // same way, or the committed evidence would only ever show collapsed
+      // headline rows.
+      if (type === 'dpsDetail') {
+        const topEnemy = page.locator('[data-enemy-row] button').first()
+        if (await topEnemy.isVisible()) await topEnemy.click()
+      }
+
       await frame.screenshot({ path: resolve(SCREENSHOT_DIR, `${type}-${size}.png`) })
 
       await captureFullVariantIfClipped(
