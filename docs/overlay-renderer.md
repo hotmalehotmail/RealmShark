@@ -22,6 +22,7 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/ConfigWindow.tsx` | Settings form (game-window title, hotkey), shown in the `#config` window. |
 | `overlay/src/renderer/src/consoleLog.ts` | In-renderer console capture buffer feeding the Console panel. |
 | `overlay/src/renderer/src/DpsList.tsx` | Presentational DPS rows (target + per-attacker list). |
+| `overlay/src/renderer/src/DpsSparkline.tsx` | The DPS panel's bare-SVG trend line over the recorder's aggregate series (§5.2) — the one place the graph's presentation lives (binding layering contract, `prd-dps-graph.md` §4). |
 | `overlay/src/renderer/src/env.d.ts` | Vite client types only. |
 | `overlay/src/renderer/src/panels/PanelCanvas.tsx` | Owns the panel array, layout load/save, drag/size/pin/z-order dispatch, programmatic open/close. |
 | `overlay/src/renderer/src/panels/PanelFrame.tsx` | One panel's chrome: title bar, drag, size/pin/close/settings-gear buttons, visibility. |
@@ -45,9 +46,14 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/items/context.ts` | `ItemInfoContext` + `useItemInfo()` hook. |
 | `overlay/src/renderer/src/items/enchantDecode.ts` | Client-side six-bit/base64url decode of an equipped slot's raw `UNIQUE_DATA_STRING` into enchant ids. |
 | `overlay/src/renderer/src/items/types.ts` | Wire shapes of the `itemInfo`/`enchantNames` envelopes. |
-| `overlay/src/renderer/src/dps/DpsTracker.ts` | Framework-agnostic class ingesting packets → `DpsSnapshot`; also retains a session-scoped per-instance damage history (§5.1). |
-| `overlay/src/renderer/src/dps/useDpsTracker.ts` | React hook wrapping `DpsTracker` (event-driven on bridge `dps` packets + 1 s fallback recompute). |
-| `overlay/src/renderer/src/dps/useDpsHistory.ts` | React hook owning a dedicated `DpsTracker` instance for the DPS summary panel; exposes `DpsHistoryEntry[]`. |
+| `overlay/src/renderer/src/dps/DpsTracker.ts` | Framework-agnostic class ingesting packets → `DpsSnapshot`; owns the `DpsRateRecorder` (§5.2) and retains a session-scoped per-instance damage history (§5.1). |
+| `overlay/src/renderer/src/dps/DpsRateRecorder.ts` | Time-binned rate recorder (§5.2): delta-diffs bridge `dps` snapshots into the sparkline's aggregate series + per-(enemy, player) avg/peak folds. |
+| `overlay/src/renderer/src/dps/dpsFeed.ts` | `DpsFeed` — the app's single shared `DpsTracker` + post-ingest listener fan-out (§5's "One shared tracker"). React-free. |
+| `overlay/src/renderer/src/dps/dpsFeedContext.ts` | `DpsFeedContext` / `useDpsFeed()`. |
+| `overlay/src/renderer/src/dps/DpsFeedProvider.tsx` | Owns the `DpsFeed`, wires it to `onPacketBatch`/`onOverlayDetach`; mounted once at App level (and in the harness's `PanelMount`). |
+| `overlay/src/renderer/src/dps/useDpsTracker.ts` | Live-snapshot view over the shared feed (event-driven on bridge `dps` packets + 1 s fallback recompute). |
+| `overlay/src/renderer/src/dps/useDpsHistory.ts` | History view over the shared feed; exposes `DpsHistoryEntry[]` (backfills on mount). |
+| `overlay/src/renderer/src/dps/useDpsGraph.ts` | Sparkline data view: reads the recorder's aggregate series on a fixed `BIN_MS` tick, skipping re-renders while flat at zero. |
 | `overlay/src/renderer/src/dps/dpsDetailContext.ts` | `DpsDetailSelectionContext` / `useDpsDetailSelection()` - the selected `DpsHistoryEntry` the `dpsDetail` panel renders (§2's "Programmatic panel spawn/close"). |
 | `overlay/src/renderer/src/dps/DpsDetailSelectionProvider.tsx` | Owns the selection state for the context above; mounted once in `App`. |
 | `overlay/src/renderer/src/dps/types.ts` | Packet-field shapes the tracker reads. |
@@ -464,7 +470,7 @@ item tooltip (§4.2) with no per-panel wiring.
 | Panel | Title | Data source | Notes |
 | --- | --- | --- | --- |
 | `StatusPanel` | "RealmShark" | `window.overlay.*` directly | Connection dot, hotkey hint, packet count, JS heap MB, app version + **auto-update** UI. |
-| `DpsPanel` | "DPS" | `useDpsTracker()` → `<DpsList>` | Rows per attacker vs. the focused enemy, ranked by cumulative damage (§5). `MAX_ROWS = {sm:2, md:3, lg:6}` — deliberately few, large rows (24-40px sprites) so the panel reads at a glance mid-fight, rather than the previous 3/6/12 dense layout. Each row also renders that attacker's dyed `CharacterSprite` + equip-slot icons (gear hidden at `sm`), resolved from `EntityRegistry` by `row.objectId`, plus a damage-share bar (length **and** color both encode `damage/topDamage`) and a rank badge/ring on the local player's row (§6). |
+| `DpsPanel` | "DPS" | `useDpsTracker()` → `<DpsList>`; `<DpsSparkline>` at md/lg | Rows per attacker vs. the focused enemy, ranked by cumulative damage (§5). `MAX_ROWS = {sm:2, md:3, lg:6}` — deliberately few, large rows (24-40px sprites) so the panel reads at a glance mid-fight, rather than the previous 3/6/12 dense layout. Each row also renders that attacker's dyed `CharacterSprite` + equip-slot icons (gear hidden at `sm`), resolved from `EntityRegistry` by `row.objectId`, plus a damage-share bar (length **and** color both encode `damage/topDamage`) and a rank badge/ring on the local player's row (§6). Above the rows (md/lg only, like the target header), the **trend sparkline** (§5.2): the local player's aggregate damage rate over the trailing ~10 s. |
 | `ConsolePanel` | "Console" | `consoleLog.ts` buffer | Live log with search (Ctrl/Cmd+F), level colours, clear. |
 | `CharacterPanel` | "Character" | `EntityRegistry` (local player) | Big dyed sprite + 4 equip icons + username. |
 | `InstancePanel` | "Instance" | `EntityRegistry.characters()` | Every named player in the instance, dyed sprites + gear. |
@@ -934,7 +940,7 @@ than the task's summary implies:
 | `DamagePacket` | `ingestDamage` | per-target, per-attacker rolling hit buffers, and a last-hit focus signal for the local player's own attributed hits |
 | `UpdatePacket` | `ingestUpdate` | `entityNames` (`NAME_STAT`), `enemyMaxHp` (`MAX_HP_STAT`), `objectTypes` (every seen objectId's `objectType`), `playerCosmetics` (skin/equipment/equipmentRarity/dyes, for history's frozen per-player sprite — §5.1, §4.1), and a despawn signal per dropped id |
 | `objectNames` (synthetic) | `ingestObjectNames` | enemy names resolved bridge-side |
-| `dps` (synthetic) | `ingestBridgeDps` | **the Java engine's computed DPS snapshot** |
+| `dps` (synthetic) | `ingestBridgeDps` + `recorder.onSnapshot` | **the Java engine's computed DPS snapshot**, also delta-diffed into the rate recorder (§5.2) |
 | `QuestObjectIdPacket` | `ingestQuestObjectId` | locks/re-locks the sticky boss focus, carrying forward the prior phase's damage on a phase change |
 | `MapInfoPacket` | `retainInstanceIfQualifying()` then `reset()` | freezes the ending instance's damage into session history (§5.1) if it qualifies, *then* wipes all live state for the new instance |
 
@@ -1001,11 +1007,16 @@ across phases is entirely the renderer's job. `ingestQuestObjectId` calls
 but **only when that previous lock is still alive** (`bossAlive` true) **and
 we're not in the open-world Realm** (`!inRealm`) — a genuine phase/form change
 on the same encounter. It snapshots the previous lock's current per-attacker
-damage (`totalDamageRows` — bridge rows if present, else the summed local
-buffer) into `bossCarry`. `snapshot()` then takes the `bossSnapshot` branch
-whenever `bossCarry` is non-empty and the focus is still the locked boss: each
-row's `damage` is `bossCarry + the current phase's live damage`, while `dps`
-is just the current phase's live rate (not a whole-encounter average).
+damage (`totalDamageRows` — bridge rows if present, else the **cumulative**
+local totals; never the trimmed window buffers — see "Local rolling window"
+below) into `bossCarry`, along with
+that phase's recorder metrics (`engagedMs`/`peak` — §5.2), which sum/max
+across phases. `snapshot()` then takes the `bossSnapshot` branch whenever
+`bossCarry` is non-empty and the focus is still the locked boss: each row's
+`damage` is `bossCarry + the current phase's live damage`, `dps` is just the
+current phase's live rate (not a whole-encounter average), and `avgDps`/
+`peakDps` are the whole-encounter combined metrics (total damage over summed
+engaged span; max peak across phases).
 
 If the previous lock had already **despawned** (`bossAlive` false) — **or the
 instance is the Realm** (`inRealm`, from `MapInfoPacket` via `isRealmInstance`:
@@ -1040,18 +1051,28 @@ still-unflushed `bossCarry` from that chain's own earlier phases) into its own
 `bossCarry` so the new chain starts at zero rather than inheriting the old
 one's total.
 
-**Local rolling window.** `ingestDamage` buckets hits as
-`targets[targetId][attackerId] = HitEvent[]`, redirecting a minion's `objectId`
-to its owner via `minionOwners`. `snapshot` trims each buffer to the last
-**`WINDOW_MS = 8000`** ms and computes `dps = windowDamage / 8`.
+**Local rolling window — plus untrimmed cumulative totals.** `ingestDamage`
+buckets hits as `targets[targetId][attackerId] = HitEvent[]`, redirecting a
+minion's `objectId` to its owner via `minionOwners`. `snapshot` trims each
+buffer **in place** to the last **`WINDOW_MS = 8000`** ms and computes
+`dps = windowDamage / 8`. Because that trim mutates state, `ingestDamage` also
+maintains a separate `cumulativeDamage` map (per-target, per-attacker running
+sums, never trimmed), and everything that needs *whole-fight* totals
+(`totalDamageRows`, and through it carry-forward/history) reads that instead
+of summing the window buffers — the decoupling that makes one shared tracker
+safe for both the live panel and history retention (see "One shared tracker"
+in §5.1).
 
-**Reset.** `reset()` wipes names, minion map, targets, focus, local id, the
+**Reset.** `reset()` wipes names, minion map, targets, `cumulativeDamage`,
+focus, local id, the
 boss lock (`lockedBossId`/`bossAlive`/`bossDamagedByLocal`/`bossCarry`), the
 local attack streak (`localStreakTargetId`/`localStreakStartedAt`),
-`enemyMaxHp`, `objectTypes`, `playerCosmetics`, and `bossPhaseIds` — all
+`enemyMaxHp`, `objectTypes`, `playerCosmetics`, `bossPhaseIds`, and the
+recorder (`recorder.resetInstance()` — §5.2) — all
 *per-instance* state. It runs on
 `MapInfoPacket` internally (after `retainInstanceIfQualifying()` — §5.1) and is
-also called from the hook on detach (which skips retention — see §5.1). Debug
+also called from `DpsFeed.detach()` on overlay detach (which skips retention —
+see §5.1). Debug
 counters and the retained `history`/`historySeq`/`currentInstanceName` are
 deliberately *kept* across resets — they're session-scoped, not per-instance.
 Note `CreateSuccessPacket` does **not** reset — it only sets the local id.
@@ -1146,26 +1167,82 @@ first, capped at `HISTORY_MAX_INSTANCES` (oldest dropped). Each
 `DpsHistoryEntry` is `{ id, instanceName, endedAt, localPlayerId, enemies:
 DpsHistoryEnemy[] }`; each `DpsHistoryEnemy` is `{ id, name, objectType,
 players: PlayerDps[], cosmetics: Map<objectId, PlayerCosmetics> }`, sorted
-descending by total damage. `objectType` (the enemy's own, from `objectTypes`)
+descending by total damage. Retained `PlayerDps` rows also carry the frozen
+recorder metrics `avgDps`/`peakDps` (§5.2) when the recorder observed that
+(enemy, player) — attached by `withMetrics()` for flat enemies and by
+`bossSnapshot()`'s combined-metrics pass for chains; **absent, not 0**, when
+it never saw a delta (e.g. the fight predated attach). `objectType` (the enemy's own, from `objectTypes`)
 feeds the master-list icon fallback chain (§3): dungeon-icon map
 (`useSprites().dungeonIcon(instanceName)`) → the top-ranked enemy's
 `objectType` (the "main-boss sprite") → a generic placeholder chip.
 
-**A separate tracker instance, not the live panel's.** The summary panel's
-`useDpsHistory()` hook (`dps/useDpsHistory.ts`) constructs its **own**
-`DpsTracker`, independent from `DpsPanel`'s (via `useDpsTracker()`) — both
-ingest the identical packet stream (`window.overlay.onPacketBatch`)
-independently, so history-tracking never perturbs the live glance panel and
-vice versa. `<PanelCanvas/>` being always mounted (§1, "Interactive mode")
-keeps every panel *in the layout* alive across interactive toggles, but a
-panel only mounts its `Content` component at all once `PanelCanvas` renders
-its `<PanelFrame/>` — which it does for every entry in `panels`, visible or
-not (`PanelFrame.tsx`'s `display: visible ? undefined : 'none'` hides it
-without unmounting). Since `dpsSummary` is in `defaultLayout()`, its tracker
-keeps ingesting (and retaining) for the app's whole session even while the
-panel itself is hidden — the "session-scoped" part of the retention contract
-depends on this always-in-layout property, not on the user having the panel
-open.
+**One shared tracker (PRD §3, `prd-dps-graph.md`).** There is exactly **one**
+`DpsTracker` per app session, owned by `DpsFeed` (`dps/dpsFeed.ts`) and
+mounted at App level by `DpsFeedProvider` — `useDpsTracker()` (live panel)
+and `useDpsHistory()` (summary panel) are *views* over it, subscribing via
+`feed.onBatch`/`feed.onDetach` rather than `window.overlay.onPacketBatch`
+directly. Two things make this safe and correct:
+
+- **Post-ingest notification.** React flushes effects bottom-up (children
+  before parents), so a child hook subscribing to the preload bridge itself
+  would run *before* the App-level provider's ingest and read one batch
+  stale. `DpsFeed.ingest()` ingests first, then notifies its listeners.
+- **The cumulative-totals decoupling** (§5's "Local rolling window"): the
+  live view's periodic `snapshot()` trims window buffers in place, which
+  before this refactor would have truncated the history/carry fallback
+  totals — the hazard that used to force two separate tracker instances
+  (`test/dps-shared-tracker.test.ts` pins this).
+
+Because ingestion lives in the App-level provider — not in any panel — the
+"session-scoped" retention contract no longer depends on the summary panel
+being in the layout at all; `useDpsHistory` backfills `getHistory()` on
+mount for whatever was retained before its panel first rendered.
+
+### 5.2 The rate recorder — trend sparkline + avg/peak metrics
+
+`DpsRateRecorder` (`dps/DpsRateRecorder.ts`) implements `prd-dps-graph.md`
+§2: it **delta-diffs consecutive bridge `dps` snapshots** — the only feed
+containing the local player's reconstructed self-damage — into `BIN_MS =
+250 ms` time bins (one per bridge heartbeat). Owned by the shared
+`DpsTracker` (fed from its `dps` ingest case with the envelope's own `time`;
+reset with it), it maintains two things:
+
+- **The aggregate graph series** — the local player's summed deltas across
+  *all* enemies, retained for the trailing `GRAPH_WINDOW_MS = 10 s` (plus
+  smoothing lead-in). `graphSeries(nowMs)` returns 40 points, each a
+  trailing-`SMOOTH_MS = 2 s` average, plus `windowMax`/`current`.
+- **Per-(enemy, player) fold state** — O(1) running metrics: observed
+  `damage`, engaged span (`firstBin..lastBin`, so `avgDps = damage /
+  engagedMs` floored at one bin — a one-tick burst kill shows its true large
+  rate, not the bridge quotient's 0), and `peak` (max trailing-2 s average,
+  never reported below `avgDps`). **No per-player time series is retained
+  anywhere** — the scrapped other-player graphs stay scrapped.
+
+Delta rules (all pinned in `test/dps-recorder.test.ts`): first sight of a key
+only sets its baseline (a mid-fight attach must not spike a bin with the
+whole pre-attach total — such rows simply never get metrics and render "—");
+a negative delta (bridge restart) contributes nothing and re-baselines; a key
+absent from a snapshot means *unchanged*, never "went to zero"; bins close on
+**time**, not envelopes, so the series decays to zero when the stream goes
+quiet.
+
+**The sparkline** (`DpsSparkline.tsx`, in `DpsPanel` at md/lg): bare inline
+SVG — a 2 px `accent` polyline + low-alpha area fill, no axes/gridlines/
+legend, one direct label (the current smoothed value, in text tokens). Data
+arrives via `useDpsGraph()` on a fixed `BIN_MS` interval (~4 Hz); while the
+series is flat at zero the hook returns the previous state object so nothing
+re-renders — steady-state GPU work over the game stays zero. There is
+deliberately no CSS transition or rAF animation; the sanctioned
+smooth-scroll upgrade path (compositor-only translate) is documented in the
+PRD §4 and is contained in this one component by the binding layering
+contract there.
+
+**The detail-panel metrics** (`DpsDetailPanel.tsx`): each expanded per-player
+row shows `avg <avgDps> · peak <peakDps>` from the frozen history metrics —
+**not** the wire `dps` field, whose `damage/fightMs` quotient reads 0 for
+burst kills (bridge tick quantization) and carried phases (PRD §1's two
+zero-producers). A metric-less row renders an em dash. The wire `dps` field
+itself is unchanged and still present on every row.
 
 ### Which DPS numbers the UI renders — the two paths reconciled
 
@@ -1215,18 +1292,18 @@ Two things the renderer **always** owns regardless of source:
 
 ### `useDpsTracker` (`dps/useDpsTracker.ts`)
 
-The React wrapper: one `DpsTracker` per hook instance (`useState(() => new
-DpsTracker())`), a mount effect that pipes `onPacketBatch` into `tracker.ingest`
-and immediately re-snapshots whenever a batch contains a `dps` envelope
-(`useDpsTracker.ts:17-26`) — the bridge pushes one within ~50 ms of any damage
+The live panel's view over the shared feed (see "One shared tracker", §5.1 —
+ingestion and detach-reset are `DpsFeedProvider`'s job, not this hook's): a
+`feed.onBatch` subscription that re-snapshots whenever a batch contains a
+`dps` envelope — the bridge pushes one within ~50 ms of any damage
 packet (coalesced) plus a 250 ms heartbeat (see `bridge-server.md`) — or a
 `QuestObjectIdPacket` envelope, so a boss lock/phase transition renders
 immediately rather than waiting for the 1 s fallback tick below. This keeps the
-panel effectively event-driven, not polled — `onOverlayDetach` into
-`tracker.reset()` + empty snapshot, and a slow **1000 ms** `FALLBACK_INTERVAL_MS`
-`setInterval` recomputing `snapshot(Date.now())` (`useDpsTracker.ts:31-34`) that
-exists only so the client-side rolling-window fallback (used when the bridge
-has no data for the focused enemy) still decays when packets go quiet.
+panel effectively event-driven, not polled — `feed.onDetach` resets the local
+snapshot to empty, and a slow **1000 ms** `FALLBACK_INTERVAL_MS`
+`setInterval` recomputing `snapshot(Date.now())` exists only so the
+client-side rolling-window fallback (used when the bridge has no data for the
+focused enemy) still decays when packets go quiet.
 
 `DPS_DEBUG` (`DpsTracker.ts:21`, currently `false`) gates a `[dps]` diagnostic
 channel — per-type counts, one-time field-key dumps, focus transitions, and a

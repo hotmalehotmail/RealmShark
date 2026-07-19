@@ -482,9 +482,16 @@ public class FakePacketSource {
                 Register.INSTANCE.emitPacketLogs(bossUpdate(0));
                 Register.INSTANCE.emitPacketLogs(questObjective(BOSS_PHASE_IDS[0]));
             } else if (bossOffset == 20) {
-                Register.INSTANCE.emitPacketLogs(enemyDrop(BOSS_PHASE_IDS[0]));
+                // Wire order is load-bearing (PRD §6, docs/prd-dps-graph.md): the
+                // new objective must arrive while phase 1 is still alive - that's
+                // what makes the tracker treat this as a phase change and carry
+                // phase 1's damage/metrics forward (carryForwardBossDamage). With
+                // the drop first, phase 1 reads as a finished separate encounter
+                // (resolveBossChain) and the carry-merge path is never exercised
+                // in dev.
                 Register.INSTANCE.emitPacketLogs(bossUpdate(1));
                 Register.INSTANCE.emitPacketLogs(questObjective(BOSS_PHASE_IDS[1]));
+                Register.INSTANCE.emitPacketLogs(enemyDrop(BOSS_PHASE_IDS[0]));
             } else if (bossOffset == 38) {
                 Register.INSTANCE.emitPacketLogs(enemyDrop(BOSS_PHASE_IDS[1]));
             }

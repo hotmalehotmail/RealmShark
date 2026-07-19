@@ -1,9 +1,11 @@
 # PRD: DPS trend graph + peak/average DPS metrics
 
-**Status:** design accepted, not yet implemented
-**Scope:** overlay renderer only, plus a `FakePacketSource` extension (dev tooling —
+**Status:** implemented (2026-07-18, maintainer-driven — all four §9 slices in one
+PR rather than four agent issues; see the §9 note)
+**Scope:** overlay renderer only, plus a `FakePacketSource` ordering fix (dev tooling —
 no production bridge/Java changes)
-**Implementation plan:** §9 — four dependency-ordered issues for the agent dev-loop
+**Implementation plan:** §9 — four dependency-ordered slices (originally scoped as
+agent dev-loop issues)
 
 Give the player a live view of how their damage output is trending over the last
 ~10 seconds (a small sparkline in the DPS panel), and give the DPS detail panel
@@ -231,13 +233,16 @@ bridge field for now.
 ## 6. FakePacketSource extension (dev tooling)
 
 The fake source already produces flowing `dps` snapshots (two fake enemies +
-periodic `MapInfoPacket` resets), which exercises the recorder and the graph. It
-does **not** emit `QuestObjectIdPacket`, so the §5 carry-merge path is invisible
-in dev. Per the repo rule (extend `FakePacketSource` rather than hand-rolling
-fakes elsewhere), the metrics slice adds: a periodic quest-objective cycle that
-marks one fake enemy as the objective and later re-points to the other while the
-first is still alive (a synthetic "phase change"), exercising
-`carryForwardBossDamage` + the extended carry struct end-to-end on macOS.
+periodic `MapInfoPacket` resets), which exercises the recorder and the graph —
+and (a correction to this PRD's original text, discovered at implementation
+time) it already *had* a quest-objective boss cycle with a two-phase
+transition. But it emitted phase 1's `drops` **before** the new objective, so
+the tracker read the transition as a finished separate encounter
+(`resolveBossChain`) and the carry-forward path never actually exercised in
+dev, contradicting the cycle's own comment. The fix is an ordering change, not
+a new cycle: the new objective now arrives while phase 1 is still alive
+(objective → then drop), exercising `carryForwardBossDamage` + the extended
+carry struct end-to-end on macOS.
 
 ## 7. Testing
 
@@ -266,6 +271,12 @@ first is still alive (a synthetic "phase change"), exercising
 - Persisting series or metrics across app sessions.
 
 ## 9. Implementation plan
+
+> **Implementation note (2026-07-18):** the maintainer opted to implement this
+> directly instead of running the four-issue agent loop — all four slices
+> landed as one PR into `staging`, one commit per slice, same contracts and
+> tests as specified below. The slice descriptions remain the map of what
+> shipped where.
 
 Four dependency-ordered issues, each one agent PR into `staging`, implementable
 and testable headless (FakePacketSource + vitest, no game):

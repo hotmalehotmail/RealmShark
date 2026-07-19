@@ -112,6 +112,16 @@ export interface PlayerDps {
   name: string
   damage: number
   dps: number
+  /**
+   * Renderer-computed rate metrics (PRD §5, docs/prd-dps-graph.md), from
+   * `DpsRateRecorder`: damage / engaged-span (floored at one bin) and the max
+   * trailing-SMOOTH_MS average. Present on history/boss-chain rows the
+   * recorder observed; absent (not 0) when it never saw a delta - the wire
+   * `dps` field above stays untouched but is no longer what the detail panel
+   * displays (it reads 0 for burst kills and carried phases - PRD §1).
+   */
+  avgDps?: number
+  peakDps?: number
 }
 
 /**

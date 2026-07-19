@@ -1,5 +1,6 @@
 import type { PacketEnvelope } from '../../../shared/ipc'
 import { equipmentRarityFromUniqueDataString } from '../sprites/enchantRarity'
+import { DpsRateRecorder } from './DpsRateRecorder'
 import {
   MAX_HP_STAT_TYPE_NUM,
   NAME_STAT_TYPE_NUM,
@@ -225,12 +226,31 @@ export const EMPTY_SNAPSHOT: DpsSnapshot = { targetId: null, targetName: '', row
  * in-game; see ingestEnemyHit.
  */
 export class DpsTracker {
+  /**
+   * The time-binned rate recorder (PRD §2): the sparkline's aggregate series
+   * and the detail panel's per-(enemy, player) avg/peak metrics. Fed from the
+   * `dps` case below; reset with the tracker (instance change / detach).
+   */
+  readonly recorder = new DpsRateRecorder()
+
   private entityNames = new Map<number, string>()
   /** Enemy/NPC id -> name, resolved bridge-side from game assets (objectNames envelope). */
   private objectNames = new Map<number, string>()
   /** Bridge-computed DPS, per enemy id -> { name, rows }. Replaces the local DamagePacket estimate. */
   private bridgeEnemies = new Map<number, { name: string; rows: PlayerDps[] }>()
   private targets = new Map<number, Map<number, HitEvent[]>>()
+  /**
+   * Cumulative per-target-per-attacker DamagePacket totals - unlike the
+   * rolling-window buffers in `targets`, these are never trimmed, so the
+   * no-bridge fallbacks that need whole-fight totals (`totalDamageRows`, and
+   * through it carry-forward/history) can't be corrupted by `snapshot()`'s
+   * in-place window trimming. This decoupling is what makes ONE shared
+   * tracker safe for both the live panel and history retention (PRD §3);
+   * before it, the live panel's periodic snapshots would have silently
+   * truncated the history tracker's fallback totals, which is why two
+   * separate instances existed.
+   */
+  private cumulativeDamage = new Map<number, Map<number, number>>()
   private focusTargetId: number | null = null
   private localPlayerId: number | null = null
   /** Summoned entity id -> owning player id, from ServerPlayerShootPacket. */
@@ -269,8 +289,16 @@ export class DpsTracker {
    * resolveBossChain whenever the previous objective had already despawned -
    * a new, unrelated encounter starts this back at zero rather than
    * inheriting a dead boss's damage.
+   *
+   * Besides `damage`, each entry carries the recorder's per-phase metrics
+   * fold (`engagedMs`/`peak` - PRD §5): summing engaged spans and taking the
+   * max peak across phases is what lets a chain's merged rows keep honest
+   * avg/peak numbers instead of the old struct's discarded-to-0 dps.
    */
-  private bossCarry = new Map<number, { name: string; damage: number }>()
+  private bossCarry = new Map<
+    number,
+    { name: string; damage: number; engagedMs: number; peak: number }
+  >()
   /** Debug: how many of each packet type we've ingested (all types, not just relevant ones). */
   private typeCounts = new Map<string, number>()
   /** Debug: types whose field keys we've already dumped once (to avoid per-packet spam). */
@@ -346,9 +374,12 @@ export class DpsTracker {
         case 'objectNames':
           this.ingestObjectNames(envelope.data as Record<string, string>)
           break
-        case 'dps':
-          this.ingestBridgeDps(envelope.data as BridgeDpsData)
+        case 'dps': {
+          const dps = envelope.data as BridgeDpsData
+          this.ingestBridgeDps(dps)
+          this.recorder.onSnapshot(dps, envelope.time, this.localPlayerId)
           break
+        }
         case 'ServerPlayerShootPacket':
           this.ingestShoot(envelope.data as ServerPlayerShootPacketData)
           break
@@ -721,15 +752,23 @@ export class DpsTracker {
     }
   }
 
-  /** Snapshot `oldId`'s current per-player damage into `bossCarry`, summing across phases. */
+  /** Snapshot `oldId`'s current per-player damage (and recorder metrics) into `bossCarry`, summing across phases. */
   private carryForwardBossDamage(oldId: number): void {
     for (const [attackerId, row] of this.totalDamageRows(oldId)) {
+      const metrics = this.recorder.metricsFor(oldId, attackerId)
       const existing = this.bossCarry.get(attackerId)
       if (existing) {
         existing.damage += row.damage
+        existing.engagedMs += metrics?.engagedMs ?? 0
+        existing.peak = Math.max(existing.peak, metrics?.peakDps ?? 0)
         if (row.name) existing.name = row.name
       } else {
-        this.bossCarry.set(attackerId, { name: row.name, damage: row.damage })
+        this.bossCarry.set(attackerId, {
+          name: row.name,
+          damage: row.damage,
+          engagedMs: metrics?.engagedMs ?? 0,
+          peak: metrics?.peakDps ?? 0
+        })
       }
     }
   }
@@ -743,10 +782,9 @@ export class DpsTracker {
         result.set(row.objectId, { name: row.name, damage: row.damage })
       return result
     }
-    const byAttacker = this.targets.get(targetId)
+    const byAttacker = this.cumulativeDamage.get(targetId)
     if (byAttacker) {
-      for (const [attackerId, buffer] of byAttacker) {
-        const damage = buffer.reduce((sum, hit) => sum + hit.damage, 0)
+      for (const [attackerId, damage] of byAttacker) {
         result.set(attackerId, { name: this.nameOf(attackerId), damage })
       }
     }
@@ -770,6 +808,13 @@ export class DpsTracker {
     }
     buffer.push({ time, damage: data.damageAmount })
 
+    let cumByAttacker = this.cumulativeDamage.get(data.targetId)
+    if (!cumByAttacker) {
+      cumByAttacker = new Map()
+      this.cumulativeDamage.set(data.targetId, cumByAttacker)
+    }
+    cumByAttacker.set(attackerId, (cumByAttacker.get(attackerId) ?? 0) + data.damageAmount)
+
     if (DPS_DEBUG && !Number.isFinite(data.damageAmount)) {
       // damageAmount arriving as undefined/NaN means the field name doesn't
       // match the wire format - a prime suspect for "rows show up but read 0".
@@ -787,6 +832,7 @@ export class DpsTracker {
     this.objectNames.clear()
     this.bridgeEnemies.clear()
     this.targets.clear()
+    this.cumulativeDamage.clear()
     this.focusTargetId = null
     this.localPlayerId = null
     this.minionOwners.clear()
@@ -802,6 +848,7 @@ export class DpsTracker {
     this.playerCosmetics.clear()
     this.bossPhaseIds.clear()
     this.resolvedBossEncounters = []
+    this.recorder.resetInstance()
     // Deliberately keep typeCounts/dumpedKeys across resets so the running
     // totals (and one-time key dumps) survive instance changes - they describe
     // the whole session's traffic, not a single instance. Likewise `history`/
@@ -936,6 +983,19 @@ export class DpsTracker {
       }
     }
 
+    // Attach combined avg/peak metrics (PRD §5): the carried phases' engaged
+    // span + the current phase's recorder fold. A row with no observed span
+    // anywhere gets no metrics (renders "—", never a fake 0).
+    for (const row of merged.values()) {
+      const carry = this.bossCarry.get(row.objectId)
+      const live = this.recorder.metricsFor(targetId, row.objectId)
+      const engagedMs = (carry?.engagedMs ?? 0) + (live?.engagedMs ?? 0)
+      if (engagedMs > 0) {
+        row.avgDps = row.damage / (engagedMs / 1000)
+        row.peakDps = Math.max(carry?.peak ?? 0, live?.peakDps ?? 0, row.avgDps)
+      }
+    }
+
     const rows = Array.from(merged.values()).sort((a, b) => b.damage - a.damage)
     return { targetId, targetName, rows }
   }
@@ -1017,7 +1077,7 @@ export class DpsTracker {
         id,
         name: enemy.name,
         objectType: this.objectTypes.get(id) ?? null,
-        players: enemy.rows,
+        players: this.withMetrics(id, enemy.rows),
         cosmetics: this.cosmeticsFor(enemy.rows)
       })
     }
@@ -1027,6 +1087,19 @@ export class DpsTracker {
 
     enemies.sort((a, b) => totalDamage(b.players) - totalDamage(a.players))
     return enemies
+  }
+
+  /**
+   * Attach the recorder's avg/peak metrics (PRD §5) to each row, for a
+   * history freeze. Rows the recorder never observed a delta for (the fight
+   * predated our attach, or the rare bridge-absent fallback) stay metric-less
+   * - the detail panel renders "—" for those instead of a fake 0.
+   */
+  private withMetrics(enemyId: number, rows: PlayerDps[]): PlayerDps[] {
+    return rows.map((row) => {
+      const m = this.recorder.metricsFor(enemyId, row.objectId)
+      return m ? { ...row, avgDps: m.avgDps, peakDps: m.peakDps } : row
+    })
   }
 
   /** Frozen cosmetic loadout for each player row, for the detail view's per-player gear/sprite. */
