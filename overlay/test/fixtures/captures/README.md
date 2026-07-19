@@ -227,3 +227,31 @@ slice a real recorded session (PRD §7.3's `baseline-session` or a per-issue
 recording) should follow this fixture's naming/README pattern rather than
 replace it - it specifically exists to guard the NDJSON code path, independent
 of any particular real scenario.
+
+### `realm-boss-rollover.json.gz` (synthetic)
+
+**Reported bug:** in the open-world Realm, killing a quest boss rolled its
+whole damage total onto the *next* quest boss and snapped the DPS label to it
+instantly, instead of resetting per boss. The real bug-report capture (a
+10,000-envelope ring) is too large to commit and, crucially, starts *after*
+the Realm's own `MapInfoPacket` (so a replay of it can't even establish Realm
+context), so this scenario is reproduced by a small hand-authored fixture
+against the real `PacketEnvelope` wire shapes instead.
+
+**Contents (12 envelopes):** a Realm `MapInfoPacket` (`displayName`
+`{s.rotmg}`, realm-score fields `>= 0`), a local player + another player + Boss
+A ("Possessed Pumpkin"), a `QuestObjectIdPacket` locking Boss A, `DamagePacket`s
+from both players onto Boss A, then the **kill/swap tick** — all sharing one
+`time`, with Boss B's ("Legion Excavator") `QuestObjectIdPacket` ordered
+**before** the `UpdatePacket.drops` that despawns Boss A (the exact same-tick
+ordering the live capture showed) — then `DamagePacket`s onto Boss B.
+
+**What it supports:** `dps-replay.test.ts`'s "Realm boss-swap rollover" cases.
+One replays the fixture as-is and asserts the DPS panel does **not** carry Boss
+A's damage onto Boss B (focus holds on the just-killed Boss A until Boss B is
+hit, then shows only Boss B's own damage). The other clones the envelopes with
+the `MapInfoPacket` swapped to a dungeon (no Realm signals) and asserts the
+carry-forward path is **unchanged** there (a genuine multi-phase dungeon boss
+still merges phases) - so the fix is proven to be Realm-scoped, not a blanket
+removal of carry-forward. See `docs/overlay-renderer.md` §5 "Boss-phase damage
+carryover".
