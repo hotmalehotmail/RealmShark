@@ -172,6 +172,20 @@ Rendering rules (game-overlay constraints first):
 - Empty state (no local player resolved / no damage in window): flat baseline,
   no value label.
 
+**Layering contract (binding for the implementation PRs):** the sparkline is one
+presentational component consuming a read-only snapshot of the recorder's series
+(`{bins, smoothedPoints, windowMax}` or equivalent); a later visual redesign —
+restyling, or switching to a continuously-scrolling presentation — must touch
+that component alone, never the recorder or tracker.
+
+**Known smooth-scroll upgrade path (out of scope for v1, contained in the
+component):** render one extra bin off-canvas and slide the plotted group left by
+one bin-width via a compositor-only CSS transform (`will-change: transform`,
+linear, restarted each bin tick) — the standard rolling-chart technique that
+avoids per-frame path regeneration. v1 deliberately ships the stepped 4 Hz
+update instead: a perpetual animation keeps the compositor active over the game
+even when nothing changes, and the stepped line costs zero between ticks.
+
 Screenshots: the PR regenerates the committed panel gallery (`npm run shots`);
 the review agent's visual pass applies. `ui:signoff` on the issue is the
 maintainer's call at labeling time.
