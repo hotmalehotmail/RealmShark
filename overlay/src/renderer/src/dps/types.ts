@@ -50,15 +50,6 @@ export interface UpdatePacketData {
 export interface MapInfoPacketData {
   name: string
   displayName: string
-  /**
-   * Realm-score fields (packets/incoming/MapInfoPacket.java): the running/target
-   * realm score of the open-world Realm. Populated (>= 0) only in the Realm;
-   * every non-Realm instance (Nexus/Vault/dungeons) leaves them at the -1
-   * sentinel. Used by `DpsTracker` to detect the Realm, where the quest marker
-   * cycles through independent bosses (see `ingestQuestObjectId`).
-   */
-  maxRealmScore?: number
-  currentRealmScore?: number
 }
 
 /**

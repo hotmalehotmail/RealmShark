@@ -180,16 +180,7 @@ export const EMPTY_SNAPSHOT: DpsSnapshot = { targetId: null, targetName: '', row
  * for `SUSTAINED_ATTACK_MS` straight, which overrides the lock (a deliberate
  * switch away from the boss, not a stray AoE tick - see `onLocalHit`).
  * Outside a quest objective (e.g. open world) it falls back to focusing
- * whichever enemy the local player last hit.
- *
- * Case (b)'s carry-forward is gated on NOT being in the open-world Realm
- * (`inRealm`): the Realm's quest marker cycles through many *independent*
- * bosses (kill one, the marker jumps to the next), which is packet-structurally
- * identical to a dungeon phase/form change - old boss despawns, new boss spawns
- * as a fresh objectId - so it cannot be told apart by shape or timing, only by
- * instance context. Carrying forward in the Realm rolls a just-killed boss's
- * damage onto the next one and snaps the label to it instantly; see
- * `ingestQuestObjectId`. Reset on instance change
+ * whichever enemy the local player last hit. Reset on instance change
  * (MapInfoPacket) and meant to also be reset externally when the game closes
  * (electron-overlay-window's "detach" event) - both wipe the same state, just
  * triggered from different places.
