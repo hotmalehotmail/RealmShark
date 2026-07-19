@@ -952,10 +952,14 @@ tracker reports DPS against *one* enemy (`focusTargetId`), chosen by:
    hasn't reached yet. A phase transition on an already-*damaged*, still-*alive*
    encounter (`bossDamagedByLocal` carried over — see point 3 below) does snap
    focus straight to the new phase, since that's a continuation of an engaged
-   fight; but if the previous lock had already despawned (`bossAlive` false) by
-   the time the new objective arrives, `bossDamagedByLocal` resets instead —
-   that's a genuinely new objective, not a phase continuation, and should be
-   treated the same as a fresh, undamaged encounter (`ingestQuestObjectId`).
+   fight; but if the previous lock had already despawned (`bossAlive` false) —
+   or we're in the open-world Realm (`inRealm`, where every quest-objective
+   change is an independent boss, not a phase; see "Boss-phase damage carryover"
+   below) — by the time the new objective arrives, `bossDamagedByLocal` resets
+   instead, so focus does **not** snap to the new boss and stays on the
+   just-killed one until the player lands a hit on the next — that's a genuinely
+   new objective, not a phase continuation, treated the same as a fresh,
+   undamaged encounter (`ingestQuestObjectId`).
    Once damaged-and-alive, every last-hit signal on anything else
    (`onLocalHit`, called from both `ingestEnemyHit` and `ingestDamage`) is a
    no-op — AoEing adds cannot steal focus from the boss — **unless** overridden
@@ -988,35 +992,53 @@ tracker reports DPS against *one* enemy (`focusTargetId`), chosen by:
    `bossDamagedByLocal`) persists across a phase transition, since that's the
    same encounter continuing.
 
-**Boss-phase damage carryover — only across a *live* phase change.** A boss
-changing form gets a brand-new `objectId` server-side (a new `Entity` in the
-bridge's `DpsEngine`, damage total starting at zero — see the discrepancy
-note in `dps-engine.md`), so carrying a boss's total across phases is
-entirely the renderer's job. `ingestQuestObjectId` calls
+**Boss-phase damage carryover — only across a *live* phase change, and never
+in the Realm.** A boss changing form gets a brand-new `objectId` server-side
+(a new `Entity` in the bridge's `DpsEngine`, damage total starting at zero —
+see the discrepancy note in `dps-engine.md`), so carrying a boss's total
+across phases is entirely the renderer's job. `ingestQuestObjectId` calls
 `carryForwardBossDamage` on the *previous* `lockedBossId` before switching,
-but **only when that previous lock is still alive** (`bossAlive` true) — a
-genuine phase/form change on the same encounter. It snapshots the previous
-lock's current per-attacker damage (`totalDamageRows` — bridge rows if
-present, else the summed local buffer) into `bossCarry`. `snapshot()` then
-takes the `bossSnapshot` branch whenever `bossCarry` is non-empty and the
-focus is still the locked boss: each row's `damage` is `bossCarry + the
-current phase's live damage`, while `dps` is just the current phase's live
-rate (not a whole-encounter average).
+but **only when that previous lock is still alive** (`bossAlive` true) **and
+we're not in the open-world Realm** (`!inRealm`) — a genuine phase/form change
+on the same encounter. It snapshots the previous lock's current per-attacker
+damage (`totalDamageRows` — bridge rows if present, else the summed local
+buffer) into `bossCarry`. `snapshot()` then takes the `bossSnapshot` branch
+whenever `bossCarry` is non-empty and the focus is still the locked boss: each
+row's `damage` is `bossCarry + the current phase's live damage`, while `dps`
+is just the current phase's live rate (not a whole-encounter average).
 
-If the previous lock had already **despawned** (`bossAlive` false) by the
-time a new objective arrives, it is *not* a phase change — it's an unrelated
-new encounter (the next quest boss; the common case in the open-world Realm,
-which cycles through many independent quest bosses with no instance change
-between them, but equally possible in any instance with more than one
-distinct boss). Carrying that dead boss's damage forward here would
-misattribute it to whichever boss locks next — the bug behind "the DPS
-summary attributes a Realm quest boss's damage to the *next* quest boss
-instead of the one that was just killed." Instead, `ingestQuestObjectId`
-calls `resolveBossChain()`, which bakes the just-finished chain (its own
-`bossSnapshot`, merging any still-unflushed `bossCarry` from that chain's own
-earlier phases) into its own `resolvedBossEncounters` entry — see §5.1's
-"Boss-phase merging" — and clears `bossCarry` so the new chain starts at
-zero rather than inheriting the old one's total.
+If the previous lock had already **despawned** (`bossAlive` false) — **or the
+instance is the Realm** (`inRealm`, from `MapInfoPacket` via `isRealmInstance`:
+the Realm's `displayName` is the unresolved key `{s.rotmg}` and its realm-score
+fields are `>= 0`, both `-1`/absent elsewhere) — a new objective is *not* a
+phase change but an unrelated new encounter (the next quest boss). The Realm
+cycles through many independent quest bosses with no instance change between
+them, and carrying a dead boss's damage forward misattributes it to whichever
+boss locks next — the bug behind "the DPS panel/summary rolls a killed Realm
+boss's damage onto the *next* quest boss and snaps the label to it instantly."
+
+> **Why the Realm needs its own gate (not just `bossAlive`).** When a Realm
+> boss is killed, the game re-points the quest marker with a
+> `QuestObjectIdPacket` for the next boss in the **same server tick** as, but
+> **ordered before**, the `UpdatePacket.drops` that despawns the just-killed
+> boss. So `bossAlive` is still `true` when `ingestQuestObjectId` runs — the
+> despawn hasn't been processed yet — and the `bossAlive` check alone can't
+> catch the swap (this is what defeated the earlier fix). A Realm boss-swap is
+> otherwise packet-identical to a dungeon phase change (old id despawns, new id
+> spawns as a fresh objectId at ~the same spot), so **instance context is the
+> only signal that separates them.** Outside the Realm the `bossAlive` gate is
+> unchanged, so dungeon multi-phase bosses still carry across phases. Regression:
+> `dps-replay.test.ts`'s "Realm boss-swap rollover" cases, driven from the
+> hand-authored `realm-boss-rollover.json.gz` fixture (which reproduces that
+> exact same-tick ordering) — one case pins the Realm reset, the other the
+> unchanged dungeon carry.
+
+In the non-carry case `ingestQuestObjectId` calls `resolveBossChain()`, which
+bakes the just-finished chain (its own `bossSnapshot`, merging any
+still-unflushed `bossCarry` from that chain's own earlier phases) into its own
+`resolvedBossEncounters` entry — see §5.1's "Boss-phase merging" — and clears
+`bossCarry` so the new chain starts at zero rather than inheriting the old
+one's total.
 
 **Local rolling window.** `ingestDamage` buckets hits as
 `targets[targetId][attackerId] = HitEvent[]`, redirecting a minion's `objectId`
