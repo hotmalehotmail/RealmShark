@@ -289,6 +289,15 @@ descending). Wire shape (`type:"dps"`, `direction:"internal"`):
 > `fightSec = getFightTimer()/1000 = (lastDamageTaken − firstDamageTaken)/1000`
 > (`DpsBroadcaster.java:91-105`). So the Java path reports **average DPS over the
 > entire fight so far**. Contrast the renderer's own 8-second rolling window below.
+> Two corollaries: because `timePc` only advances per `NewTickPacket` (~200 ms),
+> an enemy burst-killed within one tick has `fightMs == 0` and `dps == 0` for
+> every attacker despite real `damage` — which is why the overlay's detail panel
+> no longer displays this quotient (it shows the renderer's recorder-computed
+> avg/peak instead — `prd-dps-graph.md` §1/§5). And because `damage` is a
+> monotonic running total per (enemy, player), the renderer's `DpsRateRecorder`
+> delta-diffs consecutive snapshots to build its rate series
+> (`overlay-renderer.md` §5.2) — the *cumulative* property of this field is now
+> load-bearing wire contract, not an implementation detail.
 
 Also note `p.name` is the bridge's best guess (falls back to `IdToAsset.objectName`
 = class name when a player lacks `NAME_STAT`); the renderer overrides it with the
