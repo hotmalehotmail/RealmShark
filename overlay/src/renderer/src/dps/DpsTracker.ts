@@ -198,6 +198,18 @@ export class DpsTracker {
   /** Bridge-computed DPS, per enemy id -> { name, rows }. Replaces the local DamagePacket estimate. */
   private bridgeEnemies = new Map<number, { name: string; rows: PlayerDps[] }>()
   private targets = new Map<number, Map<number, HitEvent[]>>()
+  /**
+   * Cumulative per-target-per-attacker DamagePacket totals - unlike the
+   * rolling-window buffers in `targets`, these are never trimmed, so the
+   * no-bridge fallbacks that need whole-fight totals (`totalDamageRows`, and
+   * through it carry-forward/history) can't be corrupted by `snapshot()`'s
+   * in-place window trimming. This decoupling is what makes ONE shared
+   * tracker safe for both the live panel and history retention (PRD §3);
+   * before it, the live panel's periodic snapshots would have silently
+   * truncated the history tracker's fallback totals, which is why two
+   * separate instances existed.
+   */
+  private cumulativeDamage = new Map<number, Map<number, number>>()
   private focusTargetId: number | null = null
   private localPlayerId: number | null = null
   /** Summoned entity id -> owning player id, from ServerPlayerShootPacket. */
@@ -689,10 +701,9 @@ export class DpsTracker {
         result.set(row.objectId, { name: row.name, damage: row.damage })
       return result
     }
-    const byAttacker = this.targets.get(targetId)
+    const byAttacker = this.cumulativeDamage.get(targetId)
     if (byAttacker) {
-      for (const [attackerId, buffer] of byAttacker) {
-        const damage = buffer.reduce((sum, hit) => sum + hit.damage, 0)
+      for (const [attackerId, damage] of byAttacker) {
         result.set(attackerId, { name: this.nameOf(attackerId), damage })
       }
     }
@@ -716,6 +727,13 @@ export class DpsTracker {
     }
     buffer.push({ time, damage: data.damageAmount })
 
+    let cumByAttacker = this.cumulativeDamage.get(data.targetId)
+    if (!cumByAttacker) {
+      cumByAttacker = new Map()
+      this.cumulativeDamage.set(data.targetId, cumByAttacker)
+    }
+    cumByAttacker.set(attackerId, (cumByAttacker.get(attackerId) ?? 0) + data.damageAmount)
+
     if (DPS_DEBUG && !Number.isFinite(data.damageAmount)) {
       // damageAmount arriving as undefined/NaN means the field name doesn't
       // match the wire format - a prime suspect for "rows show up but read 0".
@@ -733,6 +751,7 @@ export class DpsTracker {
     this.objectNames.clear()
     this.bridgeEnemies.clear()
     this.targets.clear()
+    this.cumulativeDamage.clear()
     this.focusTargetId = null
     this.localPlayerId = null
     this.minionOwners.clear()
