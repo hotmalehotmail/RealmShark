@@ -1,5 +1,6 @@
 import type { PacketEnvelope } from '../../../shared/ipc'
 import { equipmentRarityFromUniqueDataString } from '../sprites/enchantRarity'
+import { DpsRateRecorder } from './DpsRateRecorder'
 import {
   MAX_HP_STAT_TYPE_NUM,
   NAME_STAT_TYPE_NUM,
@@ -179,7 +180,16 @@ export const EMPTY_SNAPSHOT: DpsSnapshot = { targetId: null, targetName: '', row
  * for `SUSTAINED_ATTACK_MS` straight, which overrides the lock (a deliberate
  * switch away from the boss, not a stray AoE tick - see `onLocalHit`).
  * Outside a quest objective (e.g. open world) it falls back to focusing
- * whichever enemy the local player last hit. Reset on instance change
+ * whichever enemy the local player last hit.
+ *
+ * Case (b)'s carry-forward is gated on NOT being in the open-world Realm
+ * (`inRealm`): the Realm's quest marker cycles through many *independent*
+ * bosses (kill one, the marker jumps to the next), which is packet-structurally
+ * identical to a dungeon phase/form change - old boss despawns, new boss spawns
+ * as a fresh objectId - so it cannot be told apart by shape or timing, only by
+ * instance context. Carrying forward in the Realm rolls a just-killed boss's
+ * damage onto the next one and snaps the label to it instantly; see
+ * `ingestQuestObjectId`. Reset on instance change
  * (MapInfoPacket) and meant to also be reset externally when the game closes
  * (electron-overlay-window's "detach" event) - both wipe the same state, just
  * triggered from different places.
@@ -192,6 +202,13 @@ export const EMPTY_SNAPSHOT: DpsSnapshot = { targetId: null, targetName: '', row
  * in-game; see ingestEnemyHit.
  */
 export class DpsTracker {
+  /**
+   * The time-binned rate recorder (PRD §2): the sparkline's aggregate series
+   * and the detail panel's per-(enemy, player) avg/peak metrics. Fed from the
+   * `dps` case below; reset with the tracker (instance change / detach).
+   */
+  readonly recorder = new DpsRateRecorder()
+
   private entityNames = new Map<number, string>()
   /** Enemy/NPC id -> name, resolved bridge-side from game assets (objectNames envelope). */
   private objectNames = new Map<number, string>()
@@ -247,8 +264,16 @@ export class DpsTracker {
    * resolveBossChain whenever the previous objective had already despawned -
    * a new, unrelated encounter starts this back at zero rather than
    * inheriting a dead boss's damage.
+   *
+   * Besides `damage`, each entry carries the recorder's per-phase metrics
+   * fold (`engagedMs`/`peak` - PRD §5): summing engaged spans and taking the
+   * max peak across phases is what lets a chain's merged rows keep honest
+   * avg/peak numbers instead of the old struct's discarded-to-0 dps.
    */
-  private bossCarry = new Map<number, { name: string; damage: number }>()
+  private bossCarry = new Map<
+    number,
+    { name: string; damage: number; engagedMs: number; peak: number }
+  >()
   /** Debug: how many of each packet type we've ingested (all types, not just relevant ones). */
   private typeCounts = new Map<string, number>()
   /** Debug: types whose field keys we've already dumped once (to avoid per-packet spam). */
@@ -312,9 +337,12 @@ export class DpsTracker {
         case 'objectNames':
           this.ingestObjectNames(envelope.data as Record<string, string>)
           break
-        case 'dps':
-          this.ingestBridgeDps(envelope.data as BridgeDpsData)
+        case 'dps': {
+          const dps = envelope.data as BridgeDpsData
+          this.ingestBridgeDps(dps)
+          this.recorder.onSnapshot(dps, envelope.time, this.localPlayerId)
           break
+        }
         case 'ServerPlayerShootPacket':
           this.ingestShoot(envelope.data as ServerPlayerShootPacketData)
           break
@@ -679,15 +707,23 @@ export class DpsTracker {
     }
   }
 
-  /** Snapshot `oldId`'s current per-player damage into `bossCarry`, summing across phases. */
+  /** Snapshot `oldId`'s current per-player damage (and recorder metrics) into `bossCarry`, summing across phases. */
   private carryForwardBossDamage(oldId: number): void {
     for (const [attackerId, row] of this.totalDamageRows(oldId)) {
+      const metrics = this.recorder.metricsFor(oldId, attackerId)
       const existing = this.bossCarry.get(attackerId)
       if (existing) {
         existing.damage += row.damage
+        existing.engagedMs += metrics?.engagedMs ?? 0
+        existing.peak = Math.max(existing.peak, metrics?.peakDps ?? 0)
         if (row.name) existing.name = row.name
       } else {
-        this.bossCarry.set(attackerId, { name: row.name, damage: row.damage })
+        this.bossCarry.set(attackerId, {
+          name: row.name,
+          damage: row.damage,
+          engagedMs: metrics?.engagedMs ?? 0,
+          peak: metrics?.peakDps ?? 0
+        })
       }
     }
   }
@@ -766,6 +802,7 @@ export class DpsTracker {
     this.playerCosmetics.clear()
     this.bossPhaseIds.clear()
     this.resolvedBossEncounters = []
+    this.recorder.resetInstance()
     // Deliberately keep typeCounts/dumpedKeys across resets so the running
     // totals (and one-time key dumps) survive instance changes - they describe
     // the whole session's traffic, not a single instance. Likewise `history`/
@@ -900,6 +937,19 @@ export class DpsTracker {
       }
     }
 
+    // Attach combined avg/peak metrics (PRD §5): the carried phases' engaged
+    // span + the current phase's recorder fold. A row with no observed span
+    // anywhere gets no metrics (renders "—", never a fake 0).
+    for (const row of merged.values()) {
+      const carry = this.bossCarry.get(row.objectId)
+      const live = this.recorder.metricsFor(targetId, row.objectId)
+      const engagedMs = (carry?.engagedMs ?? 0) + (live?.engagedMs ?? 0)
+      if (engagedMs > 0) {
+        row.avgDps = row.damage / (engagedMs / 1000)
+        row.peakDps = Math.max(carry?.peak ?? 0, live?.peakDps ?? 0, row.avgDps)
+      }
+    }
+
     const rows = Array.from(merged.values()).sort((a, b) => b.damage - a.damage)
     return { targetId, targetName, rows }
   }
@@ -981,7 +1031,7 @@ export class DpsTracker {
         id,
         name: enemy.name,
         objectType: this.objectTypes.get(id) ?? null,
-        players: enemy.rows,
+        players: this.withMetrics(id, enemy.rows),
         cosmetics: this.cosmeticsFor(enemy.rows)
       })
     }
@@ -991,6 +1041,19 @@ export class DpsTracker {
 
     enemies.sort((a, b) => totalDamage(b.players) - totalDamage(a.players))
     return enemies
+  }
+
+  /**
+   * Attach the recorder's avg/peak metrics (PRD §5) to each row, for a
+   * history freeze. Rows the recorder never observed a delta for (the fight
+   * predated our attach, or the rare bridge-absent fallback) stay metric-less
+   * - the detail panel renders "—" for those instead of a fake 0.
+   */
+  private withMetrics(enemyId: number, rows: PlayerDps[]): PlayerDps[] {
+    return rows.map((row) => {
+      const m = this.recorder.metricsFor(enemyId, row.objectId)
+      return m ? { ...row, avgDps: m.avgDps, peakDps: m.peakDps } : row
+    })
   }
 
   /** Frozen cosmetic loadout for each player row, for the detail view's per-player gear/sprite. */
