@@ -82,6 +82,109 @@ html.panel-dragging [data-panel-frame] {
 }
 
 /*
+ * Global scrollbar styling (issue #260) - every `overflow-auto`/`overflow-y-auto`/
+ * `overflow-x-auto` (and the `-scroll` variants) surface - panel bodies
+ * (`PanelFrame`'s content wrapper covers every panel automatically), the
+ * harness's `PanelMount`, and the alert-config dropdown - gets the same slim,
+ * dark-theme-appropriate scrollbar with zero per-component work: a future
+ * scrolling surface just needs one of these Tailwind overflow utilities,
+ * already true today, to pick this up. Chromium-only (Electron), so
+ * `::-webkit-scrollbar` is safe with no cross-browser fallback needed.
+ *
+ * `scrollbar-gutter: stable` (reserves the track's space even before content
+ * overflows, so width never jumps when a scrollbar appears/disappears) is
+ * scoped to the vertical-scrolling variants only (`-y-auto`/`-y-scroll`/bare
+ * `.overflow-scroll`, which scrolls both axes), deliberately excluding both
+ * bare `.overflow-auto` and the `-x-` variants: `.overflow-auto` is
+ * `PanelFrame`'s one shared content wrapper for every panel type (scrolling
+ * or not), so reserving a gutter there would permanently shrink every
+ * panel's content width, even panels whose content never overflows; the
+ * `-x-` variants never show a block-axis (vertical) scrollbar, so the
+ * property would reserve inline space no scrollbar ever occupies. The
+ * panels that actually scroll (Console, Loot, Notifications, DPS
+ * Summary/Detail, Instance) each put their own `overflow-y-auto` on their
+ * scrolling root, which does get the stable gutter.
+ *
+ * Only the `::-webkit-scrollbar-*` pseudo-elements style the scrollbar
+ * itself - the standard `scrollbar-width`/`scrollbar-color` properties are
+ * deliberately NOT set here. Setting both on the same element is mutually
+ * exclusive in current Chromium: once `scrollbar-width` is non-`auto`,
+ * Chromium ignores the `::-webkit-scrollbar` pseudo-elements entirely,
+ * which would silently kill the pill thumb and the hover/active affordance
+ * below.
+ */
+:is(.overflow-y-auto, .overflow-y-scroll, .overflow-scroll) {
+  scrollbar-gutter: stable;
+}
+
+:is(
+    .overflow-auto,
+    .overflow-y-auto,
+    .overflow-x-auto,
+    .overflow-scroll,
+    .overflow-y-scroll,
+    .overflow-x-scroll
+  )::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+:is(
+    .overflow-auto,
+    .overflow-y-auto,
+    .overflow-x-auto,
+    .overflow-scroll,
+    .overflow-y-scroll,
+    .overflow-x-scroll
+  )::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+:is(
+    .overflow-auto,
+    .overflow-y-auto,
+    .overflow-x-auto,
+    .overflow-scroll,
+    .overflow-y-scroll,
+    .overflow-x-scroll
+  )::-webkit-scrollbar-thumb {
+  background-color: var(--color-surface-2);
+  border: 2px solid transparent;
+  border-radius: 9999px;
+  background-clip: content-box;
+}
+
+:is(
+    .overflow-auto,
+    .overflow-y-auto,
+    .overflow-x-auto,
+    .overflow-scroll,
+    .overflow-y-scroll,
+    .overflow-x-scroll
+  )::-webkit-scrollbar-thumb:hover,
+:is(
+    .overflow-auto,
+    .overflow-y-auto,
+    .overflow-x-auto,
+    .overflow-scroll,
+    .overflow-y-scroll,
+    .overflow-x-scroll
+  )::-webkit-scrollbar-thumb:active {
+  background-color: var(--color-surface-3);
+}
+
+:is(
+    .overflow-auto,
+    .overflow-y-auto,
+    .overflow-x-auto,
+    .overflow-scroll,
+    .overflow-y-scroll,
+    .overflow-x-scroll
+  )::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/*
  * A <select>'s open option list renders in a separate native OS popup, not
  * inside the app's own translucent chrome - so a select's `bg-surface-2`
  * (a partial-alpha white fill meant to sit over the game) never reaches it,

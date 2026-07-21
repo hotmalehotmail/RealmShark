@@ -1628,9 +1628,10 @@ shiny badge (`ItemSprite`'s own `useItemInfo().isShiny` lookup, issue #250 —
 hover tooltip (item name/tier/class/description from `itemInfo`, plus the
 enchant list decoded from `entry.enchantCode` via `ItemSprite`'s
 `enchantCode` prop, the same path `DpsDetailPanel` uses for frozen history)
-— **newest first** so the latest drop is visible without scrolling. The
-resolved item name (`itemName`, from `lootBagTypes`'s `itemNames` table)
-renders beside the sprite at `size === 'lg'`. The scroll container carries a
+— **newest first** so the latest drop is visible without scrolling. No text
+label renders at any size (including `lg`) — the resolved item name (from
+`lootBagTypes`'s `itemNames` table) is only available via `ItemSprite`'s
+hover tooltip. The scroll container carries a
 `p-1.5` inset so an edge item's rarity indicator (bottom-right pip/ring) and
 shiny indicator (top-left icon/badge) — both outset overlays that extend past
 the sprite's own box — aren't clipped by the container edge (issue #193; with
