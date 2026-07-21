@@ -28,8 +28,8 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/panels/PanelFrame.tsx` | One panel's chrome: title bar, drag, size/pin/close/settings-gear buttons, visibility. |
 | `overlay/src/renderer/src/panels/panelSpawn.ts` | `PanelSpawnContext` / `usePanelSpawn()` - lets a panel body open/close another panel on the canvas (§2's "Programmatic panel spawn/close"). |
 | `overlay/src/renderer/src/panels/anchor.ts` | Percentage-anchor ↔ pixel math (`panelStyle`, `anchorFromPointer`). |
-| `overlay/src/renderer/src/panels/registry.ts` | `type → { title, per-size px dims, component, closable?, settings? }`, `PanelContentProps`, and `PanelSettingsProps` (§2's "Per-panel settings gear", issue #221). |
-| `overlay/src/renderer/src/panels/panelLayout.ts` | `defaultLayout()`/`mergeWithDefaults()`/`isPersistablePanel()` - split out of `PanelCanvas.tsx` (a component file can't also export plain functions - `react-refresh/only-export-components`), same rationale as `dps/dpsDetailContext.ts`. |
+| `overlay/src/renderer/src/panels/registry.ts` | `type → { title, per-size px dims, component, closable?, ephemeral?, settings? }`, `PanelContentProps`, and `PanelSettingsProps` (§2's "Per-panel settings gear", issue #221). |
+| `overlay/src/renderer/src/panels/panelLayout.ts` | `defaultLayout()`/`mergeWithDefaults()`/`isPersistablePanel()` plus the pure open/close transitions (`withPanelOpen`/`withPanelClosed`/`isPanelOpen` - §2's "Closeable panels") - split out of `PanelCanvas.tsx` (a component file can't also export plain functions - `react-refresh/only-export-components`), same rationale as `dps/dpsDetailContext.ts`. |
 | `overlay/src/renderer/src/panels/{Status,Dps,Console,Character,Instance,DpsSummary,DpsDetail,Loot,Notifications}Panel.tsx` | The nine panel bodies. |
 | `overlay/src/renderer/src/ui/*.tsx` | Shared UI primitives (`Button`, `EmptyState`, `Swatch`, `GearRow`, `MeterRow`, `StatRow`, `Tooltip`) — see `overlay-ui-style.md`. |
 | `overlay/src/renderer/src/ui/interactiveContext.ts` | `InteractiveContext` / `useInteractive()` - the click-through-mode flag, for `Tooltip` (§4.2). |
@@ -312,9 +312,14 @@ pre-load empty array never clobbers a saved layout.
 > for existing users on upgrade, instead of only on a fresh `panels.json`.
 
 Both the load and the debounced save filter through `isPersistablePanel`
-first, dropping any panel whose registry entry sets `closable` — see §2's
+first, dropping any panel whose registry entry sets `ephemeral` — see §2's
 "Programmatic panel spawn/close" for why a spawned panel like `dpsDetail`
-must never round-trip through `panels.json`.
+must never round-trip through `panels.json`. (This used to key on `closable`
+back when `dpsDetail` was the only closable panel; since the closeable-panels
+change made every panel except status closable — with closing = set
+`PanelInstance.hidden`, not remove — ordinary closed panels must keep
+persisting so the hidden flag survives a restart. See §2's "Closeable
+panels".)
 
 The main process persists `panels.json`; see `overlay-main-process.md`.
 
@@ -337,9 +342,11 @@ inherit it and must not re-declare it (see `overlay-ui-style.md`).
    effect cleanup). Style it with the semantic tokens and `ui/` primitives per
    **`overlay-ui-style.md`** — no raw palette classes, no arbitrary text sizes.
 2. **Register it** in `PANEL_REGISTRY` (`registry.ts:21`): add a key with
-   `{ type, title, sizes: { sm, md, lg }, component: FooPanel }`. The three
-   `sizes` entries are required (they're the only dimensions the panel will ever
-   have).
+   `{ type, title, sizes: { sm, md, lg }, component: FooPanel, closable: true }`.
+   The three `sizes` entries are required (they're the only dimensions the panel
+   will ever have); `closable` is the norm for every singleton panel (§2's
+   "Closeable panels" — only `status` omits it), and the Status panel's toggle
+   list picks the new type up automatically from the registry.
 3. **Add a default instance** in `defaultLayout()` (`PanelCanvas.tsx:13-33`) with
    a unique `id`, a non-overlapping `anchor`, a `size`, and a `zIndex`. Thanks to
    `mergeWithDefaults`, existing users pick it up on upgrade.
@@ -360,32 +367,35 @@ mechanism any future panel can reuse, not a DPS-specific hack:
 - **`panels/panelSpawn.ts`** — `PanelSpawnContext` / `usePanelSpawn()`, giving
   a panel body three calls: `openPanel(id, type, size?)` (creates a
   `PanelInstance` at a fixed default anchor if `id` isn't already in the
-  canvas's `panels` array, otherwise just raises the existing one to front —
-  so re-targeting an already-open panel, e.g. selecting a different session,
-  never spawns a duplicate), `closePanel(id)` (removes it from the array
-  entirely), and `isOpen(id)` (whether a panel instance with that `id`
-  currently exists — lets a spawning panel body derive UI state, like a row
-  highlight, from the spawned panel's actual presence on the canvas instead
-  of tracking it separately). All three are implemented by `PanelCanvas`
-  (`openPanel`/`closePanel`/`isOpen` next to `updatePanel`/`bringToTop`) and
-  provided via `<PanelSpawnContext.Provider>` wrapping its rendered panels —
-  `PanelCanvas` itself has no DPS-specific knowledge; it only manipulates
-  `PanelInstance[]` generically.
+  canvas's `panels` array, otherwise un-hides it if closed and raises the
+  existing one to front — so re-targeting an already-open panel, e.g.
+  selecting a different session, never spawns a duplicate), `closePanel(id)`
+  (removes an `ephemeral` panel from the array entirely; hides any other —
+  see "Closeable panels" below), and `isOpen(id)` (whether a panel with that
+  `id` is currently on the canvas and not hidden — lets a spawning panel body
+  derive UI state, like a row highlight or the Status panel's toggle states,
+  from the panel's actual open/closed state instead of tracking it
+  separately). All three are implemented by `PanelCanvas` as thin `setPanels`
+  wrappers over `panelLayout.ts`'s pure `withPanelOpen`/`withPanelClosed`/
+  `isPanelOpen` transitions and provided via `<PanelSpawnContext.Provider>`
+  wrapping its rendered panels — `PanelCanvas` itself has no DPS-specific
+  knowledge; it only manipulates `PanelInstance[]` generically.
 - **`registry.ts`'s `closable?: boolean`** on a `PanelSpec` — when set,
   `PanelFrame` renders a ✕ button in that panel's title bar (alongside
   pin/size) wired to `usePanelSpawn().closePanel(panel.id)` via the `onClose`
-  prop `PanelCanvas` passes every `PanelFrame`. Only `dpsDetail` sets this
-  today; an ordinary always-on panel (the other seven) leaves it unset and
-  gets no close control.
-- **A spawned panel is not in `defaultLayout()`** and is never added by
-  `mergeWithDefaults` — it only exists in the `panels` array while open, so
-  closing it and reopening later always respawns at `panelSpawn.ts`'s
-  `SPAWN_ANCHOR` default position rather than resuming wherever it was last
-  dragged. This was a deliberate simplicity tradeoff (position isn't preserved
-  across a close/reopen cycle), not a limitation of the mechanism itself.
-- **`closable` panels are excluded from persistence, in both directions.**
+  prop `PanelCanvas` passes every `PanelFrame`. Since the closeable-panels
+  change, every panel except `status` sets it — see "Closeable panels" below
+  for why status must stay un-closeable.
+- **A spawned (`ephemeral`) panel is not in `defaultLayout()`** and is never
+  added by `mergeWithDefaults` — it only exists in the `panels` array while
+  open, so closing it and reopening later always respawns at
+  `panelLayout.ts`'s `SPAWN_ANCHOR` default position rather than resuming
+  wherever it was last dragged. This was a deliberate simplicity tradeoff
+  (position isn't preserved across a close/reopen cycle), not a limitation of
+  the mechanism itself.
+- **`ephemeral` panels are excluded from persistence, in both directions.**
   `PanelCanvas`'s `isPersistablePanel` filters any panel whose registry entry
-  sets `closable` out of `savePanelLayout`'s payload, and out of a freshly
+  sets `ephemeral` out of `savePanelLayout`'s payload, and out of a freshly
   loaded `panels.json` before it's merged with defaults. Without this, a
   spawned `dpsDetail` panel open at quit time would round-trip into
   `panels.json` like any ordinary panel and reappear on next launch — but its
@@ -394,7 +404,7 @@ mechanism any future panel can reuse, not a DPS-specific hack:
   permanent "No session selected" empty state with no way for the user to
   populate it short of closing and reopening it. The load-side filter also
   guards against a `panels.json` written before this fix (or by an older
-  build) still carrying a stale closable panel. This is what keeps the "only
+  build) still carrying a stale spawned panel. This is what keeps the "only
   exists in the `panels` array while open" claim above actually true.
 - **Cross-panel data still needs its own channel** — `PanelContentProps` is
   still just `{ size }` (above), so `openPanel`/`closePanel` alone can't tell
@@ -432,6 +442,46 @@ mechanism any future panel can reuse, not a DPS-specific hack:
   would normally populate the selection, and an unselected `dpsDetail` shot
   would otherwise just show its "No session selected" empty state instead of
   real per-enemy/per-player content.
+
+### Closeable panels & the Status panel's toggle list
+
+Every panel except `status` is `closable` — the title-bar ✕ on a singleton
+panel doesn't remove its instance the way it does for the `ephemeral`
+`dpsDetail`; it sets `PanelInstance.hidden` and keeps the instance in the
+array (`panelLayout.ts`'s `withPanelClosed`). `PanelCanvas` skips hidden
+panels at render (same guard as unknown types), and because hidden singletons
+still persist to `panels.json`, both the closed state *and* the panel's
+position/size/pin survive a restart — toggling a panel back on restores it
+exactly where it was, not at a spawn anchor.
+
+The way back on is the **Status panel's "Panels" toggle list**
+(`StatusPanel.tsx`, md/lg sizes): one ghost-button chip per singleton panel
+(everything in the registry except `status` itself and `ephemeral` types —
+an empty `dpsDetail` toggled on from there would be meaningless), rendered
+green when shown / faint when hidden via the same `Button` ghost+`active`
+styling as the pin toggle. Each chip reads `usePanelSpawn().isOpen(type)` and
+flips via `closePanel(type)` / `openPanel(type, type)` — singleton panels use
+`id === type` (the `defaultLayout()` invariant), so the registry key doubles
+as the instance id. Because chips derive from the same `panels` array the ✕
+buttons mutate, a panel closed from its own title bar reads as toggled-off on
+the Status panel with no separate state to sync.
+
+Two invariants this feature leans on:
+
+- **`status` must never be closable** — it hosts the only affordance that
+  un-hides other panels; a closeable status panel could strand the user with
+  everything toggled off and no way back short of deleting `panels.json`.
+- **`isPersistablePanel` keys on `ephemeral`, not `closable`** — closed
+  singletons must keep round-tripping through `panels.json` or they'd be
+  silently resurrected by `mergeWithDefaults` on next launch (its append-
+  missing-defaults step only skips ids that are still present in the saved
+  array, hidden or not).
+
+`StatusPanel` reads `PANEL_REGISTRY` for the chip list even though
+`registry.ts` imports `StatusPanel` — a deliberate module cycle, safe only
+because the registry is read at render time (inside `togglablePanels()`),
+never during module evaluation; a module-scope read would hit the cycle
+before the registry const initializes.
 
 ### Per-panel settings gear (issue #221)
 
@@ -494,7 +544,7 @@ item tooltip (§4.2) with no per-panel wiring.
 
 | Panel | Title | Data source | Notes |
 | --- | --- | --- | --- |
-| `StatusPanel` | "RealmShark" | `window.overlay.*` directly | Connection dot, hotkey hint, packet count, JS heap MB, app version + **auto-update** UI. |
+| `StatusPanel` | "RealmShark" | `window.overlay.*` directly | Connection dot, hotkey hint, packet count, JS heap MB, app version + **auto-update** UI, plus the **"Panels" toggle list** (§2's "Closeable panels") — the one panel with no title-bar ✕. |
 | `DpsPanel` | "DPS" | `useDpsTracker()` → `<DpsList>`; `<DpsSparkline>` at md/lg | Rows per attacker vs. the focused enemy, ranked by cumulative damage (§5). `MAX_ROWS = {sm:2, md:3, lg:6}` — deliberately few, large rows (24-40px sprites) so the panel reads at a glance mid-fight, rather than the previous 3/6/12 dense layout. Each row also renders that attacker's dyed `CharacterSprite` + equip-slot icons (gear hidden at `sm`), resolved from `EntityRegistry` by `row.objectId`, plus a damage-share bar (length **and** color both encode `damage/topDamage`) and a rank badge/ring on the local player's row (§6). Above the rows (md/lg only, like the target header), the **trend sparkline** (§5.2): the local player's aggregate damage rate over the trailing ~10 s. |
 | `ConsolePanel` | "Console" | `consoleLog.ts` buffer | Live log with search (Ctrl/Cmd+F), level colours, clear. |
 | `CharacterPanel` | "Character" | `EntityRegistry` (local player) | Big dyed sprite + 4 equip icons + username. |

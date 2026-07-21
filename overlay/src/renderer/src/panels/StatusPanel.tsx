@@ -4,7 +4,8 @@ import type { BridgeStatus, PacketEnvelope, UpdateInfo } from '../../../shared/i
 import { DEFAULT_SETTINGS } from '../../../shared/settings'
 import { Button } from '../ui/Button'
 import { StatRow } from '../ui/StatRow'
-import type { PanelContentProps } from './registry'
+import { usePanelSpawn } from './panelSpawn'
+import { PANEL_REGISTRY, type PanelContentProps } from './registry'
 
 const STATUS_STYLES: Record<BridgeStatus, string> = {
   connected: 'bg-success',
@@ -24,6 +25,21 @@ function usedJsHeapMb(): number | null {
   return memory ? memory.usedJSHeapSize / (1024 * 1024) : null
 }
 
+/**
+ * The Status panel's toggle list covers every singleton panel: everything in
+ * the registry except status itself (not closable - this list is the way
+ * back) and ephemeral panels (dpsDetail is opened from a DPS Summary row
+ * click with a selected session; toggling an empty one on from here would be
+ * meaningless). Computed at render time, not module scope: registry.ts
+ * imports this component, so reading PANEL_REGISTRY during module evaluation
+ * would hit the circular import before the registry is initialized.
+ */
+function togglablePanels(): { type: string; title: string }[] {
+  return Object.values(PANEL_REGISTRY)
+    .filter((spec) => spec.closable && !spec.ephemeral)
+    .map(({ type, title }) => ({ type, title }))
+}
+
 function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
   const [status, setStatus] = useState<BridgeStatus>('connecting')
   const [packetCount, setPacketCount] = useState(0)
@@ -36,6 +52,7 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
   const [downloadPct, setDownloadPct] = useState<number | null>(null)
   const [actionMsg, setActionMsg] = useState('')
   const [probe, setProbe] = useState<ChatProbeStatus>({ active: false, captured: 0 })
+  const { openPanel, closePanel, isOpen } = usePanelSpawn()
 
   useEffect(() => {
     window.overlay.getSettings().then((settings) => setToggleHotkey(settings.toggleHotkey))
@@ -163,6 +180,31 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
               last: {lastPacket.direction} {lastPacket.type}
             </div>
           )}
+
+          {/* Singleton panels use id === type (the defaultLayout() invariant),
+              so the registry type doubles as the instance id here. Ghost+active
+              matches the pin toggle's engaged-state styling: green = shown,
+              faint = hidden. */}
+          <div className="mt-1.5 border-t border-edge pt-1">
+            <div className="text-2xs uppercase tracking-wide text-fg-faint">Panels</div>
+            <div className="mt-0.5 flex flex-wrap gap-x-1 gap-y-0.5">
+              {togglablePanels().map(({ type, title }) => {
+                const open = isOpen(type)
+                return (
+                  <Button
+                    key={type}
+                    variant="ghost"
+                    size="xs"
+                    active={open}
+                    onClick={() => (open ? closePanel(type) : openPanel(type, type, 'md'))}
+                    title={open ? `Hide the ${title} panel` : `Show the ${title} panel`}
+                  >
+                    {title}
+                  </Button>
+                )
+              })}
+            </div>
+          </div>
 
           {/* Pinned to the panel's bottom edge (mt-auto) so every action stays
               reachable without scrolling regardless of how much info sits above it. */}

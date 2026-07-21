@@ -555,9 +555,12 @@ focusable, opaque window with the standard preload.
 ## 5. Panel layout
 
 **Model** (`shared/panels.ts`): a `PanelInstance` is `{ id, type, anchor, size,
-zIndex, pinned? }`. `Anchor` is percentage-based (`x`/`y` 0–100, `pos` currently
-always `'tl'`) so positions stay correct when the overlay window resizes with the
-game window. `pinned` (optional) keeps a panel visible in click-through mode.
+zIndex, pinned?, hidden? }`. `Anchor` is percentage-based (`x`/`y` 0–100, `pos`
+currently always `'tl'`) so positions stay correct when the overlay window
+resizes with the game window. `pinned` (optional) keeps a panel visible in
+click-through mode. `hidden` (optional) keeps a closed (toggled-off) panel's
+instance/position persisted while it never renders — see `overlay-renderer.md`'s
+"Closeable panels & the Status panel's toggle list".
 
 **Persistence** (`panelLayout.ts`): JSON at `userData/panels.json`.
 `loadPanelLayout()` returns `null` when the file is absent or unparseable — the
