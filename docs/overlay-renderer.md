@@ -219,7 +219,7 @@ from the live DOM. The size button cycles
 key — so retuning a size means editing the registry, and it applies to every
 saved layout.
 
-`panelStyle` (`anchor.ts:17-32`) turns `(anchor, targetSizePx, canvasSizePx)`
+`panelStyle` (`anchor.ts:38-53`) turns `(anchor, targetSizePx, canvasSizePx)`
 into CSS: `top/left` in `%`, and `width/height` in **px capped** so the panel
 can't run past the window's right/bottom edge:
 
@@ -228,17 +228,29 @@ width  = min(targetPx.width,  ((100 - anchor.x)/100) * canvasWidth)
 height = min(targetPx.height, ((100 - anchor.y)/100) * canvasHeight)
 ```
 
-This capping only bites when a panel is anchored near an edge and the window
-later shrinks; otherwise the preset px size is used verbatim.
+**The window-shrink case is the only thing this cap is for**, and dragging
+cannot reach it: `anchorFromPointer` bounds a dragged anchor to the range
+where the preset still fits (below), so the cap returns the preset size
+verbatim for every anchor a drag can produce. It bites only when a *saved*
+anchor no longer fits because the game window shrank under it.
+
+That separation is load-bearing for drag performance, not cosmetics — see
+"Per-frame cost during the move" below. The cap compares within a 0.01 px
+slack (`FIT_EPSILON_PX`), because the anchor bound is a percentage and the
+cap re-derives pixels from it: an exact-fit round trip lands ~1e-13 px short
+in floating point, and without the slack a flush panel would render a hair
+narrower than its preset (at a fractional, blurrier width).
 
 ### Drag / reposition
 
 Dragging is manual (no library). `PanelFrame.startDrag` (`PanelFrame.tsx:35`)
 records the grab offset within the panel (so the panel doesn't snap its corner
 to the cursor), then attaches window `mousemove`/`mouseup` listeners. Each move
-calls `anchorFromPointer` (`anchor.ts:35-43`) to convert `(clientX - grabOffset)`
-into a **clamped 0-100 % anchor** and writes the resulting position **directly
-to the frame's DOM** — *not* through React state. Routing every pointer event
+calls `anchorFromPointer` to convert `(clientX - grabOffset)` into a **clamped
+anchor** — clamped to `0 … (canvas - panel)/canvas`, i.e. the range where the
+panel still fits whole, so a drag stops flush with the right/bottom edge
+rather than walking its corner off-screen — and writes the resulting position
+**directly to the frame's DOM** — *not* through React state. Routing every pointer event
 through `setPanels` instead would re-render `PanelCanvas` and every panel's
 (sprite-rendering) content 60-125×/sec, which is what made dragging lag (#120).
 The final anchor is committed to state once, on `mouseup`, via `onDrag` →
@@ -255,11 +267,24 @@ a panel raises it via `onBringToTop`, which bumps `zIndex` to `max+1`
 **Per-frame cost during the move.** `left`/`top` stay at their rest values for
 the whole drag; position is applied via `transform: translate3d(...)` instead
 (a compositor-only property — no layout/repaint — unlike rewriting `left`/`top`
-every frame, which forces a full layout + repaint). `width`/`height` are still
-recomputed from `panelStyle` each move (for the near-an-edge clamp described
-above) but only written to the DOM when the clamped value actually changes,
-which is only near a canvas edge — the common frame does a transform-only
-write. On top of that, `document.documentElement` gets the `panel-dragging`
+every frame, which forces a full layout + repaint). `width`/`height` are not
+written at all: the anchor clamp above guarantees `panelStyle` returns the
+same preset size for every anchor the drag can reach, so `transform` is the
+*only* per-frame write and the move is compositor-only by construction.
+
+> This was a real regression, not a hypothetical. `anchorFromPointer`
+> originally clamped to a bare 0-100 %, which let a drag walk the corner into
+> the region where `panelStyle`'s cap fires — so the size changed on *every*
+> mousemove, and each change was a full layout + repaint of the panel
+> subtree. The dead zone is as large as the panel, so the cost scaled with
+> panel size: measured on a 1280x900 canvas, dragging `dpsDetail` (620x560,
+> the largest preset and the only panel spawned at `lg`) through the
+> bottom-right rewrote its size on 60 of 60 moves for 34.8 ms of layout +
+> 30.9 ms of paint, versus 6.0/2.3 ms for the identical drag in the
+> unclamped region — and squashed the panel to 440x268 as it went. `console`
+> (380x220) hit it on 20 of 60 moves. After the fix all four cases sit at
+> 0 size writes and ~6/2 ms. Regression test:
+> `overlay/test/anchor-dragClamp.test.ts`. On top of that, `document.documentElement` gets the `panel-dragging`
 class for the drag's duration, which suspends every panel's `backdrop-filter`
 blur + `box-shadow` (`main.css`) — hardware acceleration is off (required for
 overlay transparency, Electron #25153), so blur/shadow is otherwise
