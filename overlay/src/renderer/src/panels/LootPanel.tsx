@@ -35,7 +35,7 @@ const ITEM_SIZE: Record<PanelSize, number> = { sm: 18, md: 24, lg: 30 }
  * equipped, unlike the old inventory-pickup tracker.
  */
 function LootPanel({ size }: PanelContentProps): React.JSX.Element {
-  const { entriesByBagType, bagIcon, itemName } = useLootTracker()
+  const { entriesByBagType, bagIcon } = useLootTracker()
 
   return (
     <div className="flex h-full w-full flex-col gap-2 overflow-y-auto p-1.5">
@@ -55,21 +55,15 @@ function LootPanel({ size }: PanelContentProps): React.JSX.Element {
               <span className="text-xs text-fg-faint">{entries.length}</span>
             </div>
             <div className="flex flex-wrap gap-1.5">
-              {ordered.map((entry) => {
-                const resolvedName = itemName(entry.objectType)
-                const name = resolvedName ?? `#${entry.objectType}`
-                return (
-                  <div key={entry.id} className="flex items-center gap-1">
-                    <ItemSprite
-                      objectType={entry.objectType}
-                      size={ITEM_SIZE[size]}
-                      rarity={entry.rarity}
-                      enchantCode={entry.enchantCode}
-                    />
-                    {size === 'lg' && <span className="max-w-[90px] truncate text-xs">{name}</span>}
-                  </div>
-                )
-              })}
+              {ordered.map((entry) => (
+                <ItemSprite
+                  key={entry.id}
+                  objectType={entry.objectType}
+                  size={ITEM_SIZE[size]}
+                  rarity={entry.rarity}
+                  enchantCode={entry.enchantCode}
+                />
+              ))}
             </div>
           </div>
         )
