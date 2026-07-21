@@ -9,6 +9,7 @@ vi.mock('electron', () => ({ app: { getVersion: () => '0.0.0' }, net: {} }))
 // Imported after the mock so its top-level `import { app, net } from 'electron'`
 // resolves to the stub above.
 import { isAlphaTag, pickRelease, type GithubRelease } from '../src/main/updater'
+import type { OverlaySettings } from '../src/shared/settings'
 
 function release(tag: string, draft = false): GithubRelease {
   return { tag_name: tag, draft }
@@ -73,5 +74,21 @@ describe('pickRelease channel filtering', () => {
 
   it('returns null when nothing beats the current version', () => {
     expect(pickRelease([release('v0.9.27')], CURRENT, true)).toBeNull()
+  })
+
+  // Issue #266's Developer-section toggle (`OverlaySettings.devModeToggle`)
+  // must never reach the updater - the channel stays governed by the
+  // `devMode` unlock alone, so turning debug UI off on the soak PC can't
+  // silently drop it off the alpha channel. `pickRelease`/`checkForUpdate`
+  // only ever take `settings.devMode` (see `main/index.ts`'s call sites) -
+  // asserted here by driving the same boolean a real `OverlaySettings`
+  // object would produce for "unlocked, toggle off".
+  it('channel is unaffected by the toggle - only the unlock (settings.devMode) matters', () => {
+    const unlockedToggleOff: Pick<OverlaySettings, 'devMode' | 'devModeToggle'> = {
+      devMode: true,
+      devModeToggle: false
+    }
+    const best = pickRelease(releases, CURRENT, unlockedToggleOff.devMode)
+    expect(best?.release.tag_name).toBe('v0.9.30-alpha')
   })
 })

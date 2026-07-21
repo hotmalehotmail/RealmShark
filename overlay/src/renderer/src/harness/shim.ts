@@ -98,15 +98,18 @@ export function installHarness(): void {
   const updateProgress = channel<UpdateProgress>()
 
   let currentStatus: BridgeStatus = 'connected'
-  // Dev mode is always forced on in the harness (issue #265, docs/dev-mode.md)
-  // regardless of any persisted value, so the screenshot pipeline (npm run
-  // shots) and interactive harness dev loop can render/exercise gated debug
-  // surfaces (Console panel, Status panel diagnostics) - there's no real
-  // maintainer-vs-user distinction in a headless-Chromium harness.
+  // Dev mode is always forced fully active in the harness (unlock AND
+  // toggle - issue #265/#266, docs/dev-mode.md) regardless of any persisted
+  // value, so the screenshot pipeline (npm run shots) and interactive
+  // harness dev loop can render/exercise gated debug surfaces (Console
+  // panel, Status panel diagnostics) - there's no real maintainer-vs-user
+  // distinction in a headless-Chromium harness, and no Developer-section
+  // toggle to click in a headless run either.
   let settings: OverlaySettings = {
     ...DEFAULT_SETTINGS,
     ...readJson<OverlaySettings>(SETTINGS_KEY),
-    devMode: true
+    devMode: true,
+    devModeToggle: true
   }
   let packetBatchSuspended = false
   let suspendedBatches: PacketEnvelope[][] = []
