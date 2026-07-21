@@ -89,9 +89,7 @@ html.panel-dragging [data-panel-frame] {
  * dark-theme-appropriate scrollbar with zero per-component work: a future
  * scrolling surface just needs one of these Tailwind overflow utilities,
  * already true today, to pick this up. Chromium-only (Electron), so
- * `::-webkit-scrollbar` is safe with no cross-browser fallback needed;
- * `scrollbar-width`/`scrollbar-color` are included too since Electron 39's
- * Chromium also honors the standard properties.
+ * `::-webkit-scrollbar` is safe with no cross-browser fallback needed.
  *
  * `scrollbar-gutter: stable` (reserves the track's space even before content
  * overflows, so width never jumps when a scrollbar appears/disappears) is
