@@ -513,10 +513,14 @@ and closes.
 
 **Model** (`shared/settings.ts`): `OverlaySettings = { gameWindowTitle,
 toggleHotkey, textileAnimMs, textileScrollSpeed, textileRotateSpeed,
-recordSessionToDisk }`. `gameWindowTitle` is the exact strcmp target for
-`attachByTitle` (§1). The `textile*` fields tune animated-cloth dye rendering
-— see `dyes-and-textiles.md`. `recordSessionToDisk` (off by default) is the
-session-recorder toggle — see the Session recorder section in §1 above.
+recordSessionToDisk, notifications, devMode }`. `gameWindowTitle` is the exact
+strcmp target for `attachByTitle` (§1). The `textile*` fields tune
+animated-cloth dye rendering — see `dyes-and-textiles.md`. `recordSessionToDisk`
+(off by default) is the session-recorder toggle — see the Session recorder
+section in §1 above. `devMode` (off/absent by default) is the machine-local
+maintainer flag from issue #265 — see `docs/dev-mode.md` for what it gates;
+unlike every other field here it has **no settings-window UI** and is only
+ever set by hand-editing `settings.json`.
 
 **Storage** (`settings.ts`): JSON at `app.getPath('userData')/settings.json`.
 `loadSettings()` merges the file over `DEFAULT_SETTINGS` (so new keys pick up

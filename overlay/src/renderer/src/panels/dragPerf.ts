@@ -12,7 +12,10 @@
 /** Mirrors DPS_DEBUG (DpsTracker.ts) - flip locally to enable, e.g. for an
  * alpha-soak drag-smoothness check. Off by default so a normal drag doesn't
  * log to the Console panel; disabled sessions skip the rAF sampling loop
- * entirely, not just the log. */
+ * entirely, not just the log. AND-ed with the caller's `devMode` (issue
+ * #265, docs/dev-mode.md) so this stays fully inert for every ordinary user
+ * regardless of this constant - a maintainer wanting a soak-PC drag-smoothness
+ * check still has to flip this to true locally AND have dev mode on. */
 export const DRAG_PERF_DEBUG = false
 
 export interface DragPerfSession {
@@ -22,8 +25,8 @@ export interface DragPerfSession {
 
 const NOOP_SESSION: DragPerfSession = { stop: (): void => undefined }
 
-export function startDragPerf(): DragPerfSession {
-  if (!DRAG_PERF_DEBUG) return NOOP_SESSION
+export function startDragPerf(devMode: boolean): DragPerfSession {
+  if (!devMode || !DRAG_PERF_DEBUG) return NOOP_SESSION
 
   const frames: number[] = []
   const started = performance.now()

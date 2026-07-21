@@ -16,6 +16,8 @@ interface PanelFrameProps {
   canvasSize: SizePx
   /** Whether the overlay is in interactive mode (panels are draggable and can capture input). */
   interactive: boolean
+  /** Machine-local dev-mode flag (issue #265) - gates `startDragPerf` below. */
+  devMode: boolean
   onDrag: (id: string, x: number, y: number) => void
   onCycleSize: (id: string) => void
   onTogglePin: (id: string) => void
@@ -29,6 +31,7 @@ function PanelFrame({
   spec,
   canvasSize,
   interactive,
+  devMode,
   onDrag,
   onCycleSize,
   onTogglePin,
@@ -75,7 +78,7 @@ function PanelFrame({
     onBringToTop(panel.id)
     draggingRef.current = true
 
-    const perf = startDragPerf()
+    const perf = startDragPerf(devMode)
 
     // Suspend every panel's blur/shadow and the packet-stream content updates
     // (DPS/loot/entity-registry re-renders) for the drag's duration - both

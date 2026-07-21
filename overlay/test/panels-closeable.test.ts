@@ -41,6 +41,13 @@ describe('PANEL_REGISTRY closable/ephemeral flags', () => {
       .map(([type]) => type)
     expect(ephemeral).toEqual(['dpsDetail'])
   })
+
+  it('only console is debugOnly (issue #265 - see docs/dev-mode.md)', () => {
+    const debugOnly = Object.entries(PANEL_REGISTRY)
+      .filter(([, spec]) => spec.debugOnly)
+      .map(([type]) => type)
+    expect(debugOnly).toEqual(['console'])
+  })
 })
 
 describe('withPanelClosed', () => {

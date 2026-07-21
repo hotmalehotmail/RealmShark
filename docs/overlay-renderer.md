@@ -292,11 +292,15 @@ recomposited on the CPU every frame a panel moves, which measured (#132) as
 the dominant per-frame cost. `window.overlay.setPacketBatchSuspended(true)` is
 also called for the drag's duration, so panel content isn't independently
 re-rendering off the packet stream at the same time (see the fan-out note
-above). `dragPerf.ts`'s `startDragPerf`/`stop` bracket every drag and, when
-the module's `DRAG_PERF_DEBUG` const is flipped to `true` (mirroring
-`DPS_DEBUG` in `DpsTracker.ts` — off by default, so a normal drag logs
-nothing), log a `[drag-perf]` frame-cadence summary to the Console panel, for
-catching a future regression in drag smoothness.
+above). `dragPerf.ts`'s `startDragPerf(devMode)`/`stop` bracket every drag
+and, when the module's `DRAG_PERF_DEBUG` const is flipped to `true`
+(mirroring `DPS_DEBUG` in `DpsTracker.ts` — off by default, so a normal drag
+logs nothing) **and** `OverlaySettings.devMode` is on (issue #265,
+`docs/dev-mode.md` — `PanelCanvas` fetches it once and passes it down through
+`PanelFrame`), log a `[drag-perf]` frame-cadence summary to the Console
+panel, for catching a future regression in drag smoothness. With dev mode
+off, `startDragPerf` always returns the no-op session regardless of the
+source-level constant — a normal user's build never samples frames.
 
 ### Layout persistence round-trip
 
@@ -483,6 +487,18 @@ because the registry is read at render time (inside `togglablePanels()`),
 never during module evaluation; a module-scope read would hit the cycle
 before the registry const initializes.
 
+**Debug-only panels (issue #265).** `PanelSpec.debugOnly` (currently just
+`console`) is a third gate on top of `hidden`/`ephemeral`: `togglablePanels()`
+drops it from the chip list, and `PanelCanvas`'s render guard
+(`!spec || panel.hidden || (spec.debugOnly && !devMode)`) skips rendering it,
+while `OverlaySettings.devMode` (fetched via the usual `getSettings`/
+`onSettingsChanged` pair, independently in both `StatusPanel` and
+`PanelCanvas`) is off. The instance itself is untouched either way — a
+`debugOnly` panel already in a saved (or the default) layout keeps its
+anchor/size/`hidden` state and simply resumes rendering the moment dev mode
+turns on, same "survives" guarantee `hidden` gives an ordinary closed panel.
+See `docs/dev-mode.md` for the full flag.
+
 ### Per-panel settings gear (issue #221)
 
 A second small generic mechanism alongside spawn/close above, for the
@@ -544,9 +560,9 @@ item tooltip (§4.2) with no per-panel wiring.
 
 | Panel | Title | Data source | Notes |
 | --- | --- | --- | --- |
-| `StatusPanel` | "RealmShark" | `window.overlay.*` directly | Connection dot, hotkey hint, packet count, JS heap MB, app version + **auto-update** UI, plus the **"Panels" toggle list** (§2's "Closeable panels") — the one panel with no title-bar ✕. |
+| `StatusPanel` | "RealmShark" | `window.overlay.*` directly | Connection dot, hotkey hint, packet count, JS heap MB, app version + **auto-update** UI, plus the **"Panels" toggle list** (§2's "Closeable panels"). Diagnostic internals (chat probe button, the `lg`-size "last packet" line) render only with `OverlaySettings.devMode` on — see `docs/dev-mode.md`. The one panel with no title-bar ✕. |
 | `DpsPanel` | "DPS" | `useDpsTracker()` → `<DpsList>`; `<DpsSparkline>` at md/lg | Rows per attacker vs. the focused enemy, ranked by cumulative damage (§5). `MAX_ROWS = {sm:2, md:3, lg:6}` — deliberately few, large rows (24-40px sprites) so the panel reads at a glance mid-fight, rather than the previous 3/6/12 dense layout. Each row also renders that attacker's dyed `CharacterSprite` + equip-slot icons (gear hidden at `sm`), resolved from `EntityRegistry` by `row.objectId`, plus a damage-share bar (length **and** color both encode `damage/topDamage`) and a rank badge/ring on the local player's row (§6). Above the rows (md/lg only, like the target header), the **trend sparkline** (§5.2): the local player's aggregate damage rate over the trailing ~10 s. |
-| `ConsolePanel` | "Console" | `consoleLog.ts` buffer | Live log with search (Ctrl/Cmd+F), level colours, clear. |
+| `ConsolePanel` | "Console" | `consoleLog.ts` buffer | Live log with search (Ctrl/Cmd+F), level colours, clear. `debugOnly` (issue #265) — hidden from the toggle list and never rendered while `devMode` is off; see `docs/dev-mode.md`. |
 | `CharacterPanel` | "Character" | `EntityRegistry` (local player) | Big dyed sprite + 4 equip icons + username. |
 | `InstancePanel` | "Instance" | `EntityRegistry.characters()` | Every named player in the instance, dyed sprites + gear. |
 | `DpsSummaryPanel` | "DPS Summary" | `useDpsHistory()` | A master list only: retained past instances (icon + name + a "You: Xdmg (#rank)" headline). Clicking a row opens that instance's breakdown in the separate `dpsDetail` panel below rather than swapping this panel's own content — see §2's "Programmatic panel spawn/close" and §5.1. |

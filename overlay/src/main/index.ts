@@ -398,14 +398,14 @@ app.whenReady().then(() => {
     if (overlayWindow && !overlayWindow.isDestroyed()) {
       overlayWindow.webContents.send(IPC.updateAvailable, info)
     }
-  })
+  }, settings.devMode)
 
   ipcMain.handle(IPC.getUpdateStatus, () => getCachedUpdate())
 
-  ipcMain.handle(IPC.checkForUpdate, () => checkForUpdate())
+  ipcMain.handle(IPC.checkForUpdate, () => checkForUpdate(settings.devMode))
 
   ipcMain.handle(IPC.downloadUpdate, async () => {
-    const info = getCachedUpdate() ?? (await checkForUpdate())
+    const info = getCachedUpdate() ?? (await checkForUpdate(settings.devMode))
     if (!info) return
     const exe = await downloadInstaller(info, (received, total) => {
       if (overlayWindow && !overlayWindow.isDestroyed()) {

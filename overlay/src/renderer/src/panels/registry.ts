@@ -60,6 +60,14 @@ export interface PanelSpec {
    * renders no gear at all, per panel type.
    */
   settings?: ComponentType<PanelSettingsProps>
+  /**
+   * Debug surface (issue #265): hidden from the Status panel's toggle list
+   * and never rendered on the canvas while `OverlaySettings.devMode` is off,
+   * even if an instance is present in the saved/default layout - the
+   * instance itself is left alone (not stripped), so it re-appears the
+   * moment dev mode is turned on. See `docs/dev-mode.md`.
+   */
+  debugOnly?: boolean
 }
 
 export const PANEL_REGISTRY: Record<string, PanelSpec> = {
@@ -96,7 +104,8 @@ export const PANEL_REGISTRY: Record<string, PanelSpec> = {
       lg: { width: 480, height: 320 }
     },
     component: ConsolePanel,
-    closable: true
+    closable: true,
+    debugOnly: true
   },
   character: {
     type: 'character',
