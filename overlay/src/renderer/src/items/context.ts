@@ -14,6 +14,13 @@ export interface ItemInfoContextValue {
   itemDamage: (objectType: number) => [number, number] | null
   /** Display name for an enchant id, or null if unresolved (caller falls back to the id). */
   enchantName: (enchantId: number) => string | null
+  /**
+   * Whether an objectType is a shiny item variant (issue #193/#215) - see
+   * `loot/LootTracker.ts`'s `isShiny`. A global, asset-derived fact (from the
+   * bridge's `lootBagTypes` envelope's `shinyItemTypes`), valid for any item
+   * sprite regardless of whether it's ground loot or currently equipped.
+   */
+  isShiny: (objectType: number) => boolean
 }
 
 export const ItemInfoContext = createContext<ItemInfoContextValue>({
@@ -22,7 +29,8 @@ export const ItemInfoContext = createContext<ItemInfoContextValue>({
   itemClass: () => null,
   itemDescription: () => null,
   itemDamage: () => null,
-  enchantName: () => null
+  enchantName: () => null,
+  isShiny: () => false
 })
 
 export function useItemInfo(): ItemInfoContextValue {

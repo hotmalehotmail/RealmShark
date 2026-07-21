@@ -1,44 +1,34 @@
 import { useEffect, useState } from 'react'
-import { DpsTracker, type DpsHistoryEntry } from './DpsTracker'
+import { type DpsHistoryEntry } from './DpsTracker'
+import { useDpsFeed } from './dpsFeedContext'
 
 /**
- * Owns a dedicated `DpsTracker` instance whose only job is retention: it
- * ingests the same packet stream as the live DPS panel's tracker (see
- * useDpsTracker.ts) but is never asked for a live single-target snapshot,
- * only its retained instance history. Kept as its own tracker instance
- * (rather than sharing the live panel's) so the DPS summary panel works
- * standalone and never perturbs the live glance panel's state.
- *
- * Because PanelFrame keeps every panel in the layout mounted for the app's
- * whole session (only toggling `display:none`, never unmounting - see
- * App.tsx), and the summary panel is in the default layout, this tracker
- * keeps recording instance history even while the panel itself isn't
- * visible, matching the "session-scoped, in-memory" retention this feature
- * needs.
+ * Retained past-instance history, as a view over the app's shared
+ * `DpsTracker` (`useDpsFeed` - PRD §3; this hook no longer owns a private
+ * "retention-only" tracker instance). Because the `DpsFeedProvider` ingests
+ * at App level for the app's whole session, history keeps recording even
+ * while no DPS panel is in the layout - hence the mount-time backfill below,
+ * which the old always-mounted private tracker never needed.
  */
 export function useDpsHistory(): DpsHistoryEntry[] {
-  const [tracker] = useState(() => new DpsTracker())
-  const [history, setHistory] = useState<DpsHistoryEntry[]>([])
+  const feed = useDpsFeed()
+  // Lazy initializer backfills whatever the shared tracker retained before
+  // this view mounted (feed is app-lifetime stable, so mount time is the only
+  // moment a backfill is needed).
+  const [history, setHistory] = useState<DpsHistoryEntry[]>(() => [...feed.tracker.getHistory()])
 
   useEffect(() => {
-    const offBatch = window.overlay.onPacketBatch((packets) => {
-      tracker.ingest(packets)
-      // History only changes when an instance ends - avoid re-rendering (and
-      // reallocating the array) on every damage packet.
+    // History only changes when an instance ends - avoid re-rendering (and
+    // reallocating the array) on every damage packet. The game closing ends
+    // whatever instance was in progress too, but with no next MapInfoPacket
+    // there's nothing new to retain - the provider's detach reset covers the
+    // live-state wipe, and history itself survives reset() by design.
+    return feed.onBatch((packets) => {
       if (packets.some((p) => p.type === 'MapInfoPacket')) {
-        setHistory([...tracker.getHistory()])
+        setHistory([...feed.tracker.getHistory()])
       }
     })
-    // The game closing ends whatever instance was in progress the same way a
-    // MapInfoPacket would, but there's no next MapInfoPacket to trigger the
-    // retention hook - just reset live state; retaining a fight cut short by
-    // closing the game is a nice-to-have, not required by this feature.
-    const offDetach = window.overlay.onOverlayDetach(() => tracker.reset())
-    return () => {
-      offBatch()
-      offDetach()
-    }
-  }, [tracker])
+  }, [feed])
 
   return history
 }

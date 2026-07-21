@@ -1,5 +1,6 @@
 import type { PacketEnvelope } from '../../../shared/ipc'
 import { equipmentRarityFromUniqueDataString } from '../sprites/enchantRarity'
+import { DpsRateRecorder } from './DpsRateRecorder'
 import {
   MAX_HP_STAT_TYPE_NUM,
   NAME_STAT_TYPE_NUM,
@@ -34,8 +35,11 @@ const SUSTAINED_ATTACK_MS = 2000
  * an unresolved key (`{...}`) falls back to a generic label rather than
  * leaking the raw key into the UI.
  */
+/** The open-world Realm's (unresolved) `MapInfoPacket.displayName` - see above. */
+const REALM_DISPLAY_NAME_KEY = '{s.rotmg}'
+
 const KNOWN_UNRESOLVED_DISPLAY_NAMES: Record<string, string> = {
-  '{s.rotmg}': 'The Realm'
+  [REALM_DISPLAY_NAME_KEY]: 'The Realm'
 }
 
 function resolveInstanceDisplayName(displayName: string): string {
@@ -43,6 +47,22 @@ function resolveInstanceDisplayName(displayName: string): string {
   if (known) return known
   if (/^\{.*\}$/.test(displayName)) return 'Unknown Realm'
   return displayName
+}
+
+/**
+ * Whether a `MapInfoPacket` describes the open-world Realm. Two independent
+ * signals, either sufficient: the Realm's `displayName` arrives as the
+ * unresolved key `{s.rotmg}` (it has no dungeon-style display name of its own -
+ * see `KNOWN_UNRESOLVED_DISPLAY_NAMES`), and the Realm populates the
+ * realm-score fields (>= 0) that every non-Realm instance (Nexus/Vault/
+ * dungeons) leaves at the -1 sentinel. Used to disable boss-damage
+ * carry-forward in the Realm, where the quest marker cycles through independent
+ * bosses (see `DpsTracker.ingestQuestObjectId`).
+ */
+function isRealmInstance(data: MapInfoPacketData | null): boolean {
+  if (!data) return false
+  if (data.displayName === REALM_DISPLAY_NAME_KEY) return true
+  return (data.maxRealmScore ?? -1) >= 0 || (data.currentRealmScore ?? -1) >= 0
 }
 
 /** packets/data/enums/StatType.java: the stats a player's cosmetic loadout is carried on. */
@@ -179,7 +199,21 @@ export const EMPTY_SNAPSHOT: DpsSnapshot = { targetId: null, targetName: '', row
  * for `SUSTAINED_ATTACK_MS` straight, which overrides the lock (a deliberate
  * switch away from the boss, not a stray AoE tick - see `onLocalHit`).
  * Outside a quest objective (e.g. open world) it falls back to focusing
- * whichever enemy the local player last hit. Reset on instance change
+ * whichever enemy the local player last hit.
+ *
+ * Case (b)'s carry-forward is gated on NOT being in the open-world Realm
+ * (`inRealm`). The Realm's quest marker cycles through many *independent*
+ * bosses - kill one and it jumps to the next - which is packet-structurally
+ * identical to a dungeon phase/form change (old boss despawns, new boss spawns
+ * as a fresh objectId at ~the same spot), so the two cannot be told apart by
+ * shape or timing, only by instance context. Worse, the just-killed boss's
+ * despawn (`UpdatePacket.drops`) arrives in the *same server tick* as, but
+ * ordered *after*, the next boss's QuestObjectIdPacket - so `bossAlive` is
+ * still true when this runs and cannot itself catch the swap. Left to carry,
+ * the Realm rolls a dead boss's damage onto the next one and snaps the label
+ * to it instantly; see `ingestQuestObjectId`.
+ *
+ * Reset on instance change
  * (MapInfoPacket) and meant to also be reset externally when the game closes
  * (electron-overlay-window's "detach" event) - both wipe the same state, just
  * triggered from different places.
@@ -192,12 +226,31 @@ export const EMPTY_SNAPSHOT: DpsSnapshot = { targetId: null, targetName: '', row
  * in-game; see ingestEnemyHit.
  */
 export class DpsTracker {
+  /**
+   * The time-binned rate recorder (PRD §2): the sparkline's aggregate series
+   * and the detail panel's per-(enemy, player) avg/peak metrics. Fed from the
+   * `dps` case below; reset with the tracker (instance change / detach).
+   */
+  readonly recorder = new DpsRateRecorder()
+
   private entityNames = new Map<number, string>()
   /** Enemy/NPC id -> name, resolved bridge-side from game assets (objectNames envelope). */
   private objectNames = new Map<number, string>()
   /** Bridge-computed DPS, per enemy id -> { name, rows }. Replaces the local DamagePacket estimate. */
   private bridgeEnemies = new Map<number, { name: string; rows: PlayerDps[] }>()
   private targets = new Map<number, Map<number, HitEvent[]>>()
+  /**
+   * Cumulative per-target-per-attacker DamagePacket totals - unlike the
+   * rolling-window buffers in `targets`, these are never trimmed, so the
+   * no-bridge fallbacks that need whole-fight totals (`totalDamageRows`, and
+   * through it carry-forward/history) can't be corrupted by `snapshot()`'s
+   * in-place window trimming. This decoupling is what makes ONE shared
+   * tracker safe for both the live panel and history retention (PRD §3);
+   * before it, the live panel's periodic snapshots would have silently
+   * truncated the history tracker's fallback totals, which is why two
+   * separate instances existed.
+   */
+  private cumulativeDamage = new Map<number, Map<number, number>>()
   private focusTargetId: number | null = null
   private localPlayerId: number | null = null
   /** Summoned entity id -> owning player id, from ServerPlayerShootPacket. */
@@ -229,14 +282,23 @@ export class DpsTracker {
    * Per-attacker damage carried forward from earlier phases of the current
    * (still-open) boss chain, keyed by attacker objectId - accumulated in
    * carryForwardBossDamage whenever the quest objective moves to a new
-   * objectId while the previous one is still alive (a genuine phase/form
-   * change). snapshot() adds this on top of the current phase's live rows so
+   * objectId while the previous one is still alive AND we're not in the Realm
+   * (a genuine phase/form change - see `ingestQuestObjectId` for why the Realm
+   * is excluded). snapshot() adds this on top of the current phase's live rows so
    * a boss's total doesn't reset across a phase/form change. Cleared by
    * resolveBossChain whenever the previous objective had already despawned -
    * a new, unrelated encounter starts this back at zero rather than
    * inheriting a dead boss's damage.
+   *
+   * Besides `damage`, each entry carries the recorder's per-phase metrics
+   * fold (`engagedMs`/`peak` - PRD §5): summing engaged spans and taking the
+   * max peak across phases is what lets a chain's merged rows keep honest
+   * avg/peak numbers instead of the old struct's discarded-to-0 dps.
    */
-  private bossCarry = new Map<number, { name: string; damage: number }>()
+  private bossCarry = new Map<
+    number,
+    { name: string; damage: number; engagedMs: number; peak: number }
+  >()
   /** Debug: how many of each packet type we've ingested (all types, not just relevant ones). */
   private typeCounts = new Map<string, number>()
   /** Debug: types whose field keys we've already dumped once (to avoid per-packet spam). */
@@ -248,6 +310,17 @@ export class DpsTracker {
   private playerCosmetics = new Map<number, PlayerCosmetics>()
   /** The current instance's display name (MapInfoPacket.displayName), captured for the *next* instance-end snapshot. */
   private currentInstanceName = ''
+  /**
+   * Whether the current instance is the open-world Realm (set from MapInfoPacket
+   * via `isRealmInstance`). In the Realm the quest marker cycles through many
+   * *independent* bosses, so `ingestQuestObjectId` never carries damage forward
+   * across a quest-objective change there - even while the previous boss's
+   * despawn is still unprocessed (`bossAlive` true), since its drop arrives in
+   * the same server tick, ordered after the QuestObjectIdPacket. Defaults false
+   * (and resets false in `reset()`) so a mid-instance attach with no seen
+   * MapInfoPacket keeps the prior, dungeon-style carry-forward behavior.
+   */
+  private inRealm = false
   /**
    * Every quest-objective objectId ever locked this instance, across every
    * boss encounter (not just the current one) - excludes them all from
@@ -292,6 +365,7 @@ export class DpsTracker {
           this.reset()
           const mapInfo = envelope.data as MapInfoPacketData | null
           this.currentInstanceName = resolveInstanceDisplayName(mapInfo?.displayName ?? '')
+          this.inRealm = isRealmInstance(mapInfo)
           break
         }
         case 'UpdatePacket':
@@ -300,9 +374,12 @@ export class DpsTracker {
         case 'objectNames':
           this.ingestObjectNames(envelope.data as Record<string, string>)
           break
-        case 'dps':
-          this.ingestBridgeDps(envelope.data as BridgeDpsData)
+        case 'dps': {
+          const dps = envelope.data as BridgeDpsData
+          this.ingestBridgeDps(dps)
+          this.recorder.onSnapshot(dps, envelope.time, this.localPlayerId)
           break
+        }
         case 'ServerPlayerShootPacket':
           this.ingestShoot(envelope.data as ServerPlayerShootPacketData)
           break
@@ -566,18 +643,26 @@ export class DpsTracker {
    * game's own boss/objective marker, e.g. a dungeon's main boss. Arms the
    * sticky lock (see onLocalHit) and, if a boss was already locked, either:
    *
-   * - **still alive** (`bossAlive` true) - a genuine phase/form change on the
-   *   same encounter, so its accumulated per-player damage is carried
-   *   forward (`carryForwardBossDamage`) so the fight's total doesn't reset;
-   * - **already dead** (`bossAlive` false) - a wholly new, unrelated
-   *   encounter (the next quest boss - the common case in the open-world
-   *   Realm, which cycles through many independent quest bosses with no
-   *   instance change between them, but equally applies to any instance with
-   *   more than one distinct boss). Carrying its damage forward here would
-   *   misattribute the boss that was just killed to whichever boss locks
-   *   next, so instead the just-finished chain is baked into its own
-   *   `resolvedBossEncounters` entry (`resolveBossChain`) and the new chain
-   *   starts from zero.
+   * - **still alive** (`bossAlive` true) AND **not in the Realm** (`!inRealm`)
+   *   - a genuine phase/form change on the same encounter, so its accumulated
+   *   per-player damage is carried forward (`carryForwardBossDamage`) so the
+   *   fight's total doesn't reset;
+   * - **already dead** (`bossAlive` false), **or in the open-world Realm** - a
+   *   wholly new, unrelated encounter (the next quest boss). Carrying its
+   *   damage forward here would misattribute the boss that was just killed to
+   *   whichever boss locks next, so instead the just-finished chain is baked
+   *   into its own `resolvedBossEncounters` entry (`resolveBossChain`) and the
+   *   new chain starts from zero.
+   *
+   * The Realm needs its own gate (not just `bossAlive`) because it cycles
+   * through many independent quest bosses with no instance change between
+   * them, and the just-killed boss's despawn (`UpdatePacket.drops`) arrives in
+   * the *same server tick* as, but ordered *after*, the next boss's
+   * QuestObjectIdPacket - so `bossAlive` is still true here and can't catch the
+   * swap. A Realm boss-swap is otherwise packet-identical to a dungeon phase
+   * change (old id despawns, new id spawns), so instance context is the only
+   * signal that separates them (see `isRealmInstance`). Outside the Realm the
+   * `bossAlive` gate is unchanged, so dungeon multi-phase bosses still carry.
    *
    * Does NOT force `focusTargetId` onto a boss the local player hasn't
    * damaged yet (`bossDamagedByLocal` false) - the panel keeps following
@@ -595,7 +680,7 @@ export class DpsTracker {
     const newId = data.objectId
     if (!Number.isFinite(newId) || newId <= 0 || newId === this.lockedBossId) return
     if (this.lockedBossId !== null) {
-      if (this.bossAlive) {
+      if (this.bossAlive && !this.inRealm) {
         this.carryForwardBossDamage(this.lockedBossId)
       } else {
         this.resolveBossChain()
@@ -667,15 +752,23 @@ export class DpsTracker {
     }
   }
 
-  /** Snapshot `oldId`'s current per-player damage into `bossCarry`, summing across phases. */
+  /** Snapshot `oldId`'s current per-player damage (and recorder metrics) into `bossCarry`, summing across phases. */
   private carryForwardBossDamage(oldId: number): void {
     for (const [attackerId, row] of this.totalDamageRows(oldId)) {
+      const metrics = this.recorder.metricsFor(oldId, attackerId)
       const existing = this.bossCarry.get(attackerId)
       if (existing) {
         existing.damage += row.damage
+        existing.engagedMs += metrics?.engagedMs ?? 0
+        existing.peak = Math.max(existing.peak, metrics?.peakDps ?? 0)
         if (row.name) existing.name = row.name
       } else {
-        this.bossCarry.set(attackerId, { name: row.name, damage: row.damage })
+        this.bossCarry.set(attackerId, {
+          name: row.name,
+          damage: row.damage,
+          engagedMs: metrics?.engagedMs ?? 0,
+          peak: metrics?.peakDps ?? 0
+        })
       }
     }
   }
@@ -689,10 +782,9 @@ export class DpsTracker {
         result.set(row.objectId, { name: row.name, damage: row.damage })
       return result
     }
-    const byAttacker = this.targets.get(targetId)
+    const byAttacker = this.cumulativeDamage.get(targetId)
     if (byAttacker) {
-      for (const [attackerId, buffer] of byAttacker) {
-        const damage = buffer.reduce((sum, hit) => sum + hit.damage, 0)
+      for (const [attackerId, damage] of byAttacker) {
         result.set(attackerId, { name: this.nameOf(attackerId), damage })
       }
     }
@@ -716,6 +808,13 @@ export class DpsTracker {
     }
     buffer.push({ time, damage: data.damageAmount })
 
+    let cumByAttacker = this.cumulativeDamage.get(data.targetId)
+    if (!cumByAttacker) {
+      cumByAttacker = new Map()
+      this.cumulativeDamage.set(data.targetId, cumByAttacker)
+    }
+    cumByAttacker.set(attackerId, (cumByAttacker.get(attackerId) ?? 0) + data.damageAmount)
+
     if (DPS_DEBUG && !Number.isFinite(data.damageAmount)) {
       // damageAmount arriving as undefined/NaN means the field name doesn't
       // match the wire format - a prime suspect for "rows show up but read 0".
@@ -733,6 +832,7 @@ export class DpsTracker {
     this.objectNames.clear()
     this.bridgeEnemies.clear()
     this.targets.clear()
+    this.cumulativeDamage.clear()
     this.focusTargetId = null
     this.localPlayerId = null
     this.minionOwners.clear()
@@ -740,6 +840,7 @@ export class DpsTracker {
     this.lockedBossId = null
     this.bossAlive = false
     this.bossDamagedByLocal = false
+    this.inRealm = false
     this.localStreakTargetId = null
     this.localStreakStartedAt = null
     this.bossCarry.clear()
@@ -747,6 +848,7 @@ export class DpsTracker {
     this.playerCosmetics.clear()
     this.bossPhaseIds.clear()
     this.resolvedBossEncounters = []
+    this.recorder.resetInstance()
     // Deliberately keep typeCounts/dumpedKeys across resets so the running
     // totals (and one-time key dumps) survive instance changes - they describe
     // the whole session's traffic, not a single instance. Likewise `history`/
@@ -881,6 +983,19 @@ export class DpsTracker {
       }
     }
 
+    // Attach combined avg/peak metrics (PRD §5): the carried phases' engaged
+    // span + the current phase's recorder fold. A row with no observed span
+    // anywhere gets no metrics (renders "—", never a fake 0).
+    for (const row of merged.values()) {
+      const carry = this.bossCarry.get(row.objectId)
+      const live = this.recorder.metricsFor(targetId, row.objectId)
+      const engagedMs = (carry?.engagedMs ?? 0) + (live?.engagedMs ?? 0)
+      if (engagedMs > 0) {
+        row.avgDps = row.damage / (engagedMs / 1000)
+        row.peakDps = Math.max(carry?.peak ?? 0, live?.peakDps ?? 0, row.avgDps)
+      }
+    }
+
     const rows = Array.from(merged.values()).sort((a, b) => b.damage - a.damage)
     return { targetId, targetName, rows }
   }
@@ -962,7 +1077,7 @@ export class DpsTracker {
         id,
         name: enemy.name,
         objectType: this.objectTypes.get(id) ?? null,
-        players: enemy.rows,
+        players: this.withMetrics(id, enemy.rows),
         cosmetics: this.cosmeticsFor(enemy.rows)
       })
     }
@@ -972,6 +1087,19 @@ export class DpsTracker {
 
     enemies.sort((a, b) => totalDamage(b.players) - totalDamage(a.players))
     return enemies
+  }
+
+  /**
+   * Attach the recorder's avg/peak metrics (PRD §5) to each row, for a
+   * history freeze. Rows the recorder never observed a delta for (the fight
+   * predated our attach, or the rare bridge-absent fallback) stay metric-less
+   * - the detail panel renders "—" for those instead of a fake 0.
+   */
+  private withMetrics(enemyId: number, rows: PlayerDps[]): PlayerDps[] {
+    return rows.map((row) => {
+      const m = this.recorder.metricsFor(enemyId, row.objectId)
+      return m ? { ...row, avgDps: m.avgDps, peakDps: m.peakDps } : row
+    })
   }
 
   /** Frozen cosmetic loadout for each player row, for the detail view's per-player gear/sprite. */

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { AlertStoreContext } from '../alerts/alertStoreContext'
 import { FiredAlertStore } from '../alerts/store'
 import { DpsDetailSelectionProvider } from '../dps/DpsDetailSelectionProvider'
+import { DpsFeedProvider } from '../dps/DpsFeedProvider'
 import { useDpsDetailSelection } from '../dps/dpsDetailContext'
 import { useDpsHistory } from '../dps/useDpsHistory'
 import { ItemInfoProvider } from '../items/ItemInfoProvider'
@@ -93,33 +94,35 @@ function PanelMount({ type, size, settings }: PanelMountProps): React.JSX.Elemen
       <EntityRegistryProvider>
         <ItemInfoProvider>
           <AlertStoreContext.Provider value={alertStore}>
-            <DpsDetailSelectionProvider>
-              <PanelSpawnContext.Provider value={NOOP_PANEL_SPAWN}>
-                <InteractiveContext.Provider value={true}>
-                  {type === 'dpsDetail' && <AutoSelectFirstDpsSession />}
-                  <div
-                    data-panel-frame=""
-                    data-panel-type={type}
-                    data-panel-size={size}
-                    className="flex flex-col overflow-hidden rounded-lg border border-edge bg-panel shadow-lg backdrop-blur-sm"
-                    style={{ width, height }}
-                  >
-                    <div className="flex shrink-0 items-center justify-between bg-surface px-2 py-1">
-                      <span className="truncate text-xs font-medium text-fg-muted">
-                        {spec.title}
-                        {Settings ? ' settings' : ''}
-                      </span>
-                    </div>
+            <DpsFeedProvider>
+              <DpsDetailSelectionProvider>
+                <PanelSpawnContext.Provider value={NOOP_PANEL_SPAWN}>
+                  <InteractiveContext.Provider value={true}>
+                    {type === 'dpsDetail' && <AutoSelectFirstDpsSession />}
                     <div
-                      data-panel-content=""
-                      className="min-h-0 flex-1 overflow-auto p-2 text-sm text-fg"
+                      data-panel-frame=""
+                      data-panel-type={type}
+                      data-panel-size={size}
+                      className="flex flex-col overflow-hidden rounded-lg border border-edge bg-panel shadow-lg backdrop-blur-sm"
+                      style={{ width, height }}
                     >
-                      {Settings ? <Settings onDone={() => {}} /> : <Content size={size} />}
+                      <div className="flex shrink-0 items-center justify-between bg-surface px-2 py-1">
+                        <span className="truncate text-xs font-medium text-fg-muted">
+                          {spec.title}
+                          {Settings ? ' settings' : ''}
+                        </span>
+                      </div>
+                      <div
+                        data-panel-content=""
+                        className="min-h-0 flex-1 overflow-auto p-2 text-sm text-fg"
+                      >
+                        {Settings ? <Settings onDone={() => {}} /> : <Content size={size} />}
+                      </div>
                     </div>
-                  </div>
-                </InteractiveContext.Provider>
-              </PanelSpawnContext.Provider>
-            </DpsDetailSelectionProvider>
+                  </InteractiveContext.Provider>
+                </PanelSpawnContext.Provider>
+              </DpsDetailSelectionProvider>
+            </DpsFeedProvider>
           </AlertStoreContext.Provider>
         </ItemInfoProvider>
       </EntityRegistryProvider>

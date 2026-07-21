@@ -123,6 +123,11 @@ moving parts, each with its own doc below.
   contract (swappable banner UI, one-catalog-entry extensibility), tiered
   `enchantedDrop` thresholds grounded in the asset facts, the per-panel settings
   gear, the `TextPacket` privacy constraint, and the six-issue implementation plan.
+- **[prd-dps-graph.md](prd-dps-graph.md)** — PRD: the DPS trend sparkline
+  (aggregate, trailing-average smoothed) and renderer-computed per-player
+  average/peak DPS in the detail panel. The `DpsRateRecorder` snapshot-diffing
+  design, the single-shared-`DpsTracker` refactor, the diagnosis of the
+  "dps always 0" display bug it fixes, and the four-issue implementation plan.
 
 ---
 

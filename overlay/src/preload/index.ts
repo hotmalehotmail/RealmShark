@@ -16,7 +16,7 @@ import type { PanelInstance } from '../shared/panels'
 import type { OverlaySettings } from '../shared/settings'
 
 // The packet stream is a fan-out: every consumer (StatusPanel, EntityRegistry,
-// useDpsTracker, useLootTracker, …) registers its own onPacketBatch listener,
+// DpsFeedProvider, useLootTracker, …) registers its own onPacketBatch listener,
 // each triggering its own re-render off the same batches. During a panel drag
 // those re-renders compete with the drag for the main thread, so delivery can
 // be suspended (buffered, not dropped) for the duration - see
