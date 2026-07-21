@@ -6,6 +6,7 @@ import type { SizePx } from './anchor'
 import CharacterPanel from './CharacterPanel'
 import ConsolePanel from './ConsolePanel'
 import DpsDetailPanel from './DpsDetailPanel'
+import DpsGraphPanel from './DpsGraphPanel'
 import DpsPanel from './DpsPanel'
 import DpsSummaryPanel from './DpsSummaryPanel'
 import InstancePanel from './InstancePanel'
@@ -85,6 +86,17 @@ export const PANEL_REGISTRY: Record<string, PanelSpec> = {
       lg: { width: 380, height: dpsPanelHeight('lg') }
     },
     component: DpsPanel,
+    closable: true
+  },
+  dpsGraph: {
+    type: 'dpsGraph',
+    title: 'DPS Graph',
+    sizes: {
+      sm: { width: 200, height: 110 },
+      md: { width: 300, height: 160 },
+      lg: { width: 420, height: 220 }
+    },
+    component: DpsGraphPanel,
     closable: true
   },
   console: {

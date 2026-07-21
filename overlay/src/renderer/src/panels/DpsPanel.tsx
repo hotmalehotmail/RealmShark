@@ -1,16 +1,18 @@
 import DpsList from '../DpsList'
-import DpsSparkline from '../DpsSparkline'
 import { DPS_MAX_ROWS } from '../dps/rowLayout'
 import { useDpsTracker } from '../dps/useDpsTracker'
 import type { PanelContentProps } from './registry'
 
+/**
+ * The numeric DPS readout only — the trend graph used to be embedded here
+ * (dropped entirely at `sm`) but now lives in its own placeable/sizable
+ * `dpsGraph` panel (issue #259), so this panel no longer owns any of the
+ * sparkline's presentation or data tick.
+ */
 function DpsPanel({ size }: PanelContentProps): React.JSX.Element {
   const snapshot = useDpsTracker()
   return (
     <div className="flex h-full flex-col gap-1">
-      {/* The trend line owns its own data tick (useDpsGraph), so its 4 Hz
-          updates re-render the sparkline alone, never the row list below. */}
-      {size !== 'sm' && <DpsSparkline />}
       <DpsList
         snapshot={snapshot}
         maxRows={DPS_MAX_ROWS[size]}
