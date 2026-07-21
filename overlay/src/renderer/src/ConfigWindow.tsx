@@ -126,6 +126,28 @@ function ConfigWindow(): React.JSX.Element {
         </p>
       </div>
 
+      {settings.devMode && (
+        <div className="rounded border border-edge/60 bg-surface-2 p-3">
+          <span className="mb-1 block text-fg-muted">Developer</span>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={settings.devModeToggle}
+              onChange={(e) => setSettings({ ...settings, devModeToggle: e.target.checked })}
+            />
+            Dev mode
+          </label>
+          <p className="mt-1 text-xs text-fg-faint">
+            Turns the debug surfaces the <code>devMode</code> unlock exposes (Console panel, Status
+            panel diagnostics, drag-perf) on or off - off matches an ordinary user install. This
+            section itself stays visible either way, since it only appears at all with the
+            machine-local <code>devMode</code> unlock hand-set in settings.json. Does not affect the
+            updater&apos;s alpha channel, which always follows the unlock alone. Applies live on
+            Save, no restart needed.
+          </p>
+        </div>
+      )}
+
       <div className="mt-auto flex items-center gap-3">
         <Button variant="primary" size="md" onClick={save}>
           Save

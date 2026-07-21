@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { ChatProbeStatus } from '../../../shared/chatProbe'
 import type { BridgeStatus, PacketEnvelope, UpdateInfo } from '../../../shared/ipc'
-import { DEFAULT_SETTINGS } from '../../../shared/settings'
+import { DEFAULT_SETTINGS, isDevModeActive } from '../../../shared/settings'
 import { Button } from '../ui/Button'
 import { StatRow } from '../ui/StatRow'
 import { usePanelSpawn } from './panelSpawn'
@@ -58,12 +58,13 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
   const [devMode, setDevMode] = useState(false)
   const { openPanel, closePanel, isOpen } = usePanelSpawn()
 
-  // Machine-local dev-mode flag (issue #265, docs/dev-mode.md) - gates the
-  // debugOnly entries in the panel toggle list below and the diagnostic
-  // internals further down (chat probe, last-packet line).
+  // Dev mode active = the machine-local unlock AND the persisted toggle
+  // (issue #265/#266, docs/dev-mode.md) - gates the debugOnly entries in the
+  // panel toggle list below and the diagnostic internals further down (chat
+  // probe, last-packet line).
   useEffect(() => {
-    window.overlay.getSettings().then((s) => setDevMode(s.devMode))
-    const off = window.overlay.onSettingsChanged((s) => setDevMode(s.devMode))
+    window.overlay.getSettings().then((s) => setDevMode(isDevModeActive(s)))
+    const off = window.overlay.onSettingsChanged((s) => setDevMode(isDevModeActive(s)))
     return () => off()
   }, [])
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PanelInstance, PanelSize } from '../../../shared/panels'
+import { isDevModeActive } from '../../../shared/settings'
 import type { SizePx } from './anchor'
 import {
   isPanelOpen,
@@ -40,12 +41,13 @@ function PanelCanvas({ interactive }: PanelCanvasProps): React.JSX.Element {
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
-  // Machine-local dev-mode flag (issue #265, docs/dev-mode.md) - gates
-  // whether a `debugOnly` panel (the Console) actually renders below, even
-  // when its instance is present in the layout.
+  // Dev mode active = the machine-local unlock AND the persisted toggle
+  // (issue #265/#266, docs/dev-mode.md) - gates whether a `debugOnly` panel
+  // (the Console) actually renders below, even when its instance is present
+  // in the layout.
   useEffect(() => {
-    window.overlay.getSettings().then((s) => setDevMode(s.devMode))
-    const off = window.overlay.onSettingsChanged((s) => setDevMode(s.devMode))
+    window.overlay.getSettings().then((s) => setDevMode(isDevModeActive(s)))
+    const off = window.overlay.onSettingsChanged((s) => setDevMode(isDevModeActive(s)))
     return () => off()
   }, [])
 

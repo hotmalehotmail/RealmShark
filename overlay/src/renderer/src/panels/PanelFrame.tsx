@@ -16,7 +16,7 @@ interface PanelFrameProps {
   canvasSize: SizePx
   /** Whether the overlay is in interactive mode (panels are draggable and can capture input). */
   interactive: boolean
-  /** Machine-local dev-mode flag (issue #265) - gates `startDragPerf` below. */
+  /** Dev mode active (unlock AND toggle - issue #265/#266) - gates `startDragPerf` below. */
   devMode: boolean
   onDrag: (id: string, x: number, y: number) => void
   onCycleSize: (id: string) => void

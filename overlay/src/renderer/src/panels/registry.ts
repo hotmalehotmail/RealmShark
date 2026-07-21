@@ -63,10 +63,13 @@ export interface PanelSpec {
   settings?: ComponentType<PanelSettingsProps>
   /**
    * Debug surface (issue #265): hidden from the Status panel's toggle list
-   * and never rendered on the canvas while `OverlaySettings.devMode` is off,
-   * even if an instance is present in the saved/default layout - the
-   * instance itself is left alone (not stripped), so it re-appears the
-   * moment dev mode is turned on. See `docs/dev-mode.md`.
+   * and never rendered on the canvas while dev mode isn't active - either
+   * `OverlaySettings.devMode` (the unlock) is off, or it's on but the
+   * Developer section's `devModeToggle` (issue #266) is off - even if an
+   * instance is present in the saved/default layout. The instance itself is
+   * left alone (not stripped), so it re-appears the moment dev mode becomes
+   * active again. See `isDevModeActive` (`shared/settings.ts`) and
+   * `docs/dev-mode.md`.
    */
   debugOnly?: boolean
 }
