@@ -103,6 +103,34 @@ grep -rn "white/\|black/\|text-\[\|emerald-\|sky-\|amber-\|red-\|neutral-" \
   --include="*.tsx" overlay/src/renderer/src | grep -v "/ui/"
 ```
 
+### Scrollbars
+
+Every `overflow-auto`/`overflow-y-auto`/`overflow-x-auto` (and `-scroll`
+variant) surface gets the same slim, dark-theme scrollbar from one global
+rule in `assets/main.css`, keyed off those Tailwind overflow utility class
+names via `:is(...)` selectors — not a per-component class. `PanelFrame`'s
+content wrapper is already `overflow-auto`, so every panel's scrollbar comes
+for free; the harness's `PanelMount` and the alert-config dropdown pick it up
+the same way. A new scrolling surface needs nothing beyond the Tailwind
+overflow utility it already needs for scrolling to work at all.
+
+Thumb color is `--color-surface-2` (`--color-surface-3` on hover/active),
+matching the same raised/hover-state tokens used for buttons and meter bars
+elsewhere. `::-webkit-scrollbar` is safe with no fallback needed since the
+overlay is Chromium-only (Electron); the standard
+`scrollbar-width`/`scrollbar-color` properties are set alongside it since
+Electron's Chromium also honors them.
+
+`scrollbar-gutter: stable` (reserves the track's space before content
+overflows, so width never jumps when a scrollbar appears/disappears) is
+scoped to the `-y-auto`/`-x-auto`/`-scroll` variants only — the panels that
+actually scroll (Console, Loot, Notifications, DPS Summary/Detail, Instance)
+each put one of those on their own scrolling root. It deliberately excludes
+bare `.overflow-auto`, since that's `PanelFrame`'s one shared content wrapper
+for *every* panel type, scrolling or not; reserving a gutter there would
+permanently shrink every panel's content width, including panels whose
+content never overflows.
+
 ### Typography
 
 - **Families.** `--font-sans` / `--font-mono` are pinned explicitly in
