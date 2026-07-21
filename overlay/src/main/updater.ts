@@ -26,7 +26,7 @@ interface GithubAsset {
   size: number
   browser_download_url: string
 }
-interface GithubRelease {
+export interface GithubRelease {
   tag_name: string
   body?: string
   draft?: boolean
@@ -44,6 +44,42 @@ function parseTagVersion(tag: string): number[] | null {
   const m = /^(?:overlay-test-)?v(\d+)\.(\d+)(?:\.(\d+))?/.exec(tag)
   if (!m) return null
   return [Number(m[1]), Number(m[2]), Number(m[3] ?? 0)]
+}
+
+/**
+ * True for a tag carrying an `-alpha` prerelease component - the soak
+ * channel (issue #265, docs/dev-mode.md). Legacy `overlay-test-vX.Y.Z` tags
+ * predate the channel scheme entirely and are deliberately treated as
+ * non-alpha, matching `parseTagVersion`'s "an older client still sees newer
+ * releases" stance. `-beta` and unsuffixed tags are also non-alpha.
+ */
+export function isAlphaTag(tag: string): boolean {
+  return /-alpha(?:[.-]|$)/i.test(tag)
+}
+
+/**
+ * Picks the best (highest-version) release newer than `currentVersion` from a
+ * raw `/releases` listing, applying the update channel rule: with `devMode`
+ * off, any release whose tag is an alpha (`isAlphaTag`) is skipped outright,
+ * even if it's numerically newest - so an ordinary user's client never sees a
+ * soak build. Pure/exported so this selection logic is unit-testable without
+ * mocking Electron's `net` (`test/updater-channel.test.ts`).
+ */
+export function pickRelease(
+  releases: GithubRelease[],
+  currentVersion: number[],
+  devMode: boolean
+): { version: number[]; release: GithubRelease } | null {
+  let best: { version: number[]; release: GithubRelease } | null = null
+  for (const rel of releases) {
+    if (rel.draft) continue
+    if (!devMode && isAlphaTag(rel.tag_name)) continue
+    const v = parseTagVersion(rel.tag_name)
+    if (!v) continue
+    if (!best || compareVersions(v, best.version) > 0) best = { version: v, release: rel }
+  }
+  if (!best || compareVersions(best.version, currentVersion) <= 0) return null
+  return best
 }
 
 /** Element-wise numeric compare; missing trailing parts count as 0 (0.9 == 0.9.0). */
@@ -86,9 +122,12 @@ function githubJson(path: string): Promise<unknown> {
 /**
  * Query GitHub for the highest overlay release; return it if newer than the
  * running version, else null. Prereleases are included (our releases are all
- * prereleases, so /releases/latest is useless). Fails quietly to null.
+ * prereleases, so /releases/latest is useless). With `devMode` off, alpha
+ * releases (`isAlphaTag`) are excluded from consideration entirely - the
+ * update-channel rule from issue #265 (docs/dev-mode.md): ordinary users only
+ * ever get offered `-beta`/unsuffixed releases. Fails quietly to null.
  */
-export async function checkForUpdate(): Promise<UpdateInfo | null> {
+export async function checkForUpdate(devMode: boolean): Promise<UpdateInfo | null> {
   const releases = await githubJson(`/repos/${REPO}/releases?per_page=15`)
   if (!Array.isArray(releases)) return null
 
@@ -96,14 +135,8 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
     .getVersion()
     .split('.')
     .map((p) => parseInt(p, 10) || 0)
-  let best: { version: number[]; release: GithubRelease } | null = null
-  for (const rel of releases as GithubRelease[]) {
-    if (rel.draft) continue
-    const v = parseTagVersion(rel.tag_name)
-    if (!v) continue
-    if (!best || compareVersions(v, best.version) > 0) best = { version: v, release: rel }
-  }
-  if (!best || compareVersions(best.version, current) <= 0) {
+  const best = pickRelease(releases as GithubRelease[], current, devMode)
+  if (!best) {
     cached = null
     return null
   }
@@ -179,12 +212,13 @@ export function installAndRestart(exePath: string): void {
 /**
  * Start background polling: one check ~10s after launch, then every 6h. Calls
  * onUpdate with a newer release when found. No-op in dev (unpackaged), where
- * the version won't correspond to a release.
+ * the version won't correspond to a release. `devMode` is read once (the flag
+ * is machine-local and only takes effect on restart - see docs/dev-mode.md).
  */
-export function startUpdatePolling(onUpdate: (info: UpdateInfo) => void): void {
+export function startUpdatePolling(onUpdate: (info: UpdateInfo) => void, devMode: boolean): void {
   if (!app.isPackaged) return
   const run = async (): Promise<void> => {
-    const info = await checkForUpdate()
+    const info = await checkForUpdate(devMode)
     if (info) onUpdate(info)
   }
   setTimeout(() => void run(), INITIAL_DELAY_MS)

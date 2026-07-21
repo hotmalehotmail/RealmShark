@@ -58,6 +58,16 @@ export interface OverlaySettings {
   recordSessionToDisk: boolean
   /** Notification system settings (issue #218, PRD §5) - see `NotificationsSettings`. */
   notifications: NotificationsSettings
+  /**
+   * Machine-local maintainer flag (issue #265) - hand-added to `settings.json`,
+   * never exposed by the settings window. OFF (absent/false) is the experience
+   * every real user gets: debug surfaces (Console panel, Status panel's
+   * diagnostic internals, drag-perf instrumentation) stay hidden/inert, and
+   * the updater only offers non-alpha releases. ON is the maintainer/soak-PC
+   * experience: debug surfaces available, alpha releases included in update
+   * checks. See `docs/dev-mode.md`.
+   */
+  devMode: boolean
 }
 
 export const DEFAULT_SETTINGS: OverlaySettings = {
@@ -67,5 +77,6 @@ export const DEFAULT_SETTINGS: OverlaySettings = {
   textileScrollSpeed: 1.5,
   textileRotateSpeed: 0.15,
   recordSessionToDisk: false,
-  notifications: { enabled: true, volume: 1, rules: {} }
+  notifications: { enabled: true, volume: 1, rules: {} },
+  devMode: false
 }

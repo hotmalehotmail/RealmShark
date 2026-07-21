@@ -72,6 +72,11 @@ moving parts, each with its own doc below.
   (`overlay/test/`): the capture-replay harness (`loadCapture`/`replay`, fake-
   timer anchoring), the fixtures convention, the capture-allowlist tripwire,
   and the contract for turning a future bug capture into a regression test.
+- **[dev-mode.md](dev-mode.md)** — the machine-local `devMode` settings flag
+  (issue #265): what it gates (the Console panel and other debug surfaces,
+  Status panel diagnostics, drag-perf instrumentation, the updater's
+  alpha/beta/stable channel filtering), how it's set (hand-edited
+  `settings.json`, no in-app UI), and how the screenshot harness forces it on.
 - **[overlay-harness.md](overlay-harness.md)** — the browser renderer harness
   (`overlay/src/renderer/src/harness/`): hosting the React renderer in
   headless Chromium with no Electron process behind it, the live-fake and

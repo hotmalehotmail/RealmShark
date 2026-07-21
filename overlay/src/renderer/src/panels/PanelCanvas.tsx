@@ -25,6 +25,7 @@ interface PanelCanvasProps {
 function PanelCanvas({ interactive }: PanelCanvasProps): React.JSX.Element {
   const [panels, setPanels] = useState<PanelInstance[]>([])
   const [canvasSize, setCanvasSize] = useState<SizePx>(windowSize)
+  const [devMode, setDevMode] = useState(false)
   const loadedRef = useRef(false)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
@@ -37,6 +38,15 @@ function PanelCanvas({ interactive }: PanelCanvasProps): React.JSX.Element {
     const handleResize = (): void => setCanvasSize(windowSize())
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  // Machine-local dev-mode flag (issue #265, docs/dev-mode.md) - gates
+  // whether a `debugOnly` panel (the Console) actually renders below, even
+  // when its instance is present in the layout.
+  useEffect(() => {
+    window.overlay.getSettings().then((s) => setDevMode(s.devMode))
+    const off = window.overlay.onSettingsChanged((s) => setDevMode(s.devMode))
+    return () => off()
   }, [])
 
   useEffect(() => {
@@ -81,7 +91,7 @@ function PanelCanvas({ interactive }: PanelCanvasProps): React.JSX.Element {
       <div className="relative h-full w-full">
         {panels.map((panel) => {
           const spec = PANEL_REGISTRY[panel.type]
-          if (!spec || panel.hidden) return null
+          if (!spec || panel.hidden || (spec.debugOnly && !devMode)) return null
           return (
             <PanelFrame
               key={panel.id}
@@ -89,6 +99,7 @@ function PanelCanvas({ interactive }: PanelCanvasProps): React.JSX.Element {
               spec={spec}
               canvasSize={canvasSize}
               interactive={interactive}
+              devMode={devMode}
               onDrag={(id, x, y) => updatePanel(id, { anchor: { pos: 'tl', x, y } })}
               onCycleSize={(id) => {
                 const current = panels.find((p) => p.id === id)
