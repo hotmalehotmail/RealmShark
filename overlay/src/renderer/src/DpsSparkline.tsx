@@ -29,6 +29,17 @@ import { formatDps } from './formatDps'
  * scope that React StrictMode's dev-only double-invoke of effects can't
  * desync it from the data (unlike an earlier version of this component that
  * also drove the path data through the same effect - see git history).
+ *
+ * The effect keys off `series.bin`, not `points`: `useDpsGraph` re-reads the
+ * recorder on every bridge `dps` envelope (as often as
+ * PacketBridge.DPS_COALESCE_MS=50ms), so `points` gets a fresh array identity
+ * well inside one BIN_MS(250) bin, while `bin` (the recorder's `curBin`)
+ * only advances once a real bin tick closes. Keying the slide on `points`
+ * restarted it up to ~5x per bin during sustained combat, so the group never
+ * reached rest and the curve visibly vibrated instead of scrolling.
+ * Intra-bin refreshes still redraw the path immediately (computed straight
+ * from this render's `points` above), just without re-triggering the
+ * transform.
  */
 
 const VIEW_W = 100
@@ -41,7 +52,7 @@ const SLIDE_MS = 220
 
 function DpsSparkline(): React.JSX.Element {
   const series = useDpsGraph()
-  const { points, windowMax, current } = series
+  const { points, windowMax, current, bin } = series
 
   const step = VIEW_W / (points.length - 1)
   const yMax = windowMax > 0 ? windowMax * (1 + HEADROOM) : 1
@@ -84,7 +95,8 @@ function DpsSparkline(): React.JSX.Element {
       group.setAttribute('transform', 'translate(0 0)')
     })
     return () => cancelAnimationFrame(raf)
-  }, [points, step])
+    // Deliberately keyed on `bin`, not `points` - see the doc comment above.
+  }, [bin, step])
 
   return (
     <div className="flex h-full w-full items-end gap-1.5" data-testid="dps-sparkline">
