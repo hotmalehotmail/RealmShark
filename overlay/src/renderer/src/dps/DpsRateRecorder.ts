@@ -46,6 +46,15 @@ export interface DpsGraphSeries {
   windowMax: number
   /** The newest point - the current smoothed dps. */
   current: number
+  /**
+   * The recorder's `curBin` this series was read at (bins close on time, not
+   * on reads - see `advanceTo`). Multiple reads inside the same BIN_MS window
+   * share this value; it only advances once per real bin tick, so consumers
+   * that need to distinguish "a new bin closed" from "the same bin was
+   * re-read" (e.g. the sparkline's slide animation) should key off this
+   * instead of `points`' array identity, which changes on every read.
+   */
+  bin: number
 }
 
 interface KeyStats {
@@ -192,7 +201,7 @@ export class DpsRateRecorder {
       points[i] = rate
       if (rate > windowMax) windowMax = rate
     }
-    return { points, windowMax, current: points[GRAPH_BINS - 1] }
+    return { points, windowMax, current: points[GRAPH_BINS - 1], bin: this.curBin }
   }
 
   /** Wipe everything - instance change / game closed. Same lifecycle as `DpsTracker.reset`. */

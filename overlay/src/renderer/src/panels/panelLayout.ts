@@ -44,6 +44,13 @@ export function defaultLayout(): PanelInstance[] {
       anchor: { pos: 'tl', x: 65, y: 75 },
       size: 'md',
       zIndex: 8
+    },
+    {
+      id: 'dpsGraph',
+      type: 'dpsGraph',
+      anchor: { pos: 'tl', x: 2, y: 62 },
+      size: 'md',
+      zIndex: 9
     }
   ]
 }
