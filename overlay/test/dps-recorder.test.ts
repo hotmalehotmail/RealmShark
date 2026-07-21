@@ -128,6 +128,23 @@ describe('DpsRateRecorder (PRD §2)', () => {
     expect(r.graphSeries(t0 + BIN_MS).windowMax).toBe(0) // teammate damage doesn't plot
     expect(r.metricsFor(500, 2)?.damage).toBe(50_000) // but their metrics still fold
   })
+
+  it('graphSeries().bin only advances once per real bin tick, not once per read', () => {
+    const r = new DpsRateRecorder()
+    r.onSnapshot(snap(500, { [LOCAL]: 0 }), t0, LOCAL)
+    r.onSnapshot(snap(500, { [LOCAL]: 1000 }), t0 + BIN_MS, LOCAL)
+    // Several reads inside the same BIN_MS window (as a burst of coalesced
+    // bridge envelopes would drive via useDpsGraph) share one bin - the
+    // sparkline's slide effect keys off this to avoid re-triggering per read.
+    const first = r.graphSeries(t0 + BIN_MS)
+    const second = r.graphSeries(t0 + BIN_MS + 1)
+    const third = r.graphSeries(t0 + BIN_MS + 40)
+    expect(second.bin).toBe(first.bin)
+    expect(third.bin).toBe(first.bin)
+    // A read into the next bin window advances it exactly once.
+    const next = r.graphSeries(t0 + 2 * BIN_MS)
+    expect(next.bin).toBe(first.bin + 1)
+  })
 })
 
 describe('recorder metrics through DpsTracker history (PRD §5)', () => {

@@ -10,8 +10,6 @@ export const DPS_ROW_TEXT_SIZE: Record<PanelSize, 'xs' | 'sm'> = { sm: 'xs', md:
 const ROW_GAP = 4 // Tailwind space-y-1
 const TARGET_HEADER_HEIGHT = 20 // DpsList's "Target: ..." line + mb-1; hidden on sm
 
-/** DpsSparkline's fixed pixel height (PRD §4). Shown at md/lg; hidden at sm like the target header. */
-export const SPARKLINE_HEIGHT = 28
 const FRAME_CHROME = 44 // PanelFrame title bar (~28) + content area's p-2 padding (16)
 const BUFFER = 10 // rounding/border slack so rows never require internal scrolling
 
@@ -28,12 +26,13 @@ export function rowHeight(size: PanelSize): number {
  * Panel sizes are static presets (percentage-anchored, not continuously
  * resized), so registry.ts can't measure this from the live DOM; it calls
  * this instead of hardcoding a height that can silently drift out of sync
- * with DPS_MAX_ROWS/DPS_ROW_SPRITE_SIZE.
+ * with DPS_MAX_ROWS/DPS_ROW_SPRITE_SIZE. The trend graph used to eat into
+ * this budget too (PRD §4) — it's now its own panel (`dpsGraph`, issue
+ * #259), so this only ever needs to fit the row list.
  */
 export function dpsPanelHeight(size: PanelSize): number {
   const rows = DPS_MAX_ROWS[size]
   const rowsHeight = rows * rowHeight(size) + (rows - 1) * ROW_GAP
   const header = size === 'sm' ? 0 : TARGET_HEADER_HEIGHT
-  const sparkline = size === 'sm' ? 0 : SPARKLINE_HEIGHT + ROW_GAP
-  return FRAME_CHROME + header + sparkline + rowsHeight + BUFFER
+  return FRAME_CHROME + header + rowsHeight + BUFFER
 }

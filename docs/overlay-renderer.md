@@ -22,7 +22,7 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/ConfigWindow.tsx` | Settings form (game-window title, hotkey), shown in the `#config` window. |
 | `overlay/src/renderer/src/consoleLog.ts` | In-renderer console capture buffer feeding the Console panel. |
 | `overlay/src/renderer/src/DpsList.tsx` | Presentational DPS rows (target + per-attacker list). |
-| `overlay/src/renderer/src/DpsSparkline.tsx` | The DPS panel's bare-SVG trend line over the recorder's aggregate series (§5.2) — the one place the graph's presentation lives (binding layering contract, `prd-dps-graph.md` §4). |
+| `overlay/src/renderer/src/DpsSparkline.tsx` | The standalone `dpsGraph` panel's bare-SVG trend line over the recorder's aggregate series (§5.2) — the one place the graph's presentation lives (binding layering contract, `prd-dps-graph.md` §4). Smoothed curve + compositor-only bin-tick slide (issue #259). |
 | `overlay/src/renderer/src/env.d.ts` | Vite client types only. |
 | `overlay/src/renderer/src/panels/PanelCanvas.tsx` | Owns the panel array, layout load/save, drag/size/pin/z-order dispatch, programmatic open/close. |
 | `overlay/src/renderer/src/panels/PanelFrame.tsx` | One panel's chrome: title bar, drag, size/pin/close/settings-gear buttons, visibility. |
@@ -30,7 +30,7 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/panels/anchor.ts` | Percentage-anchor ↔ pixel math (`panelStyle`, `anchorFromPointer`). |
 | `overlay/src/renderer/src/panels/registry.ts` | `type → { title, per-size px dims, component, closable?, ephemeral?, settings? }`, `PanelContentProps`, and `PanelSettingsProps` (§2's "Per-panel settings gear", issue #221). |
 | `overlay/src/renderer/src/panels/panelLayout.ts` | `defaultLayout()`/`mergeWithDefaults()`/`isPersistablePanel()` plus the pure open/close transitions (`withPanelOpen`/`withPanelClosed`/`isPanelOpen` - §2's "Closeable panels") - split out of `PanelCanvas.tsx` (a component file can't also export plain functions - `react-refresh/only-export-components`), same rationale as `dps/dpsDetailContext.ts`. |
-| `overlay/src/renderer/src/panels/{Status,Dps,Console,Character,Instance,DpsSummary,DpsDetail,Loot,Notifications}Panel.tsx` | The nine panel bodies. |
+| `overlay/src/renderer/src/panels/{Status,Dps,DpsGraph,Console,Character,Instance,DpsSummary,DpsDetail,Loot,Notifications}Panel.tsx` | The ten panel bodies. |
 | `overlay/src/renderer/src/ui/*.tsx` | Shared UI primitives (`Button`, `EmptyState`, `Swatch`, `GearRow`, `MeterRow`, `StatRow`, `Tooltip`) — see `overlay-ui-style.md`. |
 | `overlay/src/renderer/src/ui/interactiveContext.ts` | `InteractiveContext` / `useInteractive()` - the click-through-mode flag, for `Tooltip` (§4.2). |
 | `overlay/src/renderer/src/assets/main.css` | Tailwind entry + the `@theme` design-token block — see `overlay-ui-style.md`. |
@@ -53,7 +53,7 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/dps/DpsFeedProvider.tsx` | Owns the `DpsFeed`, wires it to `onPacketBatch`/`onOverlayDetach`; mounted once at App level (and in the harness's `PanelMount`). |
 | `overlay/src/renderer/src/dps/useDpsTracker.ts` | Live-snapshot view over the shared feed (event-driven on bridge `dps` packets + 1 s fallback recompute). |
 | `overlay/src/renderer/src/dps/useDpsHistory.ts` | History view over the shared feed; exposes `DpsHistoryEntry[]` (backfills on mount). |
-| `overlay/src/renderer/src/dps/useDpsGraph.ts` | Sparkline data view: reads the recorder's aggregate series on a fixed `BIN_MS` tick, skipping re-renders while flat at zero. |
+| `overlay/src/renderer/src/dps/useDpsGraph.ts` | Sparkline data view: re-reads the recorder's aggregate series immediately on every `dps` envelope (mirrors `useDpsTracker`'s event-driven pattern - issue #259), plus a `BIN_MS` interval so the line still decays when the packet stream goes quiet; skips re-renders while flat at zero. |
 | `overlay/src/renderer/src/dps/dpsDetailContext.ts` | `DpsDetailSelectionContext` / `useDpsDetailSelection()` - the selected `DpsHistoryEntry` the `dpsDetail` panel renders (§2's "Programmatic panel spawn/close"). |
 | `overlay/src/renderer/src/dps/DpsDetailSelectionProvider.tsx` | Owns the selection state for the context above; mounted once in `App`. |
 | `overlay/src/renderer/src/dps/types.ts` | Packet-field shapes the tracker reads. |
@@ -204,8 +204,8 @@ window (= the game window) resizes, with no reclamp needed.
 
 `PanelSize` is the literal union `'sm' | 'md' | 'lg'` (`panels.ts:18`). There is
 **no drag-to-resize handle anywhere**. `registry.ts` gives each panel type an
-explicit pixel width/height per preset (`registry.ts:21-72`), e.g. Character is
-a literal `160×100 / 220×130 / 280×170`. The DPS panel's height is instead
+explicit pixel width/height per preset (`registry.ts`'s `PANEL_REGISTRY`), e.g.
+Character is a literal `160×100 / 220×130 / 280×170`. The DPS panel's height is instead
 *derived* rather than literal: `dpsPanelHeight(size)`
 (`dps/rowLayout.ts`) computes the pixel height needed to fit
 `DPS_MAX_ROWS[size]` rows (plus the target header and pinned local-player row)
@@ -330,7 +330,7 @@ The main process persists `panels.json`; see `overlay-main-process.md`.
 ### The `PanelContentProps` contract
 
 Every panel body is a `ComponentType<PanelContentProps>` and receives exactly one
-prop: `{ size: PanelSize }` (`registry.ts:10-19`). Panels **do not** receive the
+prop: `{ size: PanelSize }` (`registry.ts`'s `PanelContentProps`). Panels **do not** receive the
 packet stream or entity data as props — they reach live data through
 `window.overlay.*` subscriptions or the shared contexts (`useSprites`,
 `useEntityRegistry`, `useDpsTracker`). They use `size` only to scale their own
@@ -345,7 +345,7 @@ inherit it and must not re-declare it (see `overlay-ui-style.md`).
    a `window.overlay.on…` subscription (remember to return the unsubscribe in the
    effect cleanup). Style it with the semantic tokens and `ui/` primitives per
    **`overlay-ui-style.md`** — no raw palette classes, no arbitrary text sizes.
-2. **Register it** in `PANEL_REGISTRY` (`registry.ts:21`): add a key with
+2. **Register it** in `PANEL_REGISTRY` (`registry.ts`): add a key with
    `{ type, title, sizes: { sm, md, lg }, component: FooPanel, closable: true }`.
    The three `sizes` entries are required (they're the only dimensions the panel
    will ever have); `closable` is the norm for every singleton panel (§2's
@@ -553,7 +553,7 @@ panel's settings view (`docs/notifications.md`) as its first, proving user.
 
 ## 3. The panels
 
-All nine bodies are thin; the data lives in the shared services. `size` maps
+All ten bodies are thin; the data lives in the shared services. `size` maps
 to per-panel scale tables at the top of each file. Every gear/loot icon below
 renders through `ItemSprite`, not `Sprite` directly, so it's hoverable for the
 item tooltip (§4.2) with no per-panel wiring.
@@ -561,7 +561,8 @@ item tooltip (§4.2) with no per-panel wiring.
 | Panel | Title | Data source | Notes |
 | --- | --- | --- | --- |
 | `StatusPanel` | "RealmShark" | `window.overlay.*` directly | Connection dot, hotkey hint, packet count, JS heap MB, app version + **auto-update** UI, plus the **"Panels" toggle list** (§2's "Closeable panels"). Diagnostic internals (chat probe button, the `lg`-size "last packet" line) render only with `OverlaySettings.devMode` on — see `docs/dev-mode.md`. The one panel with no title-bar ✕. |
-| `DpsPanel` | "DPS" | `useDpsTracker()` → `<DpsList>`; `<DpsSparkline>` at md/lg | Rows per attacker vs. the focused enemy, ranked by cumulative damage (§5). `MAX_ROWS = {sm:2, md:3, lg:6}` — deliberately few, large rows (24-40px sprites) so the panel reads at a glance mid-fight, rather than the previous 3/6/12 dense layout. Each row also renders that attacker's dyed `CharacterSprite` + equip-slot icons (gear hidden at `sm`), resolved from `EntityRegistry` by `row.objectId`, plus a damage-share bar (length **and** color both encode `damage/topDamage`) and a rank badge/ring on the local player's row (§6). Above the rows (md/lg only, like the target header), the **trend sparkline** (§5.2): the local player's aggregate damage rate over the trailing ~10 s. |
+| `DpsPanel` | "DPS" | `useDpsTracker()` → `<DpsList>` | Rows per attacker vs. the focused enemy, ranked by cumulative damage (§5). `MAX_ROWS = {sm:2, md:3, lg:6}` — deliberately few, large rows (24-40px sprites) so the panel reads at a glance mid-fight, rather than the previous 3/6/12 dense layout. Each row also renders that attacker's dyed `CharacterSprite` + equip-slot icons (gear hidden at `sm`), resolved from `EntityRegistry` by `row.objectId`, plus a damage-share bar (length **and** color both encode `damage/topDamage`) and a rank badge/ring on the local player's row (§6). The numeric readout only — the trend graph is a separate panel (below). |
+| `DpsGraphPanel` | "DPS Graph" | `<DpsSparkline>` (owns `useDpsGraph()` itself) | Standalone, closable, independently placeable/sizable panel (issue #259) over the same aggregate series the DPS panel used to embed at md/lg — see §5.2's "The sparkline". Shown and sized at every preset, including `sm`. |
 | `ConsolePanel` | "Console" | `consoleLog.ts` buffer | Live log with search (Ctrl/Cmd+F), level colours, clear. `debugOnly` (issue #265) — hidden from the toggle list and never rendered while `devMode` is off; see `docs/dev-mode.md`. |
 | `CharacterPanel` | "Character" | `EntityRegistry` (local player) | Big dyed sprite + 4 equip icons + username. |
 | `InstancePanel` | "Instance" | `EntityRegistry.characters()` | Every named player in the instance, dyed sprites + gear. |
@@ -1317,16 +1318,28 @@ absent from a snapshot means *unchanged*, never "went to zero"; bins close on
 **time**, not envelopes, so the series decays to zero when the stream goes
 quiet.
 
-**The sparkline** (`DpsSparkline.tsx`, in `DpsPanel` at md/lg): bare inline
-SVG — a 2 px `accent` polyline + low-alpha area fill, no axes/gridlines/
-legend, one direct label (the current smoothed value, in text tokens). Data
-arrives via `useDpsGraph()` on a fixed `BIN_MS` interval (~4 Hz); while the
-series is flat at zero the hook returns the previous state object so nothing
-re-renders — steady-state GPU work over the game stays zero. There is
-deliberately no CSS transition or rAF animation; the sanctioned
-smooth-scroll upgrade path (compositor-only translate) is documented in the
-PRD §4 and is contained in this one component by the binding layering
-contract there.
+**The sparkline** (`DpsSparkline.tsx`, the standalone `dpsGraph` panel's
+entire body, own sm/md/lg presets — issue #259): bare inline SVG — a 2 px
+`accent` curve + low-alpha area fill, no axes/gridlines/legend, one direct
+label (the current smoothed value, in text tokens). Data arrives via
+`useDpsGraph()` on a fixed `BIN_MS` interval (~4 Hz); while the series is
+flat at zero the hook returns the previous state object so nothing
+re-renders — steady-state GPU work over the game stays zero.
+
+The line is a smoothed curve, not a hard-vertex polyline: `smoothLineD`/
+`smoothAreaD` draw a quadratic Bezier to each segment's midpoint (control
+point = the real data point), which stays within the convex hull of its own
+inputs — a flat zero line can't dip negative and the curve can't rise past
+its own peak, unlike a Catmull-Rom-style spline. New bins enter via the
+PRD §4's sanctioned smooth-scroll upgrade path: one extra (previous-frame)
+bin is rendered off the group's rest position, and a `<g>` wrapping the path
+slides into place via a compositor-only CSS `transform`, restarted once per
+bin tick (a one-shot `requestAnimationFrame` to force the browser to animate
+the transition, not a perpetual rAF loop). Because the hook skips re-renders
+while flat at zero, an idle overlay never re-triggers the slide — animation
+cost stays at zero between ticks and while nothing changes, matching the
+PRD's compositor-cost constraint. All of this stays contained in this one
+component by the binding layering contract.
 
 **The detail-panel metrics** (`DpsDetailPanel.tsx`): each expanded per-player
 row shows `avg <avgDps> · peak <peakDps>` from the frozen history metrics —
