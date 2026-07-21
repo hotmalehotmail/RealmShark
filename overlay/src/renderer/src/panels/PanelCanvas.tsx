@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PanelInstance, PanelSize } from '../../../shared/panels'
 import type { SizePx } from './anchor'
-import { isPersistablePanel, mergeWithDefaults } from './panelLayout'
+import {
+  isPanelOpen,
+  isPersistablePanel,
+  mergeWithDefaults,
+  withPanelClosed,
+  withPanelOpen
+} from './panelLayout'
 import { PanelSpawnContext } from './panelSpawn'
 import PanelFrame, { SIZE_CYCLE } from './PanelFrame'
 import { PANEL_REGISTRY } from './registry'
 
 const SAVE_DEBOUNCE_MS = 500
-
-/** Default anchor a programmatically-spawned panel (`usePanelSpawn().openPanel`) appears at. */
-const SPAWN_ANCHOR = { pos: 'tl' as const, x: 15, y: 12 }
 
 function windowSize(): SizePx {
   return { width: window.innerWidth, height: window.innerHeight }
@@ -58,31 +61,27 @@ function PanelCanvas({ interactive }: PanelCanvasProps): React.JSX.Element {
     })
   }
 
-  // See panelSpawn.ts's doc comment - lets a panel body (e.g. DpsSummaryPanel)
-  // open/close another panel on this same canvas without PanelCanvas needing
-  // to know anything about that panel's purpose.
+  // See panelSpawn.ts's doc comment - lets a panel body (e.g. DpsSummaryPanel
+  // or the Status panel's toggle list) open/close another panel on this same
+  // canvas without PanelCanvas needing to know anything about that panel's
+  // purpose. The actual state transitions are pure functions in
+  // panelLayout.ts - see their doc comments for the hide-vs-remove split.
   const openPanel = (id: string, type: string, size: PanelSize = 'lg'): void => {
-    setPanels((prev) => {
-      const maxZ = Math.max(0, ...prev.map((p) => p.zIndex))
-      if (prev.some((p) => p.id === id)) {
-        return prev.map((p) => (p.id === id && p.zIndex !== maxZ ? { ...p, zIndex: maxZ + 1 } : p))
-      }
-      return [...prev, { id, type, anchor: SPAWN_ANCHOR, size, zIndex: maxZ + 1 }]
-    })
+    setPanels((prev) => withPanelOpen(prev, id, type, size))
   }
 
   const closePanel = (id: string): void => {
-    setPanels((prev) => prev.filter((p) => p.id !== id))
+    setPanels((prev) => withPanelClosed(prev, id))
   }
 
-  const isOpen = (id: string): boolean => panels.some((p) => p.id === id)
+  const isOpen = (id: string): boolean => isPanelOpen(panels, id)
 
   return (
     <PanelSpawnContext.Provider value={{ openPanel, closePanel, isOpen }}>
       <div className="relative h-full w-full">
         {panels.map((panel) => {
           const spec = PANEL_REGISTRY[panel.type]
-          if (!spec) return null
+          if (!spec || panel.hidden) return null
           return (
             <PanelFrame
               key={panel.id}

@@ -25,11 +25,14 @@ interface PanelMountProps {
  * (they throw otherwise, by design - see their doc comments), but this
  * single-panel harness mount has no `PanelCanvas` to supply one. A no-op
  * spawn API is enough for a static shot (nothing here simulates a click).
+ * `isOpen` answers true so the Status panel's toggle list renders every
+ * chip engaged - matching the real default state (all panels shown) instead
+ * of a misleading everything-toggled-off gallery shot.
  */
 const NOOP_PANEL_SPAWN = {
   openPanel: (): void => {},
   closePanel: (): void => {},
-  isOpen: (): boolean => false
+  isOpen: (): boolean => true
 }
 
 /**

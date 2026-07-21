@@ -12,22 +12,27 @@ import type { PanelSize } from '../../../shared/panels'
  */
 export interface PanelSpawnApi {
   /**
-   * Ensures a panel instance with this `id`/`type` exists on the canvas and
-   * is raised to the front - creates it (at a default anchor, the given
-   * `size`) if it doesn't exist yet, otherwise just brings the existing one
-   * to top. Reuses the same instance across repeated calls with the same
-   * `id`, so re-targeting an already-open panel (e.g. selecting a different
-   * session) never spawns a duplicate.
+   * Ensures a panel instance with this `id`/`type` is on screen and raised
+   * to the front - creates it (at a default anchor, the given `size`) if it
+   * doesn't exist yet, un-hides it if it was closed, otherwise just brings
+   * the existing one to top. Reuses the same instance across repeated calls
+   * with the same `id`, so re-targeting an already-open panel (e.g.
+   * selecting a different session) never spawns a duplicate.
    */
   openPanel: (id: string, type: string, size?: PanelSize) => void
-  /** Removes a panel instance from the canvas entirely. */
+  /**
+   * Closes a panel. An `ephemeral` panel's instance (dpsDetail) is removed
+   * from the canvas entirely; any other panel is kept in the layout but
+   * marked hidden, so its position/size survive and the Status panel's
+   * toggle list can bring it back - see panelLayout.ts's `withPanelClosed`.
+   */
   closePanel: (id: string) => void
   /**
-   * Whether a panel instance with this `id` currently exists on the canvas -
-   * lets a spawning panel body (e.g. `DpsSummaryPanel`) derive UI state (like
-   * a row highlight) from the spawned panel's actual open/closed state
-   * instead of tracking it separately in a way that must be manually kept in
-   * sync when the panel closes.
+   * Whether a panel with this `id` is currently on the canvas and not
+   * hidden - lets a spawning panel body (e.g. `DpsSummaryPanel`'s row
+   * highlight, the Status panel's toggle states) derive UI state from the
+   * panel's actual open/closed state instead of tracking it separately in a
+   * way that must be manually kept in sync when the panel closes.
    */
   isOpen: (id: string) => boolean
 }

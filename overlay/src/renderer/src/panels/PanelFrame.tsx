@@ -235,7 +235,9 @@ function PanelFrame({
                 size="xs"
                 onMouseDown={(e) => e.stopPropagation()}
                 onClick={() => onClose(panel.id)}
-                title="Close"
+                title={
+                  spec.ephemeral ? 'Close' : 'Close - toggle back on from the RealmShark panel'
+                }
               >
                 ✕
               </Button>
