@@ -97,43 +97,26 @@ function PanelFrame({
     // `transform` instead of rewriting `left`/`top` every frame - transform
     // is compositor-only (no layout/repaint), whereas left/top forces a full
     // layout + repaint each frame even with blur/shadow suspended. `left`/
-    // `top` stay at their rest values for the whole drag; only `transform`
-    // (position) and, when a clamped edge actually changes them, `width`/
-    // `height` are written per frame. The position is committed to state
-    // once, on drop (handleUp) - that persists the move and triggers
-    // PanelCanvas's debounced layout save. During the move phase PanelCanvas
-    // never re-renders, so these direct writes are safe from being clobbered
-    // by a reconcile.
+    // `top` stay at their rest values for the whole drag, and `width`/
+    // `height` cannot change during one at all (anchorFromPointer keeps the
+    // panel inside the region where its preset size fits, so panelStyle's
+    // edge cap returns that same size for every anchor a drag can reach), so
+    // `transform` is the only per-frame write and the drag stays
+    // compositor-only. The position is committed to state once, on drop
+    // (handleUp) - that persists the move and triggers PanelCanvas's
+    // debounced layout save. During the move phase PanelCanvas never
+    // re-renders, so these direct writes are safe from being clobbered by a
+    // reconcile.
     let last = { x: panel.anchor.x, y: panel.anchor.y }
-    let lastWidth: string | undefined
-    let lastHeight: string | undefined
     const handleMove = (moveEvent: MouseEvent): void => {
       const el = frameRef.current
       if (!draggingRef.current || !el) return
       last = anchorFromPointer(
         moveEvent.clientX - grabOffsetX,
         moveEvent.clientY - grabOffsetY,
-        canvasSize
+        canvasSize,
+        spec.sizes[panel.size]
       )
-      const s = panelStyle(
-        { ...panel.anchor, x: last.x, y: last.y },
-        spec.sizes[panel.size],
-        canvasSize
-      )
-      // panelStyle's declared type is CSSProperties (string | number for
-      // width/height, even though it only ever returns numbers) - narrow
-      // rather than assert, so a future string/percentage return can't
-      // silently turn into `NaNpx`.
-      const width = typeof s.width === 'number' ? `${s.width}px` : String(s.width ?? '')
-      const height = typeof s.height === 'number' ? `${s.height}px` : String(s.height ?? '')
-      if (width !== lastWidth) {
-        el.style.width = width
-        lastWidth = width
-      }
-      if (height !== lastHeight) {
-        el.style.height = height
-        lastHeight = height
-      }
       const deltaX = ((last.x - panel.anchor.x) / 100) * canvasSize.width
       const deltaY = ((last.y - panel.anchor.y) / 100) * canvasSize.height
       el.style.transform = `translate3d(${deltaX}px, ${deltaY}px, 0)`
