@@ -95,34 +95,27 @@ html.panel-dragging [data-panel-frame] {
  *
  * `scrollbar-gutter: stable` (reserves the track's space even before content
  * overflows, so width never jumps when a scrollbar appears/disappears) is
- * scoped to the `-y-auto`/`-x-auto`/`-scroll` variants only, deliberately
- * excluding bare `.overflow-auto` - that class is `PanelFrame`'s one shared
- * content wrapper for every panel type (scrolling or not), so reserving a
- * gutter there would permanently shrink every panel's content width, even
- * panels whose content never overflows. The panels that actually scroll
- * (Console, Loot, Notifications, DPS Summary/Detail, Instance) each put their
- * own `overflow-y-auto` on their scrolling root, which does get the stable
- * gutter.
+ * scoped to the vertical-scrolling variants only (`-y-auto`/`-y-scroll`/bare
+ * `.overflow-scroll`, which scrolls both axes), deliberately excluding both
+ * bare `.overflow-auto` and the `-x-` variants: `.overflow-auto` is
+ * `PanelFrame`'s one shared content wrapper for every panel type (scrolling
+ * or not), so reserving a gutter there would permanently shrink every
+ * panel's content width, even panels whose content never overflows; the
+ * `-x-` variants never show a block-axis (vertical) scrollbar, so the
+ * property would reserve inline space no scrollbar ever occupies. The
+ * panels that actually scroll (Console, Loot, Notifications, DPS
+ * Summary/Detail, Instance) each put their own `overflow-y-auto` on their
+ * scrolling root, which does get the stable gutter.
+ *
+ * Only the `::-webkit-scrollbar-*` pseudo-elements style the scrollbar
+ * itself - the standard `scrollbar-width`/`scrollbar-color` properties are
+ * deliberately NOT set here. Setting both on the same element is mutually
+ * exclusive in current Chromium: once `scrollbar-width` is non-`auto`,
+ * Chromium ignores the `::-webkit-scrollbar` pseudo-elements entirely,
+ * which would silently kill the pill thumb and the hover/active affordance
+ * below.
  */
-:is(
-    .overflow-auto,
-    .overflow-y-auto,
-    .overflow-x-auto,
-    .overflow-scroll,
-    .overflow-y-scroll,
-    .overflow-x-scroll
-  ) {
-  scrollbar-width: thin;
-  scrollbar-color: var(--color-surface-2) transparent;
-}
-
-:is(
-    .overflow-y-auto,
-    .overflow-x-auto,
-    .overflow-scroll,
-    .overflow-y-scroll,
-    .overflow-x-scroll
-  ) {
+:is(.overflow-y-auto, .overflow-y-scroll, .overflow-scroll) {
   scrollbar-gutter: stable;
 }
 
