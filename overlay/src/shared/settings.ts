@@ -58,6 +58,29 @@ export interface OverlaySettings {
   recordSessionToDisk: boolean
   /** Notification system settings (issue #218, PRD §5) - see `NotificationsSettings`. */
   notifications: NotificationsSettings
+  /**
+   * Machine-local maintainer UNLOCK flag (issue #265) - hand-added to
+   * `settings.json`, never exposed by the settings window. OFF (absent/
+   * false) means the Developer section doesn't exist in the Settings window
+   * at all, and the updater only offers non-alpha releases - both
+   * unconditionally, regardless of `devModeToggle` below. ON exposes the
+   * Developer section (issue #266) and always includes alpha releases in
+   * update checks (the update channel is governed by this flag alone - see
+   * `devModeToggle`). See `docs/dev-mode.md`.
+   */
+  devMode: boolean
+  /**
+   * Persisted runtime TOGGLE (issue #266), distinct from the `devMode`
+   * unlock above: whether the debug surfaces `devMode` unlocks (Console
+   * panel, Status panel diagnostics, drag-perf instrumentation) are
+   * currently active. Only has any effect while `devMode` is also true - see
+   * `isDevModeActive`. Defaults to `true` so a maintainer who just
+   * hand-added `devMode: true` sees every debug surface on immediately,
+   * without an extra step. Deliberately does NOT gate the updater's alpha
+   * channel (that stays on `devMode` alone) - flipping this off on the soak
+   * PC must not silently drop it off the alpha channel and stall a soak.
+   */
+  devModeToggle: boolean
 }
 
 export const DEFAULT_SETTINGS: OverlaySettings = {
@@ -67,5 +90,19 @@ export const DEFAULT_SETTINGS: OverlaySettings = {
   textileScrollSpeed: 1.5,
   textileRotateSpeed: 0.15,
   recordSessionToDisk: false,
-  notifications: { enabled: true, volume: 1, rules: {} }
+  notifications: { enabled: true, volume: 1, rules: {} },
+  devMode: false,
+  devModeToggle: true
+}
+
+/**
+ * Whether the `devMode`-gated debug surfaces (Console panel, Status panel
+ * diagnostics, drag-perf) should currently render/activate: the unlock AND
+ * the toggle. Deliberately unused by the updater's channel filtering, which
+ * reads `OverlaySettings.devMode` directly - see that field's doc comment.
+ */
+export function isDevModeActive(
+  settings: Pick<OverlaySettings, 'devMode' | 'devModeToggle'>
+): boolean {
+  return settings.devMode && settings.devModeToggle
 }

@@ -1,15 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PanelInstance, PanelSize } from '../../../shared/panels'
+import { isDevModeActive } from '../../../shared/settings'
 import type { SizePx } from './anchor'
-import { isPersistablePanel, mergeWithDefaults } from './panelLayout'
+import {
+  isPanelOpen,
+  isPersistablePanel,
+  mergeWithDefaults,
+  withPanelClosed,
+  withPanelOpen
+} from './panelLayout'
 import { PanelSpawnContext } from './panelSpawn'
 import PanelFrame, { SIZE_CYCLE } from './PanelFrame'
 import { PANEL_REGISTRY } from './registry'
 
 const SAVE_DEBOUNCE_MS = 500
-
-/** Default anchor a programmatically-spawned panel (`usePanelSpawn().openPanel`) appears at. */
-const SPAWN_ANCHOR = { pos: 'tl' as const, x: 15, y: 12 }
 
 function windowSize(): SizePx {
   return { width: window.innerWidth, height: window.innerHeight }
@@ -22,6 +26,7 @@ interface PanelCanvasProps {
 function PanelCanvas({ interactive }: PanelCanvasProps): React.JSX.Element {
   const [panels, setPanels] = useState<PanelInstance[]>([])
   const [canvasSize, setCanvasSize] = useState<SizePx>(windowSize)
+  const [devMode, setDevMode] = useState(false)
   const loadedRef = useRef(false)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
@@ -34,6 +39,16 @@ function PanelCanvas({ interactive }: PanelCanvasProps): React.JSX.Element {
     const handleResize = (): void => setCanvasSize(windowSize())
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  // Dev mode active = the machine-local unlock AND the persisted toggle
+  // (issue #265/#266, docs/dev-mode.md) - gates whether a `debugOnly` panel
+  // (the Console) actually renders below, even when its instance is present
+  // in the layout.
+  useEffect(() => {
+    window.overlay.getSettings().then((s) => setDevMode(isDevModeActive(s)))
+    const off = window.overlay.onSettingsChanged((s) => setDevMode(isDevModeActive(s)))
+    return () => off()
   }, [])
 
   useEffect(() => {
@@ -58,31 +73,27 @@ function PanelCanvas({ interactive }: PanelCanvasProps): React.JSX.Element {
     })
   }
 
-  // See panelSpawn.ts's doc comment - lets a panel body (e.g. DpsSummaryPanel)
-  // open/close another panel on this same canvas without PanelCanvas needing
-  // to know anything about that panel's purpose.
+  // See panelSpawn.ts's doc comment - lets a panel body (e.g. DpsSummaryPanel
+  // or the Status panel's toggle list) open/close another panel on this same
+  // canvas without PanelCanvas needing to know anything about that panel's
+  // purpose. The actual state transitions are pure functions in
+  // panelLayout.ts - see their doc comments for the hide-vs-remove split.
   const openPanel = (id: string, type: string, size: PanelSize = 'lg'): void => {
-    setPanels((prev) => {
-      const maxZ = Math.max(0, ...prev.map((p) => p.zIndex))
-      if (prev.some((p) => p.id === id)) {
-        return prev.map((p) => (p.id === id && p.zIndex !== maxZ ? { ...p, zIndex: maxZ + 1 } : p))
-      }
-      return [...prev, { id, type, anchor: SPAWN_ANCHOR, size, zIndex: maxZ + 1 }]
-    })
+    setPanels((prev) => withPanelOpen(prev, id, type, size))
   }
 
   const closePanel = (id: string): void => {
-    setPanels((prev) => prev.filter((p) => p.id !== id))
+    setPanels((prev) => withPanelClosed(prev, id))
   }
 
-  const isOpen = (id: string): boolean => panels.some((p) => p.id === id)
+  const isOpen = (id: string): boolean => isPanelOpen(panels, id)
 
   return (
     <PanelSpawnContext.Provider value={{ openPanel, closePanel, isOpen }}>
       <div className="relative h-full w-full">
         {panels.map((panel) => {
           const spec = PANEL_REGISTRY[panel.type]
-          if (!spec) return null
+          if (!spec || panel.hidden || (spec.debugOnly && !devMode)) return null
           return (
             <PanelFrame
               key={panel.id}
@@ -90,6 +101,7 @@ function PanelCanvas({ interactive }: PanelCanvasProps): React.JSX.Element {
               spec={spec}
               canvasSize={canvasSize}
               interactive={interactive}
+              devMode={devMode}
               onDrag={(id, x, y) => updatePanel(id, { anchor: { pos: 'tl', x, y } })}
               onCycleSize={(id) => {
                 const current = panels.find((p) => p.id === id)

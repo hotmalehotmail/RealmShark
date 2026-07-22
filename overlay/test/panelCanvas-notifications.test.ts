@@ -29,16 +29,21 @@ const PRE_NOTIFICATIONS_SAVED: PanelInstance[] = [
 describe('PanelCanvas mergeWithDefaults - notifications panel (issue #220)', () => {
   it('appends the notifications panel for an existing user upgrading from before it existed', () => {
     const merged = mergeWithDefaults(PRE_NOTIFICATIONS_SAVED)
-    expect(merged).toHaveLength(PRE_NOTIFICATIONS_SAVED.length + 1)
+    // Also missing dpsGraph (issue #259, added to defaultLayout after this
+    // fixture's snapshot) - both newer default panels get appended.
+    expect(merged).toHaveLength(PRE_NOTIFICATIONS_SAVED.length + 2)
     // Every pre-existing saved panel is kept untouched (positions/zIndex
-    // aren't reset - only the missing default is appended).
+    // aren't reset - only the missing defaults are appended).
     expect(merged.slice(0, PRE_NOTIFICATIONS_SAVED.length)).toEqual(PRE_NOTIFICATIONS_SAVED)
     const notifications = merged.find((p) => p.id === 'notifications')
     expect(notifications).toBeDefined()
     expect(notifications?.type).toBe('notifications')
+    const dpsGraph = merged.find((p) => p.id === 'dpsGraph')
+    expect(dpsGraph).toBeDefined()
+    expect(dpsGraph?.type).toBe('dpsGraph')
   })
 
-  it('leaves a layout that already has notifications unchanged', () => {
+  it('leaves a layout that already has notifications and dpsGraph unchanged', () => {
     const alreadyUpgraded: PanelInstance[] = [
       ...PRE_NOTIFICATIONS_SAVED,
       {
@@ -47,6 +52,13 @@ describe('PanelCanvas mergeWithDefaults - notifications panel (issue #220)', () 
         anchor: { pos: 'tl', x: 10, y: 10 },
         size: 'sm',
         zIndex: 9
+      },
+      {
+        id: 'dpsGraph',
+        type: 'dpsGraph',
+        anchor: { pos: 'tl', x: 20, y: 20 },
+        size: 'sm',
+        zIndex: 10
       }
     ]
     expect(mergeWithDefaults(alreadyUpgraded)).toEqual(alreadyUpgraded)

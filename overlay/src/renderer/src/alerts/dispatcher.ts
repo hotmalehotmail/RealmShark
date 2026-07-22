@@ -21,12 +21,26 @@ interface Survivor {
 }
 
 /**
+ * Resolves the effective cooldown (ms) for one matched kind: a numeric
+ * `cooldownMs` in its *resolved* params (issue #269 - `partyChat`'s
+ * user-adjustable per-rule override, `PartyChatParams.cooldownMs`) wins over
+ * the catalog's static `AlertKind.cooldownMs` seed; `undefined` means no
+ * cooldown at all, same as an unset static field.
+ */
+function resolveCooldownMs(kind: AlertKind, params: Record<string, unknown>): number | undefined {
+  const override = params.cooldownMs
+  if (typeof override === 'number' && Number.isFinite(override) && override >= 0) return override
+  return kind.cooldownMs
+}
+
+/**
  * Multi-match resolution for one `GameEvent` against the catalog (PRD §3
  * "Multi-match semantics"):
  *
  * 1. Evaluate every *enabled* catalog rule whose `eventType` matches; a rule
- *    on cooldown (its own `cooldownMs`, tracked in `lastFiredAt` by kind id)
- *    is dropped even if it matched. No survivors -> returns `null`.
+ *    on cooldown (its effective `cooldownMs` - `resolveCooldownMs` above -
+ *    tracked in `lastFiredAt` by kind id) is dropped even if it matched. No
+ *    survivors -> returns `null`.
  * 2. Banner: the payload of the first survivor (in catalog order) that wants
  *    one. If no survivor wants a banner, falls back to the first survivor's
  *    payload anyway (`result.banner` stays `null` in that case - nothing
@@ -56,9 +70,10 @@ export function dispatchEvent(
     if (!rule.enabled) continue
     const payload = kind.match(event, rule.params, settings)
     if (!payload) continue
-    if (kind.cooldownMs != null) {
+    const cooldownMs = resolveCooldownMs(kind, rule.params)
+    if (cooldownMs != null) {
       const last = lastFiredAt.get(kind.id)
-      if (last != null && now - last < kind.cooldownMs) continue
+      if (last != null && now - last < cooldownMs) continue
     }
     survivors.push({ kindId: kind.id, payload, banner: rule.banner, sound: rule.sound })
   }

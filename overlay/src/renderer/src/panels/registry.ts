@@ -6,6 +6,7 @@ import type { SizePx } from './anchor'
 import CharacterPanel from './CharacterPanel'
 import ConsolePanel from './ConsolePanel'
 import DpsDetailPanel from './DpsDetailPanel'
+import DpsGraphPanel from './DpsGraphPanel'
 import DpsPanel from './DpsPanel'
 import DpsSummaryPanel from './DpsSummaryPanel'
 import InstancePanel from './InstancePanel'
@@ -36,11 +37,22 @@ export interface PanelSpec {
   component: ComponentType<PanelContentProps>
   /**
    * Whether `PanelFrame` renders a close (✕) control in this panel's title
-   * bar, wired to `usePanelSpawn().closePanel` - for a panel that's
-   * programmatically opened rather than always present in the default
-   * layout (e.g. `dpsDetail`). Omit/false for every ordinary always-on panel.
+   * bar, wired to `usePanelSpawn().closePanel`. Set on every panel except
+   * `status`: the Status panel hosts the toggle list that turns closed
+   * panels back on, so it must never be closeable itself - closing it would
+   * strand the user with no way to reopen anything. What closing *does*
+   * depends on `ephemeral` below.
    */
   closable?: boolean
+  /**
+   * A programmatically-spawned, throwaway panel (`dpsDetail`): closing it
+   * removes the instance from the canvas outright, and it never persists to
+   * panels.json (`panelLayout.ts`'s `isPersistablePanel` - its content lives
+   * in a non-persisted selection context). Closing a *non*-ephemeral panel
+   * instead just sets `PanelInstance.hidden`, so its position/size survive
+   * and the Status panel's toggle list can bring it back.
+   */
+  ephemeral?: boolean
   /**
    * Optional settings view (issue #221). When set, `PanelFrame` renders a
    * gear button (interactive mode only, next to pin/size) that flips the
@@ -49,18 +61,32 @@ export interface PanelSpec {
    * renders no gear at all, per panel type.
    */
   settings?: ComponentType<PanelSettingsProps>
+  /**
+   * Debug surface (issue #265): hidden from the Status panel's toggle list
+   * and never rendered on the canvas while dev mode isn't active - either
+   * `OverlaySettings.devMode` (the unlock) is off, or it's on but the
+   * Developer section's `devModeToggle` (issue #266) is off - even if an
+   * instance is present in the saved/default layout. The instance itself is
+   * left alone (not stripped), so it re-appears the moment dev mode becomes
+   * active again. See `isDevModeActive` (`shared/settings.ts`) and
+   * `docs/dev-mode.md`.
+   */
+  debugOnly?: boolean
 }
 
 export const PANEL_REGISTRY: Record<string, PanelSpec> = {
   status: {
     type: 'status',
     title: 'RealmShark',
+    // md/lg are sized to fit the panel-toggle list (two wrapped rows of
+    // chips) on top of the stats + action rows; sm stays a bare header.
     sizes: {
       sm: { width: 160, height: 50 },
-      md: { width: 260, height: 184 },
-      lg: { width: 300, height: 195 }
+      md: { width: 260, height: 248 },
+      lg: { width: 300, height: 260 }
     },
     component: StatusPanel
+    // Deliberately NOT closable - see the `closable` doc above.
   },
   dps: {
     type: 'dps',
@@ -70,7 +96,19 @@ export const PANEL_REGISTRY: Record<string, PanelSpec> = {
       md: { width: 300, height: dpsPanelHeight('md') },
       lg: { width: 380, height: dpsPanelHeight('lg') }
     },
-    component: DpsPanel
+    component: DpsPanel,
+    closable: true
+  },
+  dpsGraph: {
+    type: 'dpsGraph',
+    title: 'DPS Graph',
+    sizes: {
+      sm: { width: 200, height: 110 },
+      md: { width: 300, height: 160 },
+      lg: { width: 420, height: 220 }
+    },
+    component: DpsGraphPanel,
+    closable: true
   },
   console: {
     type: 'console',
@@ -80,7 +118,9 @@ export const PANEL_REGISTRY: Record<string, PanelSpec> = {
       md: { width: 380, height: 220 },
       lg: { width: 480, height: 320 }
     },
-    component: ConsolePanel
+    component: ConsolePanel,
+    closable: true,
+    debugOnly: true
   },
   character: {
     type: 'character',
@@ -90,7 +130,8 @@ export const PANEL_REGISTRY: Record<string, PanelSpec> = {
       md: { width: 220, height: 130 },
       lg: { width: 280, height: 170 }
     },
-    component: CharacterPanel
+    component: CharacterPanel,
+    closable: true
   },
   instance: {
     type: 'instance',
@@ -100,7 +141,8 @@ export const PANEL_REGISTRY: Record<string, PanelSpec> = {
       md: { width: 300, height: 260 },
       lg: { width: 360, height: 360 }
     },
-    component: InstancePanel
+    component: InstancePanel,
+    closable: true
   },
   dpsSummary: {
     type: 'dpsSummary',
@@ -110,7 +152,8 @@ export const PANEL_REGISTRY: Record<string, PanelSpec> = {
       md: { width: 320, height: 300 },
       lg: { width: 400, height: 420 }
     },
-    component: DpsSummaryPanel
+    component: DpsSummaryPanel,
+    closable: true
   },
   dpsDetail: {
     type: 'dpsDetail',
@@ -124,7 +167,8 @@ export const PANEL_REGISTRY: Record<string, PanelSpec> = {
       lg: { width: 620, height: 560 }
     },
     component: DpsDetailPanel,
-    closable: true
+    closable: true,
+    ephemeral: true
   },
   loot: {
     type: 'loot',
@@ -134,7 +178,8 @@ export const PANEL_REGISTRY: Record<string, PanelSpec> = {
       md: { width: 260, height: 220 },
       lg: { width: 340, height: 300 }
     },
-    component: LootPanel
+    component: LootPanel,
+    closable: true
   },
   notifications: {
     type: 'notifications',
@@ -145,6 +190,7 @@ export const PANEL_REGISTRY: Record<string, PanelSpec> = {
       lg: { width: 380, height: 320 }
     },
     component: NotificationsPanel,
+    closable: true,
     settings: NotificationsSettingsView
   }
 }

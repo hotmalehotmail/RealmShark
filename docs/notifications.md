@@ -40,7 +40,7 @@ pinned via the Status panel's chat-probe diagnostic, see "Chat detector &
 | `overlay/src/renderer/src/alerts/paramsEditorTypes.ts` | `ParamsEditorProps` (issue #221) — split into its own type-only file so `paramsEditors.ts` and an editor component never need a value import from each other. |
 | `overlay/src/renderer/src/alerts/EnchantedDropParamsEditor.tsx` | `enchantedDrop`'s params editor (issue #221, PRD §3): tier dropdown + add/remove SlotType-category and item-name override rows. Registered under `paramsEditors.ts`. Its item-name suggestion dropdown is debounced and portaled to `document.body` (soak #234 - see `itemNameSearch.ts` and below). |
 | `overlay/src/renderer/src/alerts/useItemNameCatalog.ts` | `useItemNameCatalog()` (issue #221) — every distinct name from the bridge's `lootBagTypes.itemNames` (issue #217's widened, all-color table), for the item-override autocomplete. A standalone `onPacketBatch` subscription, not routed through `AlertEngine`'s internal `LootTracker` — a UI-only concern outside the layering contract below. Because it mounts with the settings view — after the bridge's one-shot, edge-triggered delivery (#239) — it requests `replayMetadata()` on mount (issue #245, `docs/overlay-main-process.md` "Metadata replay") and skips same-`metaVersion` re-deliveries. |
-| `overlay/src/renderer/src/alerts/PartyChatParamsEditor.tsx` | `partyChat`'s params editor (issue #222): a plain add/remove keyword-list editor — no autocomplete, keywords are free text. Registered under `paramsEditors.ts`. |
+| `overlay/src/renderer/src/alerts/PartyChatParamsEditor.tsx` | `partyChat`'s params editor (issue #222): a plain add/remove keyword-list editor — no autocomplete, keywords are free text — plus a cooldown-seconds field (issue #269). Registered under `paramsEditors.ts`. |
 
 ## Architecture
 
@@ -132,12 +132,17 @@ homogeneous array with no variance workarounds.
    (`"Doom Bow Shiny"` does **not** match an override keyed `"doom bow"`).
 4. **`partyChat`** (issue #222) — fires on a `chat` event whose `channel` is
    `'party'`, optionally filtered by a `keywords: string[]` param (empty =
-   every party message; non-empty = case-insensitive substring match against
-   `ChatEvent.text` — never `cleanText`, the profanity-filtered display
-   variant). Default **off** (chat notifications are opt-in, unlike the loot
-   trio) with a 3000ms `cooldownMs` — chat can burst in a way a single loot
-   drop never does. See "Chat detector & `partyChat`" below for the detector
-   itself and its privacy/testing constraints.
+   every party message; non-empty = case-insensitive **whole-word** match
+   against `ChatEvent.text` — never `cleanText`, the profanity-filtered
+   display variant — `"w4"` matches `"pull w4"` but not `"w40k"`, issue #269).
+   Default **off** (chat notifications are opt-in, unlike the loot trio) with
+   a 15000ms `cooldownMs` seed (raised from the original 3000ms — issue #269,
+   too short to actually suppress a chat burst) — chat can burst in a way a
+   single loot drop never does. User-adjustable per rule via
+   `PartyChatParams.cooldownMs` (`PartyChatParamsEditor.tsx`'s cooldown field);
+   `dispatcher.ts`'s `resolveCooldownMs` prefers that override and falls back
+   to the catalog seed when unset. See "Chat detector & `partyChat`" below for
+   the detector itself and its privacy/testing constraints.
 
 ### Loot-bag spoiler avoidance (`whiteBag`/`orangeBag`, soak #234)
 
@@ -205,12 +210,20 @@ local player" the same two-source way `DpsTracker.ts` does:
 `CreateSuccessPacket.objectId` for *which* entity is "you", and
 `UpdatePacket`'s `NAME_STAT` roster (stripped of the `,titleCode` suffix,
 same as `DpsTracker.ts`) for *what name* that objectId currently carries.
-`onChatMessage` then ignores a `TextPacket` whose `name` equals the resolved
-local-player name — **matched by name, never `objectId`**, because a party
-sender arrives with `objectId: -1` regardless of who sent it (whether a
-self-sent party message even echoes back as a `TextPacket` was not sampled;
-name-based self-ignore is correct either way — a harmless no-op if there's no
-echo). This identity state lives in `AlertEngine` itself (`localPlayerId`,
+`onChatMessage` strips that same `,titleCode,...` suffix off `TextPacket.name`
+too (`stripTitleCode`, issue #269 — a titled sender's `name` arrives as
+`"Username,<titleCode>,<titleCode>"`, and previously reached both the
+self-ignore check and the displayed sender unstripped) before comparing it
+against the resolved local-player name and before setting `ChatEvent.sender`
+— so a titled local player's own party message is still recognized as self,
+and a titled other player's banner/history sender shows the bare username,
+never the raw title-code suffix. `onChatMessage` then ignores a `TextPacket`
+whose (now-stripped) name equals the resolved local-player name — **matched
+by name, never `objectId`**, because a party sender arrives with
+`objectId: -1` regardless of who sent it (whether a self-sent party message
+even echoes back as a `TextPacket` was not sampled; name-based self-ignore is
+correct either way — a harmless no-op if there's no echo). This identity
+state lives in `AlertEngine` itself (`localPlayerId`,
 `entityNames`), separate from `DpsTracker`'s own copy — the two trackers are
 independent consumers of the same wire facts, not wired together. It's
 cleared only on `reset()` (overlay detach), not on `MapInfoPacket` — the same
@@ -240,8 +253,12 @@ chat caveat.
 2. Evaluates every catalog rule whose `eventType` matches the event, skipping
    a disabled rule (`resolveRuleSettings(kind, settings).enabled`) or one
    whose `match()` returns `null`. A rule that matched but is still within its
-   own `cooldownMs` (tracked per-kind-id in the caller-owned `lastFiredAt`
-   map) is dropped too. No survivors → returns `null`.
+   effective cooldown (tracked per-kind-id in the caller-owned `lastFiredAt`
+   map) is dropped too — `resolveCooldownMs(kind, rule.params)` (issue #269)
+   prefers a numeric `cooldownMs` in the rule's *resolved* params (the only v1
+   user of this today is `partyChat.cooldownMs`) over the catalog's static
+   `AlertKind.cooldownMs` seed, so a per-rule override needs no dispatcher
+   changes for a future kind either. No survivors → returns `null`.
 3. **Banner:** the payload of the first survivor *in catalog order* whose
    resolved settings want a banner. If no survivor wants one, `result.banner`
    is `null` but `result.payload` still holds the first survivor's payload

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import type { ChatProbeStatus } from '../../../shared/chatProbe'
 import type { BridgeStatus, PacketEnvelope, UpdateInfo } from '../../../shared/ipc'
-import { DEFAULT_SETTINGS } from '../../../shared/settings'
+import { DEFAULT_SETTINGS, isDevModeActive } from '../../../shared/settings'
 import { Button } from '../ui/Button'
 import { StatRow } from '../ui/StatRow'
-import type { PanelContentProps } from './registry'
+import { usePanelSpawn } from './panelSpawn'
+import { PANEL_REGISTRY, type PanelContentProps } from './registry'
 
 const STATUS_STYLES: Record<BridgeStatus, string> = {
   connected: 'bg-success',
@@ -24,6 +25,24 @@ function usedJsHeapMb(): number | null {
   return memory ? memory.usedJSHeapSize / (1024 * 1024) : null
 }
 
+/**
+ * The Status panel's toggle list covers every singleton panel: everything in
+ * the registry except status itself (not closable - this list is the way
+ * back), ephemeral panels (dpsDetail is opened from a DPS Summary row
+ * click with a selected session; toggling an empty one on from here would be
+ * meaningless), and - while dev mode is off (issue #265, docs/dev-mode.md) -
+ * `debugOnly` panels (the Console), so an ordinary user never sees it in the
+ * picker even though its instance may still exist in their layout. Computed
+ * at render time, not module scope: registry.ts imports this component, so
+ * reading PANEL_REGISTRY during module evaluation would hit the circular
+ * import before the registry is initialized.
+ */
+function togglablePanels(devMode: boolean): { type: string; title: string }[] {
+  return Object.values(PANEL_REGISTRY)
+    .filter((spec) => spec.closable && !spec.ephemeral && (devMode || !spec.debugOnly))
+    .map(({ type, title }) => ({ type, title }))
+}
+
 function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
   const [status, setStatus] = useState<BridgeStatus>('connecting')
   const [packetCount, setPacketCount] = useState(0)
@@ -36,6 +55,18 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
   const [downloadPct, setDownloadPct] = useState<number | null>(null)
   const [actionMsg, setActionMsg] = useState('')
   const [probe, setProbe] = useState<ChatProbeStatus>({ active: false, captured: 0 })
+  const [devMode, setDevMode] = useState(false)
+  const { openPanel, closePanel, isOpen } = usePanelSpawn()
+
+  // Dev mode active = the machine-local unlock AND the persisted toggle
+  // (issue #265/#266, docs/dev-mode.md) - gates the debugOnly entries in the
+  // panel toggle list below and the diagnostic internals further down (chat
+  // probe, last-packet line).
+  useEffect(() => {
+    window.overlay.getSettings().then((s) => setDevMode(isDevModeActive(s)))
+    const off = window.overlay.onSettingsChanged((s) => setDevMode(isDevModeActive(s)))
+    return () => off()
+  }, [])
 
   useEffect(() => {
     window.overlay.getSettings().then((settings) => setToggleHotkey(settings.toggleHotkey))
@@ -158,11 +189,36 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
             </StatRow>
           </div>
 
-          {size === 'lg' && lastPacket && (
+          {devMode && size === 'lg' && lastPacket && (
             <div className="mt-1 truncate text-2xs text-fg-faint">
               last: {lastPacket.direction} {lastPacket.type}
             </div>
           )}
+
+          {/* Singleton panels use id === type (the defaultLayout() invariant),
+              so the registry type doubles as the instance id here. Ghost+active
+              matches the pin toggle's engaged-state styling: green = shown,
+              faint = hidden. */}
+          <div className="mt-1.5 border-t border-edge pt-1">
+            <div className="text-2xs uppercase tracking-wide text-fg-faint">Panels</div>
+            <div className="mt-0.5 flex flex-wrap gap-x-1 gap-y-0.5">
+              {togglablePanels(devMode).map(({ type, title }) => {
+                const open = isOpen(type)
+                return (
+                  <Button
+                    key={type}
+                    variant="ghost"
+                    size="xs"
+                    active={open}
+                    onClick={() => (open ? closePanel(type) : openPanel(type, type, 'md'))}
+                    title={open ? `Hide the ${title} panel` : `Show the ${title} panel`}
+                  >
+                    {title}
+                  </Button>
+                )
+              })}
+            </div>
+          </div>
 
           {/* Pinned to the panel's bottom edge (mt-auto) so every action stays
               reachable without scrolling regardless of how much info sits above it. */}
@@ -192,18 +248,20 @@ function StatusPanel({ size }: PanelContentProps): React.JSX.Element {
               <Button size="xs" onClick={captureNow}>
                 Capture now
               </Button>
-              <Button
-                size="xs"
-                variant={probe.active ? 'warn' : 'subtle'}
-                onClick={toggleChatProbe}
-                title={
-                  probe.active
-                    ? 'Stop the chat probe and write the captured envelopes to a local NDJSON file'
-                    : 'Capture chat/party packets to a LOCAL file for wire-shape diagnosis (issue #222) — this data is never part of bug captures'
-                }
-              >
-                {probe.active ? `Stop probe (${probe.captured})` : 'Chat probe'}
-              </Button>
+              {devMode && (
+                <Button
+                  size="xs"
+                  variant={probe.active ? 'warn' : 'subtle'}
+                  onClick={toggleChatProbe}
+                  title={
+                    probe.active
+                      ? 'Stop the chat probe and write the captured envelopes to a local NDJSON file'
+                      : 'Capture chat/party packets to a LOCAL file for wire-shape diagnosis (issue #222) — this data is never part of bug captures'
+                  }
+                >
+                  {probe.active ? `Stop probe (${probe.captured})` : 'Chat probe'}
+                </Button>
+              )}
             </div>
             {actionMsg && <div className="mt-0.5 truncate text-2xs text-fg-faint">{actionMsg}</div>}
           </div>

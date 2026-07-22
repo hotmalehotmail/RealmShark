@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { CATALOG } from '../src/renderer/src/alerts/catalog'
+import { CATALOG, partyChat } from '../src/renderer/src/alerts/catalog'
 import { dispatchEvent } from '../src/renderer/src/alerts/dispatcher'
-import type { AlertKind, LootDropEvent } from '../src/renderer/src/alerts/types'
+import type { AlertKind, ChatEvent, LootDropEvent } from '../src/renderer/src/alerts/types'
 import type { NotificationsSettings } from '../src/shared/settings'
 
 function whiteBagEvent(overrides: Partial<LootDropEvent> = {}): LootDropEvent {
@@ -108,5 +108,82 @@ describe('dispatchEvent (issue #218, PRD §3 "Multi-match semantics")', () => {
       new Map()
     )
     expect(result).toBeNull()
+  })
+
+  describe('per-rule cooldown override (issue #269)', () => {
+    function chatEvent(overrides: Partial<ChatEvent> = {}): ChatEvent {
+      return {
+        type: 'chat',
+        sender: 'Bob',
+        text: 'need help with boss',
+        cleanText: 'need help with boss',
+        numStars: 5,
+        channel: 'party',
+        ...overrides
+      }
+    }
+
+    it("a rule's resolved params.cooldownMs overrides the catalog's static cooldownMs seed", () => {
+      const overrideKind: AlertKind = {
+        id: 'overrideTest',
+        title: 'Override Test',
+        eventType: 'loot-drop',
+        defaults: { enabled: true, banner: true, sound: true, params: {} },
+        cooldownMs: 60000,
+        match: () => ({ title: 'Test', body: 'Test' })
+      }
+      const catalog = [overrideKind]
+      const settings: NotificationsSettings = {
+        enabled: true,
+        volume: 1,
+        rules: {
+          overrideTest: { enabled: true, banner: true, sound: true, params: { cooldownMs: 100 } }
+        }
+      }
+      const lastFiredAt = new Map<string, number>([['overrideTest', 1000]])
+
+      // Past the short user-set 100ms override (but still well within the
+      // catalog's static 60000ms seed) - the override wins, so this fires.
+      const result = dispatchEvent(whiteBagEvent(), catalog, settings, 1101, lastFiredAt)
+      expect(result?.matchedKindIds).toEqual(['overrideTest'])
+    })
+
+    it('two party messages within the default 15000ms window: the second is suppressed', () => {
+      const settings: NotificationsSettings = {
+        enabled: true,
+        volume: 1,
+        rules: { partyChat: { enabled: true, banner: true, sound: true, params: { keywords: [] } } }
+      }
+      const lastFiredAt = new Map<string, number>()
+
+      expect(dispatchEvent(chatEvent(), [partyChat], settings, 0, lastFiredAt)).not.toBeNull()
+      // 10s later - still inside the 15s default window.
+      expect(dispatchEvent(chatEvent(), [partyChat], settings, 10000, lastFiredAt)).toBeNull()
+      // 15001ms later - past the window, fires again.
+      expect(dispatchEvent(chatEvent(), [partyChat], settings, 15001, lastFiredAt)).not.toBeNull()
+    })
+
+    it('a user-set partyChat cooldown overrides the 15000ms default', () => {
+      const settings: NotificationsSettings = {
+        enabled: true,
+        volume: 1,
+        rules: {
+          partyChat: {
+            enabled: true,
+            banner: true,
+            sound: true,
+            params: { keywords: [], cooldownMs: 2000 }
+          }
+        }
+      }
+      const lastFiredAt = new Map<string, number>()
+
+      expect(dispatchEvent(chatEvent(), [partyChat], settings, 0, lastFiredAt)).not.toBeNull()
+      // 1000ms later - inside the user's shorter 2000ms window, suppressed.
+      expect(dispatchEvent(chatEvent(), [partyChat], settings, 1000, lastFiredAt)).toBeNull()
+      // 2001ms later - past the user's window, fires again (well within the
+      // unused 15000ms catalog default, proving the override - not the seed - governs).
+      expect(dispatchEvent(chatEvent(), [partyChat], settings, 2001, lastFiredAt)).not.toBeNull()
+    })
   })
 })

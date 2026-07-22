@@ -1,7 +1,9 @@
 # PRD: DPS trend graph + peak/average DPS metrics
 
 **Status:** implemented (2026-07-18, maintainer-driven — all four §9 slices in one
-PR rather than four agent issues; see the §9 note)
+PR rather than four agent issues; see the §9 note). §4's v1 presentation (embedded
+in `DpsPanel`, stepped updates, no animation) was superseded by issue #259
+(2026-07-21) — see the update note at the end of §4.
 **Scope:** overlay renderer only, plus a `FakePacketSource` ordering fix (dev tooling —
 no production bridge/Java changes)
 **Implementation plan:** §9 — four dependency-ordered slices (originally scoped as
@@ -191,6 +193,38 @@ even when nothing changes, and the stepped line costs zero between ticks.
 Screenshots: the PR regenerates the committed panel gallery (`npm run shots`);
 the review agent's visual pass applies. `ui:signoff` on the issue is the
 maintainer's call at labeling time.
+
+**Update (2026-07-21, issue #259).** This section's v1 presentation choices are
+superseded, still inside the same binding layering contract and the same
+`DpsSparkline.tsx`:
+
+- **Own panel, not embedded.** The graph is no longer inside `DpsPanel` — it's
+  the standalone `dpsGraph` registry entry with its own sm/md/lg presets (shown
+  and sized at every preset, including `sm`, unlike v1's `showHeader`-style
+  gating). `DpsPanel` keeps only the numeric rows.
+- **Curved, not a hard-vertex polyline.** Each segment is a quadratic Bezier to
+  its midpoint (control point = the real data point), which stays within the
+  convex hull of its own inputs — a flat zero line can't dip negative and the
+  curve can't overshoot its own peak.
+- **The known smooth-scroll upgrade path above is now implemented**, exactly as
+  described: one extra (previous-frame) bin renders off the group's rest
+  position, and a compositor-only CSS `transform` on a wrapping `<g>` slides it
+  into place, restarted once per bin tick via a single (non-looping)
+  `requestAnimationFrame`. This is a one-shot transform per tick, not a
+  perpetual animation — the "no CSS transition, no rAF animation loops" rule
+  above meant no *perpetual* loop, which still holds: the transform is static
+  between ticks, and the existing flat-at-zero re-render skip means an idle
+  overlay never restarts it.
+- **`useDpsGraph` is now event-driven**, mirroring `useDpsTracker`'s pattern:
+  it re-reads the recorder's series immediately on every `dps` envelope,
+  keeping the `BIN_MS` interval only as the decay driver (bins still close on
+  time, not envelopes). The original interval-only version had a real, if
+  narrow, staleness window - nothing forced an immediate re-read right after a
+  burst of `dps` envelopes finished ingesting inside one bin, so a
+  freshly-mounted graph could sit on stale (often all-zero) data for up to one
+  `BIN_MS` tick. This was always latent but only became reliably visible once
+  the graph got its own lightweight panel (`dpsGraph`) with a different mount
+  profile than the old embedded-in-`DpsPanel` placement.
 
 ## 5. Detail-panel metrics — average + peak per player
 

@@ -31,4 +31,13 @@ export interface PanelInstance {
    * non-focusable while the overlay is hidden; they're display-only.
    */
   pinned?: boolean
+  /**
+   * A hidden panel is toggled off (closed via its title-bar ✕ or the Status
+   * panel's toggle list) but keeps its instance - anchor, size, pin - so
+   * toggling it back on restores it exactly where it was, across restarts
+   * too (this field persists to panels.json). Hidden beats pinned: a hidden
+   * panel never renders. Optional so layouts saved before closeable panels
+   * existed stay valid (undefined = shown).
+   */
+  hidden?: boolean
 }

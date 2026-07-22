@@ -513,10 +513,19 @@ and closes.
 
 **Model** (`shared/settings.ts`): `OverlaySettings = { gameWindowTitle,
 toggleHotkey, textileAnimMs, textileScrollSpeed, textileRotateSpeed,
-recordSessionToDisk }`. `gameWindowTitle` is the exact strcmp target for
-`attachByTitle` (§1). The `textile*` fields tune animated-cloth dye rendering
-— see `dyes-and-textiles.md`. `recordSessionToDisk` (off by default) is the
-session-recorder toggle — see the Session recorder section in §1 above.
+recordSessionToDisk, notifications, devMode, devModeToggle }`. `gameWindowTitle`
+is the exact strcmp target for `attachByTitle` (§1). The `textile*` fields tune
+animated-cloth dye rendering — see `dyes-and-textiles.md`. `recordSessionToDisk`
+(off by default) is the session-recorder toggle — see the Session recorder
+section in §1 above. `devMode` (off/absent by default) is the machine-local
+maintainer **unlock** flag from issue #265 — see `docs/dev-mode.md` for what
+it gates; unlike every other field here it has **no settings-window UI** and
+is only ever set by hand-editing `settings.json`. `devModeToggle` (issue
+#266, defaults **on**) is the paired persisted runtime toggle — it *does*
+have settings-window UI (`ConfigWindow.tsx`'s Developer section), but only
+renders that section at all while `devMode` is unlocked; `isDevModeActive()`
+(`shared/settings.ts`) is the AND of both and is what every gated surface
+actually reads.
 
 **Storage** (`settings.ts`): JSON at `app.getPath('userData')/settings.json`.
 `loadSettings()` merges the file over `DEFAULT_SETTINGS` (so new keys pick up
@@ -555,9 +564,12 @@ focusable, opaque window with the standard preload.
 ## 5. Panel layout
 
 **Model** (`shared/panels.ts`): a `PanelInstance` is `{ id, type, anchor, size,
-zIndex, pinned? }`. `Anchor` is percentage-based (`x`/`y` 0–100, `pos` currently
-always `'tl'`) so positions stay correct when the overlay window resizes with the
-game window. `pinned` (optional) keeps a panel visible in click-through mode.
+zIndex, pinned?, hidden? }`. `Anchor` is percentage-based (`x`/`y` 0–100, `pos`
+currently always `'tl'`) so positions stay correct when the overlay window
+resizes with the game window. `pinned` (optional) keeps a panel visible in
+click-through mode. `hidden` (optional) keeps a closed (toggled-off) panel's
+instance/position persisted while it never renders — see `overlay-renderer.md`'s
+"Closeable panels & the Status panel's toggle list".
 
 **Persistence** (`panelLayout.ts`): JSON at `userData/panels.json`.
 `loadPanelLayout()` returns `null` when the file is absent or unparseable — the

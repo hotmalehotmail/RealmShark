@@ -254,11 +254,17 @@ unsigned prereleases with custom tags and no `latest.yml` — `updater.ts:7-16`)
 - **Polling:** first check ~10s after launch, then every 6h
   (`INITIAL_DELAY_MS` / `POLL_INTERVAL_MS`, `:19-20`). `startUpdatePolling` is a
   **no-op in dev** — it early-returns unless `app.isPackaged` (`:185`).
-- **Check:** `checkForUpdate` GETs `/repos/{REPO}/releases?per_page=15` via Electron
-  `net` (`:92`), skips drafts, parses each tag, keeps the highest, and returns it
-  only if it beats the running `app.getVersion()` (`:95-109`). Prereleases are
-  included on purpose (all releases are prereleases, so `/releases/latest` is
-  useless — `:86-90`).
+- **Check:** `checkForUpdate(devMode)` GETs `/repos/{REPO}/releases?per_page=15`
+  via Electron `net`, then delegates selection to the pure, unit-tested
+  `pickRelease(releases, currentVersion, devMode)`: skips drafts, and — with
+  `devMode` off — skips any release whose tag is an alpha (`isAlphaTag`,
+  issue #265, see `docs/dev-mode.md`) *before* comparing versions, so a
+  numerically-newest alpha is never offered to an ordinary user; keeps the
+  highest remaining tag and returns it only if it beats the running
+  `app.getVersion()`. `-beta` and unsuffixed releases are unaffected by the
+  channel filter either way. `devMode` is read once from `OverlaySettings` at
+  each call site in `main/index.ts` (the flag is machine-local and only takes
+  effect on restart).
 - **`parseTagVersion`** (`:43-47`) accepts both the current `vX.Y.Z` /
   `vX.Y.Z-alpha` semver tags **and** the legacy `overlay-test-vX.Y.Z` tags
   (regex `/^(?:overlay-test-)?v(\d+)\.(\d+)(?:\.(\d+))?/`), comparing on the numeric

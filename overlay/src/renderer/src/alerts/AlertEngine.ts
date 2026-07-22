@@ -47,6 +47,11 @@ export const CONSUMED_ENVELOPE_TYPES = [
   ...new Set([...LOOT_CONSUMED_ENVELOPE_TYPES, 'CreateSuccessPacket', 'TextPacket'])
 ]
 
+/** Strips the `,titleCode,...` suffix RotMG appends to a `name` field (`NAME_STAT`, and - issue #269 - `TextPacket.name` too) down to the bare username. */
+function stripTitleCode(name: string): string {
+  return name.split(',')[0]
+}
+
 const DEFAULT_NOTIFICATIONS_SETTINGS: NotificationsSettings = {
   enabled: true,
   volume: 1,
@@ -155,7 +160,7 @@ export class AlertEngine {
       const nameStat = obj.status.stats?.find((s) => s.statTypeNum === NAME_STAT_TYPE_NUM)
       if (nameStat?.stringStatValue) {
         // NAME_STAT is "username,titleCode,..." - keep only the username (same stripping DpsTracker.ts does).
-        this.entityNames.set(obj.status.objectId, nameStat.stringStatValue.split(',')[0])
+        this.entityNames.set(obj.status.objectId, stripTitleCode(nameStat.stringStatValue))
       }
     }
   }
@@ -163,13 +168,19 @@ export class AlertEngine {
   private onChatMessage(data: TextPacketData): void {
     const localName =
       this.localPlayerId !== null ? this.entityNames.get(this.localPlayerId) : undefined
+    // `TextPacket.name` carries the same "username,titleCode,..." shape
+    // NAME_STAT does (issue #269) - strip it before both the self-ignore
+    // comparison and the displayed sender, so a titled sender's own party
+    // message is still recognized as self and the banner never leaks the
+    // raw title-code suffix.
+    const senderName = stripTitleCode(data.name)
     // Self-ignore by name, not objectId (PRD §7 "Self-chat") - party senders
     // arrive with objectId -1, so an objectId check would never match a
     // self-sent party message even if one echoes back.
-    if (localName !== undefined && data.name === localName) return
+    if (localName !== undefined && senderName === localName) return
     const event: ChatEvent = {
       type: 'chat',
-      sender: data.name,
+      sender: senderName,
       text: data.text,
       cleanText: data.cleanText,
       numStars: data.numStars,

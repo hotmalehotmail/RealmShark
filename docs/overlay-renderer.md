@@ -22,15 +22,15 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/ConfigWindow.tsx` | Settings form (game-window title, hotkey), shown in the `#config` window. |
 | `overlay/src/renderer/src/consoleLog.ts` | In-renderer console capture buffer feeding the Console panel. |
 | `overlay/src/renderer/src/DpsList.tsx` | Presentational DPS rows (target + per-attacker list). |
-| `overlay/src/renderer/src/DpsSparkline.tsx` | The DPS panel's bare-SVG trend line over the recorder's aggregate series (§5.2) — the one place the graph's presentation lives (binding layering contract, `prd-dps-graph.md` §4). |
+| `overlay/src/renderer/src/DpsSparkline.tsx` | The standalone `dpsGraph` panel's bare-SVG trend line over the recorder's aggregate series (§5.2) — the one place the graph's presentation lives (binding layering contract, `prd-dps-graph.md` §4). Smoothed curve + compositor-only bin-tick slide (issue #259). |
 | `overlay/src/renderer/src/env.d.ts` | Vite client types only. |
 | `overlay/src/renderer/src/panels/PanelCanvas.tsx` | Owns the panel array, layout load/save, drag/size/pin/z-order dispatch, programmatic open/close. |
 | `overlay/src/renderer/src/panels/PanelFrame.tsx` | One panel's chrome: title bar, drag, size/pin/close/settings-gear buttons, visibility. |
 | `overlay/src/renderer/src/panels/panelSpawn.ts` | `PanelSpawnContext` / `usePanelSpawn()` - lets a panel body open/close another panel on the canvas (§2's "Programmatic panel spawn/close"). |
 | `overlay/src/renderer/src/panels/anchor.ts` | Percentage-anchor ↔ pixel math (`panelStyle`, `anchorFromPointer`). |
-| `overlay/src/renderer/src/panels/registry.ts` | `type → { title, per-size px dims, component, closable?, settings? }`, `PanelContentProps`, and `PanelSettingsProps` (§2's "Per-panel settings gear", issue #221). |
-| `overlay/src/renderer/src/panels/panelLayout.ts` | `defaultLayout()`/`mergeWithDefaults()`/`isPersistablePanel()` - split out of `PanelCanvas.tsx` (a component file can't also export plain functions - `react-refresh/only-export-components`), same rationale as `dps/dpsDetailContext.ts`. |
-| `overlay/src/renderer/src/panels/{Status,Dps,Console,Character,Instance,DpsSummary,DpsDetail,Loot,Notifications}Panel.tsx` | The nine panel bodies. |
+| `overlay/src/renderer/src/panels/registry.ts` | `type → { title, per-size px dims, component, closable?, ephemeral?, settings? }`, `PanelContentProps`, and `PanelSettingsProps` (§2's "Per-panel settings gear", issue #221). |
+| `overlay/src/renderer/src/panels/panelLayout.ts` | `defaultLayout()`/`mergeWithDefaults()`/`isPersistablePanel()` plus the pure open/close transitions (`withPanelOpen`/`withPanelClosed`/`isPanelOpen` - §2's "Closeable panels") - split out of `PanelCanvas.tsx` (a component file can't also export plain functions - `react-refresh/only-export-components`), same rationale as `dps/dpsDetailContext.ts`. |
+| `overlay/src/renderer/src/panels/{Status,Dps,DpsGraph,Console,Character,Instance,DpsSummary,DpsDetail,Loot,Notifications}Panel.tsx` | The ten panel bodies. |
 | `overlay/src/renderer/src/ui/*.tsx` | Shared UI primitives (`Button`, `EmptyState`, `Swatch`, `GearRow`, `MeterRow`, `StatRow`, `Tooltip`) — see `overlay-ui-style.md`. |
 | `overlay/src/renderer/src/ui/interactiveContext.ts` | `InteractiveContext` / `useInteractive()` - the click-through-mode flag, for `Tooltip` (§4.2). |
 | `overlay/src/renderer/src/assets/main.css` | Tailwind entry + the `@theme` design-token block — see `overlay-ui-style.md`. |
@@ -53,7 +53,7 @@ color conventions every panel must follow — see `overlay-ui-style.md`.
 | `overlay/src/renderer/src/dps/DpsFeedProvider.tsx` | Owns the `DpsFeed`, wires it to `onPacketBatch`/`onOverlayDetach`; mounted once at App level (and in the harness's `PanelMount`). |
 | `overlay/src/renderer/src/dps/useDpsTracker.ts` | Live-snapshot view over the shared feed (event-driven on bridge `dps` packets + 1 s fallback recompute). |
 | `overlay/src/renderer/src/dps/useDpsHistory.ts` | History view over the shared feed; exposes `DpsHistoryEntry[]` (backfills on mount). |
-| `overlay/src/renderer/src/dps/useDpsGraph.ts` | Sparkline data view: reads the recorder's aggregate series on a fixed `BIN_MS` tick, skipping re-renders while flat at zero. |
+| `overlay/src/renderer/src/dps/useDpsGraph.ts` | Sparkline data view: re-reads the recorder's aggregate series immediately on every `dps` envelope (mirrors `useDpsTracker`'s event-driven pattern - issue #259), plus a `BIN_MS` interval so the line still decays when the packet stream goes quiet; skips re-renders while flat at zero. |
 | `overlay/src/renderer/src/dps/dpsDetailContext.ts` | `DpsDetailSelectionContext` / `useDpsDetailSelection()` - the selected `DpsHistoryEntry` the `dpsDetail` panel renders (§2's "Programmatic panel spawn/close"). |
 | `overlay/src/renderer/src/dps/DpsDetailSelectionProvider.tsx` | Owns the selection state for the context above; mounted once in `App`. |
 | `overlay/src/renderer/src/dps/types.ts` | Packet-field shapes the tracker reads. |
@@ -204,8 +204,8 @@ window (= the game window) resizes, with no reclamp needed.
 
 `PanelSize` is the literal union `'sm' | 'md' | 'lg'` (`panels.ts:18`). There is
 **no drag-to-resize handle anywhere**. `registry.ts` gives each panel type an
-explicit pixel width/height per preset (`registry.ts:21-72`), e.g. Character is
-a literal `160×100 / 220×130 / 280×170`. The DPS panel's height is instead
+explicit pixel width/height per preset (`registry.ts`'s `PANEL_REGISTRY`), e.g.
+Character is a literal `160×100 / 220×130 / 280×170`. The DPS panel's height is instead
 *derived* rather than literal: `dpsPanelHeight(size)`
 (`dps/rowLayout.ts`) computes the pixel height needed to fit
 `DPS_MAX_ROWS[size]` rows (plus the target header and pinned local-player row)
@@ -219,7 +219,7 @@ from the live DOM. The size button cycles
 key — so retuning a size means editing the registry, and it applies to every
 saved layout.
 
-`panelStyle` (`anchor.ts:17-32`) turns `(anchor, targetSizePx, canvasSizePx)`
+`panelStyle` (`anchor.ts:38-53`) turns `(anchor, targetSizePx, canvasSizePx)`
 into CSS: `top/left` in `%`, and `width/height` in **px capped** so the panel
 can't run past the window's right/bottom edge:
 
@@ -228,17 +228,29 @@ width  = min(targetPx.width,  ((100 - anchor.x)/100) * canvasWidth)
 height = min(targetPx.height, ((100 - anchor.y)/100) * canvasHeight)
 ```
 
-This capping only bites when a panel is anchored near an edge and the window
-later shrinks; otherwise the preset px size is used verbatim.
+**The window-shrink case is the only thing this cap is for**, and dragging
+cannot reach it: `anchorFromPointer` bounds a dragged anchor to the range
+where the preset still fits (below), so the cap returns the preset size
+verbatim for every anchor a drag can produce. It bites only when a *saved*
+anchor no longer fits because the game window shrank under it.
+
+That separation is load-bearing for drag performance, not cosmetics — see
+"Per-frame cost during the move" below. The cap compares within a 0.01 px
+slack (`FIT_EPSILON_PX`), because the anchor bound is a percentage and the
+cap re-derives pixels from it: an exact-fit round trip lands ~1e-13 px short
+in floating point, and without the slack a flush panel would render a hair
+narrower than its preset (at a fractional, blurrier width).
 
 ### Drag / reposition
 
 Dragging is manual (no library). `PanelFrame.startDrag` (`PanelFrame.tsx:35`)
 records the grab offset within the panel (so the panel doesn't snap its corner
 to the cursor), then attaches window `mousemove`/`mouseup` listeners. Each move
-calls `anchorFromPointer` (`anchor.ts:35-43`) to convert `(clientX - grabOffset)`
-into a **clamped 0-100 % anchor** and writes the resulting position **directly
-to the frame's DOM** — *not* through React state. Routing every pointer event
+calls `anchorFromPointer` to convert `(clientX - grabOffset)` into a **clamped
+anchor** — clamped to `0 … (canvas - panel)/canvas`, i.e. the range where the
+panel still fits whole, so a drag stops flush with the right/bottom edge
+rather than walking its corner off-screen — and writes the resulting position
+**directly to the frame's DOM** — *not* through React state. Routing every pointer event
 through `setPanels` instead would re-render `PanelCanvas` and every panel's
 (sprite-rendering) content 60-125×/sec, which is what made dragging lag (#120).
 The final anchor is committed to state once, on `mouseup`, via `onDrag` →
@@ -255,11 +267,24 @@ a panel raises it via `onBringToTop`, which bumps `zIndex` to `max+1`
 **Per-frame cost during the move.** `left`/`top` stay at their rest values for
 the whole drag; position is applied via `transform: translate3d(...)` instead
 (a compositor-only property — no layout/repaint — unlike rewriting `left`/`top`
-every frame, which forces a full layout + repaint). `width`/`height` are still
-recomputed from `panelStyle` each move (for the near-an-edge clamp described
-above) but only written to the DOM when the clamped value actually changes,
-which is only near a canvas edge — the common frame does a transform-only
-write. On top of that, `document.documentElement` gets the `panel-dragging`
+every frame, which forces a full layout + repaint). `width`/`height` are not
+written at all: the anchor clamp above guarantees `panelStyle` returns the
+same preset size for every anchor the drag can reach, so `transform` is the
+*only* per-frame write and the move is compositor-only by construction.
+
+> This was a real regression, not a hypothetical. `anchorFromPointer`
+> originally clamped to a bare 0-100 %, which let a drag walk the corner into
+> the region where `panelStyle`'s cap fires — so the size changed on *every*
+> mousemove, and each change was a full layout + repaint of the panel
+> subtree. The dead zone is as large as the panel, so the cost scaled with
+> panel size: measured on a 1280x900 canvas, dragging `dpsDetail` (620x560,
+> the largest preset and the only panel spawned at `lg`) through the
+> bottom-right rewrote its size on 60 of 60 moves for 34.8 ms of layout +
+> 30.9 ms of paint, versus 6.0/2.3 ms for the identical drag in the
+> unclamped region — and squashed the panel to 440x268 as it went. `console`
+> (380x220) hit it on 20 of 60 moves. After the fix all four cases sit at
+> 0 size writes and ~6/2 ms. Regression test:
+> `overlay/test/anchor-dragClamp.test.ts`. On top of that, `document.documentElement` gets the `panel-dragging`
 class for the drag's duration, which suspends every panel's `backdrop-filter`
 blur + `box-shadow` (`main.css`) — hardware acceleration is off (required for
 overlay transparency, Electron #25153), so blur/shadow is otherwise
@@ -267,11 +292,17 @@ recomposited on the CPU every frame a panel moves, which measured (#132) as
 the dominant per-frame cost. `window.overlay.setPacketBatchSuspended(true)` is
 also called for the drag's duration, so panel content isn't independently
 re-rendering off the packet stream at the same time (see the fan-out note
-above). `dragPerf.ts`'s `startDragPerf`/`stop` bracket every drag and, when
-the module's `DRAG_PERF_DEBUG` const is flipped to `true` (mirroring
-`DPS_DEBUG` in `DpsTracker.ts` — off by default, so a normal drag logs
-nothing), log a `[drag-perf]` frame-cadence summary to the Console panel, for
-catching a future regression in drag smoothness.
+above). `dragPerf.ts`'s `startDragPerf(devMode)`/`stop` bracket every drag
+and, when the module's `DRAG_PERF_DEBUG` const is flipped to `true`
+(mirroring `DPS_DEBUG` in `DpsTracker.ts` — off by default, so a normal drag
+logs nothing) **and** dev mode is active (`isDevModeActive` — both the
+`OverlaySettings.devMode` unlock and the Developer-section `devModeToggle`,
+issue #265/#266, `docs/dev-mode.md` — `PanelCanvas` fetches the combined
+value once and passes it down through `PanelFrame`), log a `[drag-perf]`
+frame-cadence summary to the Console
+panel, for catching a future regression in drag smoothness. With dev mode
+off, `startDragPerf` always returns the no-op session regardless of the
+source-level constant — a normal user's build never samples frames.
 
 ### Layout persistence round-trip
 
@@ -287,16 +318,21 @@ pre-load empty array never clobbers a saved layout.
 > for existing users on upgrade, instead of only on a fresh `panels.json`.
 
 Both the load and the debounced save filter through `isPersistablePanel`
-first, dropping any panel whose registry entry sets `closable` — see §2's
+first, dropping any panel whose registry entry sets `ephemeral` — see §2's
 "Programmatic panel spawn/close" for why a spawned panel like `dpsDetail`
-must never round-trip through `panels.json`.
+must never round-trip through `panels.json`. (This used to key on `closable`
+back when `dpsDetail` was the only closable panel; since the closeable-panels
+change made every panel except status closable — with closing = set
+`PanelInstance.hidden`, not remove — ordinary closed panels must keep
+persisting so the hidden flag survives a restart. See §2's "Closeable
+panels".)
 
 The main process persists `panels.json`; see `overlay-main-process.md`.
 
 ### The `PanelContentProps` contract
 
 Every panel body is a `ComponentType<PanelContentProps>` and receives exactly one
-prop: `{ size: PanelSize }` (`registry.ts:10-19`). Panels **do not** receive the
+prop: `{ size: PanelSize }` (`registry.ts`'s `PanelContentProps`). Panels **do not** receive the
 packet stream or entity data as props — they reach live data through
 `window.overlay.*` subscriptions or the shared contexts (`useSprites`,
 `useEntityRegistry`, `useDpsTracker`). They use `size` only to scale their own
@@ -311,10 +347,12 @@ inherit it and must not re-declare it (see `overlay-ui-style.md`).
    a `window.overlay.on…` subscription (remember to return the unsubscribe in the
    effect cleanup). Style it with the semantic tokens and `ui/` primitives per
    **`overlay-ui-style.md`** — no raw palette classes, no arbitrary text sizes.
-2. **Register it** in `PANEL_REGISTRY` (`registry.ts:21`): add a key with
-   `{ type, title, sizes: { sm, md, lg }, component: FooPanel }`. The three
-   `sizes` entries are required (they're the only dimensions the panel will ever
-   have).
+2. **Register it** in `PANEL_REGISTRY` (`registry.ts`): add a key with
+   `{ type, title, sizes: { sm, md, lg }, component: FooPanel, closable: true }`.
+   The three `sizes` entries are required (they're the only dimensions the panel
+   will ever have); `closable` is the norm for every singleton panel (§2's
+   "Closeable panels" — only `status` omits it), and the Status panel's toggle
+   list picks the new type up automatically from the registry.
 3. **Add a default instance** in `defaultLayout()` (`PanelCanvas.tsx:13-33`) with
    a unique `id`, a non-overlapping `anchor`, a `size`, and a `zIndex`. Thanks to
    `mergeWithDefaults`, existing users pick it up on upgrade.
@@ -335,32 +373,35 @@ mechanism any future panel can reuse, not a DPS-specific hack:
 - **`panels/panelSpawn.ts`** — `PanelSpawnContext` / `usePanelSpawn()`, giving
   a panel body three calls: `openPanel(id, type, size?)` (creates a
   `PanelInstance` at a fixed default anchor if `id` isn't already in the
-  canvas's `panels` array, otherwise just raises the existing one to front —
-  so re-targeting an already-open panel, e.g. selecting a different session,
-  never spawns a duplicate), `closePanel(id)` (removes it from the array
-  entirely), and `isOpen(id)` (whether a panel instance with that `id`
-  currently exists — lets a spawning panel body derive UI state, like a row
-  highlight, from the spawned panel's actual presence on the canvas instead
-  of tracking it separately). All three are implemented by `PanelCanvas`
-  (`openPanel`/`closePanel`/`isOpen` next to `updatePanel`/`bringToTop`) and
-  provided via `<PanelSpawnContext.Provider>` wrapping its rendered panels —
-  `PanelCanvas` itself has no DPS-specific knowledge; it only manipulates
-  `PanelInstance[]` generically.
+  canvas's `panels` array, otherwise un-hides it if closed and raises the
+  existing one to front — so re-targeting an already-open panel, e.g.
+  selecting a different session, never spawns a duplicate), `closePanel(id)`
+  (removes an `ephemeral` panel from the array entirely; hides any other —
+  see "Closeable panels" below), and `isOpen(id)` (whether a panel with that
+  `id` is currently on the canvas and not hidden — lets a spawning panel body
+  derive UI state, like a row highlight or the Status panel's toggle states,
+  from the panel's actual open/closed state instead of tracking it
+  separately). All three are implemented by `PanelCanvas` as thin `setPanels`
+  wrappers over `panelLayout.ts`'s pure `withPanelOpen`/`withPanelClosed`/
+  `isPanelOpen` transitions and provided via `<PanelSpawnContext.Provider>`
+  wrapping its rendered panels — `PanelCanvas` itself has no DPS-specific
+  knowledge; it only manipulates `PanelInstance[]` generically.
 - **`registry.ts`'s `closable?: boolean`** on a `PanelSpec` — when set,
   `PanelFrame` renders a ✕ button in that panel's title bar (alongside
   pin/size) wired to `usePanelSpawn().closePanel(panel.id)` via the `onClose`
-  prop `PanelCanvas` passes every `PanelFrame`. Only `dpsDetail` sets this
-  today; an ordinary always-on panel (the other seven) leaves it unset and
-  gets no close control.
-- **A spawned panel is not in `defaultLayout()`** and is never added by
-  `mergeWithDefaults` — it only exists in the `panels` array while open, so
-  closing it and reopening later always respawns at `panelSpawn.ts`'s
-  `SPAWN_ANCHOR` default position rather than resuming wherever it was last
-  dragged. This was a deliberate simplicity tradeoff (position isn't preserved
-  across a close/reopen cycle), not a limitation of the mechanism itself.
-- **`closable` panels are excluded from persistence, in both directions.**
+  prop `PanelCanvas` passes every `PanelFrame`. Since the closeable-panels
+  change, every panel except `status` sets it — see "Closeable panels" below
+  for why status must stay un-closeable.
+- **A spawned (`ephemeral`) panel is not in `defaultLayout()`** and is never
+  added by `mergeWithDefaults` — it only exists in the `panels` array while
+  open, so closing it and reopening later always respawns at
+  `panelLayout.ts`'s `SPAWN_ANCHOR` default position rather than resuming
+  wherever it was last dragged. This was a deliberate simplicity tradeoff
+  (position isn't preserved across a close/reopen cycle), not a limitation of
+  the mechanism itself.
+- **`ephemeral` panels are excluded from persistence, in both directions.**
   `PanelCanvas`'s `isPersistablePanel` filters any panel whose registry entry
-  sets `closable` out of `savePanelLayout`'s payload, and out of a freshly
+  sets `ephemeral` out of `savePanelLayout`'s payload, and out of a freshly
   loaded `panels.json` before it's merged with defaults. Without this, a
   spawned `dpsDetail` panel open at quit time would round-trip into
   `panels.json` like any ordinary panel and reappear on next launch — but its
@@ -369,7 +410,7 @@ mechanism any future panel can reuse, not a DPS-specific hack:
   permanent "No session selected" empty state with no way for the user to
   populate it short of closing and reopening it. The load-side filter also
   guards against a `panels.json` written before this fix (or by an older
-  build) still carrying a stale closable panel. This is what keeps the "only
+  build) still carrying a stale spawned panel. This is what keeps the "only
   exists in the `panels` array while open" claim above actually true.
 - **Cross-panel data still needs its own channel** — `PanelContentProps` is
   still just `{ size }` (above), so `openPanel`/`closePanel` alone can't tell
@@ -407,6 +448,60 @@ mechanism any future panel can reuse, not a DPS-specific hack:
   would normally populate the selection, and an unselected `dpsDetail` shot
   would otherwise just show its "No session selected" empty state instead of
   real per-enemy/per-player content.
+
+### Closeable panels & the Status panel's toggle list
+
+Every panel except `status` is `closable` — the title-bar ✕ on a singleton
+panel doesn't remove its instance the way it does for the `ephemeral`
+`dpsDetail`; it sets `PanelInstance.hidden` and keeps the instance in the
+array (`panelLayout.ts`'s `withPanelClosed`). `PanelCanvas` skips hidden
+panels at render (same guard as unknown types), and because hidden singletons
+still persist to `panels.json`, both the closed state *and* the panel's
+position/size/pin survive a restart — toggling a panel back on restores it
+exactly where it was, not at a spawn anchor.
+
+The way back on is the **Status panel's "Panels" toggle list**
+(`StatusPanel.tsx`, md/lg sizes): one ghost-button chip per singleton panel
+(everything in the registry except `status` itself and `ephemeral` types —
+an empty `dpsDetail` toggled on from there would be meaningless), rendered
+green when shown / faint when hidden via the same `Button` ghost+`active`
+styling as the pin toggle. Each chip reads `usePanelSpawn().isOpen(type)` and
+flips via `closePanel(type)` / `openPanel(type, type)` — singleton panels use
+`id === type` (the `defaultLayout()` invariant), so the registry key doubles
+as the instance id. Because chips derive from the same `panels` array the ✕
+buttons mutate, a panel closed from its own title bar reads as toggled-off on
+the Status panel with no separate state to sync.
+
+Two invariants this feature leans on:
+
+- **`status` must never be closable** — it hosts the only affordance that
+  un-hides other panels; a closeable status panel could strand the user with
+  everything toggled off and no way back short of deleting `panels.json`.
+- **`isPersistablePanel` keys on `ephemeral`, not `closable`** — closed
+  singletons must keep round-tripping through `panels.json` or they'd be
+  silently resurrected by `mergeWithDefaults` on next launch (its append-
+  missing-defaults step only skips ids that are still present in the saved
+  array, hidden or not).
+
+`StatusPanel` reads `PANEL_REGISTRY` for the chip list even though
+`registry.ts` imports `StatusPanel` — a deliberate module cycle, safe only
+because the registry is read at render time (inside `togglablePanels()`),
+never during module evaluation; a module-scope read would hit the cycle
+before the registry const initializes.
+
+**Debug-only panels (issue #265/#266).** `PanelSpec.debugOnly` (currently just
+`console`) is a third gate on top of `hidden`/`ephemeral`: `togglablePanels()`
+drops it from the chip list, and `PanelCanvas`'s render guard
+(`!spec || panel.hidden || (spec.debugOnly && !devMode)`) skips rendering it,
+while dev mode isn't active — `isDevModeActive` (fetched via the usual
+`getSettings`/`onSettingsChanged` pair, independently in both `StatusPanel`
+and `PanelCanvas`) is false, i.e. either the `OverlaySettings.devMode` unlock
+is off, or it's on but the Settings window's Developer-section
+`devModeToggle` is off. The instance itself is untouched either way — a
+`debugOnly` panel already in a saved (or the default) layout keeps its
+anchor/size/`hidden` state and simply resumes rendering the moment dev mode
+becomes active again, same "survives" guarantee `hidden` gives an ordinary
+closed panel. See `docs/dev-mode.md` for the full unlock/toggle layering.
 
 ### Per-panel settings gear (issue #221)
 
@@ -462,16 +557,17 @@ panel's settings view (`docs/notifications.md`) as its first, proving user.
 
 ## 3. The panels
 
-All nine bodies are thin; the data lives in the shared services. `size` maps
+All ten bodies are thin; the data lives in the shared services. `size` maps
 to per-panel scale tables at the top of each file. Every gear/loot icon below
 renders through `ItemSprite`, not `Sprite` directly, so it's hoverable for the
 item tooltip (§4.2) with no per-panel wiring.
 
 | Panel | Title | Data source | Notes |
 | --- | --- | --- | --- |
-| `StatusPanel` | "RealmShark" | `window.overlay.*` directly | Connection dot, hotkey hint, packet count, JS heap MB, app version + **auto-update** UI. |
-| `DpsPanel` | "DPS" | `useDpsTracker()` → `<DpsList>`; `<DpsSparkline>` at md/lg | Rows per attacker vs. the focused enemy, ranked by cumulative damage (§5). `MAX_ROWS = {sm:2, md:3, lg:6}` — deliberately few, large rows (24-40px sprites) so the panel reads at a glance mid-fight, rather than the previous 3/6/12 dense layout. Each row also renders that attacker's dyed `CharacterSprite` + equip-slot icons (gear hidden at `sm`), resolved from `EntityRegistry` by `row.objectId`, plus a damage-share bar (length **and** color both encode `damage/topDamage`) and a rank badge/ring on the local player's row (§6). Above the rows (md/lg only, like the target header), the **trend sparkline** (§5.2): the local player's aggregate damage rate over the trailing ~10 s. |
-| `ConsolePanel` | "Console" | `consoleLog.ts` buffer | Live log with search (Ctrl/Cmd+F), level colours, clear. |
+| `StatusPanel` | "RealmShark" | `window.overlay.*` directly | Connection dot, hotkey hint, packet count, JS heap MB, app version + **auto-update** UI, plus the **"Panels" toggle list** (§2's "Closeable panels"). Diagnostic internals (chat probe button, the `lg`-size "last packet" line) render only while dev mode is active (unlock + Developer-section toggle — issue #265/#266) — see `docs/dev-mode.md`. The one panel with no title-bar ✕. |
+| `DpsPanel` | "DPS" | `useDpsTracker()` → `<DpsList>` | Rows per attacker vs. the focused enemy, ranked by cumulative damage (§5). `MAX_ROWS = {sm:2, md:3, lg:6}` — deliberately few, large rows (24-40px sprites) so the panel reads at a glance mid-fight, rather than the previous 3/6/12 dense layout. Each row also renders that attacker's dyed `CharacterSprite` + equip-slot icons (gear hidden at `sm`), resolved from `EntityRegistry` by `row.objectId`, plus a damage-share bar (length **and** color both encode `damage/topDamage`) and a rank badge/ring on the local player's row (§6). The numeric readout only — the trend graph is a separate panel (below). |
+| `DpsGraphPanel` | "DPS Graph" | `<DpsSparkline>` (owns `useDpsGraph()` itself) | Standalone, closable, independently placeable/sizable panel (issue #259) over the same aggregate series the DPS panel used to embed at md/lg — see §5.2's "The sparkline". Shown and sized at every preset, including `sm`. |
+| `ConsolePanel` | "Console" | `consoleLog.ts` buffer | Live log with search (Ctrl/Cmd+F), level colours, clear. `debugOnly` (issue #265) — hidden from the toggle list and never rendered while dev mode isn't active (unlock off, or unlock on but the Developer-section toggle off — issue #266); see `docs/dev-mode.md`. |
 | `CharacterPanel` | "Character" | `EntityRegistry` (local player) | Big dyed sprite + 4 equip icons + username. |
 | `InstancePanel` | "Instance" | `EntityRegistry.characters()` | Every named player in the instance, dyed sprites + gear. |
 | `DpsSummaryPanel` | "DPS Summary" | `useDpsHistory()` | A master list only: retained past instances (icon + name + a "You: Xdmg (#rank)" headline). Clicking a row opens that instance's breakdown in the separate `dpsDetail` panel below rather than swapping this panel's own content — see §2's "Programmatic panel spawn/close" and §5.1. |
@@ -1226,16 +1322,28 @@ absent from a snapshot means *unchanged*, never "went to zero"; bins close on
 **time**, not envelopes, so the series decays to zero when the stream goes
 quiet.
 
-**The sparkline** (`DpsSparkline.tsx`, in `DpsPanel` at md/lg): bare inline
-SVG — a 2 px `accent` polyline + low-alpha area fill, no axes/gridlines/
-legend, one direct label (the current smoothed value, in text tokens). Data
-arrives via `useDpsGraph()` on a fixed `BIN_MS` interval (~4 Hz); while the
-series is flat at zero the hook returns the previous state object so nothing
-re-renders — steady-state GPU work over the game stays zero. There is
-deliberately no CSS transition or rAF animation; the sanctioned
-smooth-scroll upgrade path (compositor-only translate) is documented in the
-PRD §4 and is contained in this one component by the binding layering
-contract there.
+**The sparkline** (`DpsSparkline.tsx`, the standalone `dpsGraph` panel's
+entire body, own sm/md/lg presets — issue #259): bare inline SVG — a 2 px
+`accent` curve + low-alpha area fill, no axes/gridlines/legend, one direct
+label (the current smoothed value, in text tokens). Data arrives via
+`useDpsGraph()` on a fixed `BIN_MS` interval (~4 Hz); while the series is
+flat at zero the hook returns the previous state object so nothing
+re-renders — steady-state GPU work over the game stays zero.
+
+The line is a smoothed curve, not a hard-vertex polyline: `smoothLineD`/
+`smoothAreaD` draw a quadratic Bezier to each segment's midpoint (control
+point = the real data point), which stays within the convex hull of its own
+inputs — a flat zero line can't dip negative and the curve can't rise past
+its own peak, unlike a Catmull-Rom-style spline. New bins enter via the
+PRD §4's sanctioned smooth-scroll upgrade path: one extra (previous-frame)
+bin is rendered off the group's rest position, and a `<g>` wrapping the path
+slides into place via a compositor-only CSS `transform`, restarted once per
+bin tick (a one-shot `requestAnimationFrame` to force the browser to animate
+the transition, not a perpetual rAF loop). Because the hook skips re-renders
+while flat at zero, an idle overlay never re-triggers the slide — animation
+cost stays at zero between ticks and while nothing changes, matching the
+PRD's compositor-cost constraint. All of this stays contained in this one
+component by the binding layering contract.
 
 **The detail-panel metrics** (`DpsDetailPanel.tsx`): each expanded per-player
 row shows `avg <avgDps> · peak <peakDps>` from the frozen history metrics —
@@ -1540,9 +1648,10 @@ shiny badge (`ItemSprite`'s own `useItemInfo().isShiny` lookup, issue #250 —
 hover tooltip (item name/tier/class/description from `itemInfo`, plus the
 enchant list decoded from `entry.enchantCode` via `ItemSprite`'s
 `enchantCode` prop, the same path `DpsDetailPanel` uses for frozen history)
-— **newest first** so the latest drop is visible without scrolling. The
-resolved item name (`itemName`, from `lootBagTypes`'s `itemNames` table)
-renders beside the sprite at `size === 'lg'`. The scroll container carries a
+— **newest first** so the latest drop is visible without scrolling. No text
+label renders at any size (including `lg`) — the resolved item name (from
+`lootBagTypes`'s `itemNames` table) is only available via `ItemSprite`'s
+hover tooltip. The scroll container carries a
 `p-1.5` inset so an edge item's rarity indicator (bottom-right pip/ring) and
 shiny indicator (top-left icon/badge) — both outset overlays that extend past
 the sprite's own box — aren't clipped by the container edge (issue #193; with
