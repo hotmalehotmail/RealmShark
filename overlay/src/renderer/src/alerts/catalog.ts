@@ -141,14 +141,42 @@ export const orangeBag: AlertKind = {
 
 /** `partyChat`'s params shape (PRD §3, issue #222): empty `keywords` matches every party message. */
 export interface PartyChatParams {
-  /** Case-insensitive substring match against `ChatEvent.text` (never `cleanText` - see its doc comment). Empty array = every party message matches. */
+  /** Case-insensitive **whole-word** match against `ChatEvent.text` (never `cleanText` - see its doc comment) - issue #269: a plain substring test made `"w4"` fire on `"w40k"`. Empty array = every party message matches. */
   keywords: string[]
+  /** Per-rule override (ms) of the cooldown between two `partyChat` fires - defaults to `PARTY_CHAT_COOLDOWN_MS` (issue #269), user-adjustable via `PartyChatParamsEditor.tsx`. Resolved by `dispatcher.ts`'s `resolveCooldownMs`, which falls back to the catalog's static `cooldownMs` seed below when a rule's `params.cooldownMs` is absent. */
+  cooldownMs: number
 }
 
-const DEFAULT_PARTY_CHAT_PARAMS: PartyChatParams = { keywords: [] }
+/**
+ * Default cooldown between two `partyChat` fires (PRD §7 "Spam") - chat can
+ * burst in a way a single loot drop never does. Raised from the original
+ * 3000ms (issue #269: too short for a chat burst to actually be suppressed)
+ * to 15000ms; still kept as the static `AlertKind.cooldownMs` seed so a
+ * rules entry with no `params.cooldownMs` override still gets a sane default
+ * via `dispatcher.ts`'s `resolveCooldownMs`.
+ */
+const PARTY_CHAT_COOLDOWN_MS = 15000
 
-/** Cooldown between two `partyChat` fires (PRD §7 "Spam") - chat can burst in a way a single loot drop never does. */
-const PARTY_CHAT_COOLDOWN_MS = 3000
+const DEFAULT_PARTY_CHAT_PARAMS: PartyChatParams = {
+  keywords: [],
+  cooldownMs: PARTY_CHAT_COOLDOWN_MS
+}
+
+/** Escapes regex metacharacters so a user-supplied keyword can be embedded literally inside a `RegExp` (`matchesWholeWord`). */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * True iff `keyword` appears in `text` as its own whole word, case-insensitive
+ * (issue #269) - `\b` word-boundary anchors around the escaped keyword mean
+ * `"w4"` matches `"pull w4"` but not `"w40k"` (no boundary between `"4"` and
+ * `"0"`), and `"gg"` matches standalone but not inside `"egg"`.
+ */
+function matchesWholeWord(text: string, keyword: string): boolean {
+  if (keyword.length === 0) return false
+  return new RegExp(`\\b${escapeRegExp(keyword)}\\b`, 'i').test(text)
+}
 
 /**
  * Fires on a party chat message (issue #222, phase 2 - the first consumer of
@@ -176,10 +204,7 @@ export const partyChat: AlertKind = {
     const params = rawParams as unknown as PartyChatParams
     const keywords = params.keywords ?? []
     if (keywords.length > 0) {
-      const lowerText = event.text.toLowerCase()
-      const matched = keywords.some(
-        (keyword) => keyword.length > 0 && lowerText.includes(keyword.toLowerCase())
-      )
+      const matched = keywords.some((keyword) => matchesWholeWord(event.text, keyword))
       if (!matched) return null
     }
     return { title: `Party: ${event.sender}`, body: event.text }
