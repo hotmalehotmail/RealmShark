@@ -230,4 +230,33 @@ describe('AlertEngine chat detector (issue #222)', () => {
 
     expect(engine.store.getAll()).toHaveLength(1)
   })
+
+  describe('title-code stripping on the chat sender (issue #269)', () => {
+    it('a title-suffixed sender name is stripped down to the bare username in the banner', () => {
+      const engine = new AlertEngine()
+      engine.setSettings(PARTY_CHAT_ENABLED)
+      engine.ingest(localIdentityEnvelopes(6000, 'Alice'))
+
+      engine.ingest([
+        textPacket({ name: 'Bob,a19d,9a10', objectId: -1, recipient: '*Party*', text: 'inc!' })
+      ])
+
+      const alerts = engine.store.getAll()
+      expect(alerts).toHaveLength(1)
+      expect(alerts[0].payload.title).toBe('Party: Bob')
+      expect(alerts[0].payload.title).not.toContain(',')
+    })
+
+    it('a self-sent party message with a title suffix is still self-ignored', () => {
+      const engine = new AlertEngine()
+      engine.setSettings(PARTY_CHAT_ENABLED)
+      engine.ingest(localIdentityEnvelopes(6000, 'Alice'))
+
+      // The local player's own NAME_STAT-resolved name is bare "Alice", but
+      // her own TextPacket.name can still carry a title suffix.
+      engine.ingest([textPacket({ name: 'Alice,a19d,9a10', objectId: -1, recipient: '*Party*' })])
+
+      expect(engine.store.getAll()).toHaveLength(0)
+    })
+  })
 })

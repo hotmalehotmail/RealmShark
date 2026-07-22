@@ -228,29 +228,55 @@ describe('catalog (issue #218)', () => {
   })
 
   describe('partyChat (issue #222)', () => {
+    const KEYWORDS_ONLY = (keywords: string[]): PartyChatParams => ({ keywords, cooldownMs: 15000 })
+
     it('defaults to disabled - chat notifications are opt-in', () => {
       expect(partyChat.defaults.enabled).toBe(false)
     })
 
+    it('defaults to a 15000ms cooldown (issue #269 - raised from the original 3000ms)', () => {
+      expect(partyChat.cooldownMs).toBe(15000)
+    })
+
     it('matches only the party channel', () => {
-      expect(partyChat.match(chatEvent({ channel: 'party' }), { keywords: [] })).not.toBeNull()
-      expect(partyChat.match(chatEvent({ channel: 'local' }), { keywords: [] })).toBeNull()
-      expect(partyChat.match(chatEvent({ channel: 'unknown' }), { keywords: [] })).toBeNull()
+      expect(partyChat.match(chatEvent({ channel: 'party' }), KEYWORDS_ONLY([]))).not.toBeNull()
+      expect(partyChat.match(chatEvent({ channel: 'local' }), KEYWORDS_ONLY([]))).toBeNull()
+      expect(partyChat.match(chatEvent({ channel: 'unknown' }), KEYWORDS_ONLY([]))).toBeNull()
     })
 
     it('empty keywords matches every party message', () => {
-      const params: PartyChatParams = { keywords: [] }
+      const params: PartyChatParams = KEYWORDS_ONLY([])
       expect(partyChat.match(chatEvent({ text: 'anything at all' }), params)).not.toBeNull()
     })
 
-    it('non-empty keywords require a case-insensitive substring match against text', () => {
-      const params: PartyChatParams = { keywords: ['boss'] }
-      expect(partyChat.match(chatEvent({ text: 'need help with BOSS' }), params)).not.toBeNull()
-      expect(partyChat.match(chatEvent({ text: 'anyone up for pst?' }), params)).toBeNull()
+    describe('keyword matching is case-insensitive whole-word, not substring (issue #269)', () => {
+      it('a keyword matches as its own word, case-insensitively', () => {
+        const params: PartyChatParams = KEYWORDS_ONLY(['boss'])
+        expect(partyChat.match(chatEvent({ text: 'need help with BOSS' }), params)).not.toBeNull()
+        expect(partyChat.match(chatEvent({ text: 'anyone up for pst?' }), params)).toBeNull()
+      })
+
+      it('"w4" matches "pull w4" but not "w40k"', () => {
+        const params: PartyChatParams = KEYWORDS_ONLY(['w4'])
+        expect(partyChat.match(chatEvent({ text: 'pull w4' }), params)).not.toBeNull()
+        expect(partyChat.match(chatEvent({ text: 'running w40k' }), params)).toBeNull()
+      })
+
+      it('"gg" matches standalone but not embedded in "egg"', () => {
+        const params: PartyChatParams = KEYWORDS_ONLY(['gg'])
+        expect(partyChat.match(chatEvent({ text: 'gg wp' }), params)).not.toBeNull()
+        expect(partyChat.match(chatEvent({ text: 'anyone got an egg' }), params)).toBeNull()
+      })
+
+      it('"loot" matches standalone but not embedded in "looter"', () => {
+        const params: PartyChatParams = KEYWORDS_ONLY(['loot'])
+        expect(partyChat.match(chatEvent({ text: 'go loot the chest' }), params)).not.toBeNull()
+        expect(partyChat.match(chatEvent({ text: 'stop being a looter' }), params)).toBeNull()
+      })
     })
 
     it('keyword matching runs on text, never cleanText (PRD §2)', () => {
-      const params: PartyChatParams = { keywords: ['boss'] }
+      const params: PartyChatParams = KEYWORDS_ONLY(['boss'])
       // A real client's cleanText censors "boss" here, but text (uncensored) still carries it.
       expect(
         partyChat.match(
@@ -261,7 +287,7 @@ describe('catalog (issue #218)', () => {
     })
 
     it("payload uses the sender's name and the raw (uncensored) text", () => {
-      const payload = partyChat.match(chatEvent({ sender: 'Bob', text: 'inc!' }), { keywords: [] })
+      const payload = partyChat.match(chatEvent({ sender: 'Bob', text: 'inc!' }), KEYWORDS_ONLY([]))
       expect(payload).toEqual({ title: 'Party: Bob', body: 'inc!' })
     })
   })
@@ -296,12 +322,12 @@ describe('catalog (issue #218)', () => {
       expect(resolved.params).toEqual({ tier: 2, slotTypeOverrides: {}, itemOverrides: {} })
     })
 
-    it('falls back to disabled + empty keywords for partyChat when no rules entry exists', () => {
+    it('falls back to disabled + empty keywords + the default cooldown for partyChat when no rules entry exists', () => {
       expect(resolveRuleSettings(partyChat, EMPTY_SETTINGS)).toEqual({
         enabled: false,
         banner: true,
         sound: true,
-        params: { keywords: [] }
+        params: { keywords: [], cooldownMs: 15000 }
       })
     })
   })
